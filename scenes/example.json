@@ -1,0 +1,110 @@
+{
+  "title": "Escape Velocity kya hai?",
+  "description": "Gudiya aur Chintu ke saath samjho escape velocity",
+  "tags": [
+    "Physics",
+    "JEE",
+    "NEET",
+    "escape velocity"
+  ],
+  "turns": [
+    {
+      "turn_id": 1,
+      "speaker": "girl",
+      "text": "Bhaiya, rocket ko kitni speed chahiye Earth se bahar jaane ke liye?",
+      "emotion": "curious",
+      "shot_type": "extreme_closeup"
+    },
+    {
+      "turn_id": 2,
+      "speaker": "girl",
+      "text": "Matlab agar main koi cheez phenku toh woh kabhi wapas hi na aaye?",
+      "emotion": "curious",
+      "shot_type": "two_shot"
+    },
+    {
+      "turn_id": 3,
+      "speaker": "boy",
+      "text": "Arre, bahut easy hai! Isko kehte hain Escape Velocity!",
+      "emotion": "enthusiastic",
+      "shot_type": "medium"
+    },
+    {
+      "turn_id": 4,
+      "speaker": "boy",
+      "text": "Dekho, gravity ek tarah se rope jaisi hai jo cheezein neeche kheenchti hai.",
+      "emotion": "explaining",
+      "shot_type": "two_shot"
+    },
+    {
+      "turn_id": 5,
+      "speaker": "explanation",
+      "duration_seconds": 4.0,
+      "visual_elements": [
+        {
+          "action": "draw_circle",
+          "params": {
+            "radius": 180,
+            "color": "primary",
+            "x": 0,
+            "y": -100
+          }
+        },
+        {
+          "action": "show_text",
+          "params": {
+            "text": "Earth",
+            "x": 0,
+            "y": -100
+          }
+        },
+        {
+          "action": "draw_arrow",
+          "params": {
+            "x1": 0,
+            "y1": 100,
+            "x2": 0,
+            "y2": 500,
+            "color": "accent"
+          }
+        },
+        {
+          "action": "show_formula",
+          "params": {
+            "latex": "$v_e = \\sqrt{\\frac{2GM}{R}}$",
+            "y": 600
+          }
+        }
+      ],
+      "pause_after": 2.0
+    },
+    {
+      "turn_id": 6,
+      "speaker": "boy",
+      "text": "Yeh lagbhag 11.2 km per second hoti hai! Itni fast!",
+      "emotion": "confident",
+      "shot_type": "two_shot"
+    },
+    {
+      "turn_id": 7,
+      "speaker": "girl",
+      "text": "Whoa! 11.2 km per second?!",
+      "emotion": "amazed",
+      "shot_type": "reaction_cut"
+    },
+    {
+      "turn_id": 8,
+      "speaker": "boy",
+      "text": "Haan! JEE mein yeh formula direct aata hai. Yaad rakhna!",
+      "emotion": "confident",
+      "shot_type": "reveal"
+    },
+    {
+      "turn_id": 9,
+      "speaker": "girl",
+      "text": "Lekin agar gravity double ho jaaye toh escape velocity kitni hogi?",
+      "emotion": "thinking",
+      "shot_type": "extreme_closeup"
+    }
+  ]
+}

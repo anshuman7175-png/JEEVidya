@@ -1,0 +1,299 @@
+"""10-class viseme engine: Devanagari + Latin G2P, raised-cosine
+coarticulation with bilabial dominance, anticipatory lip rounding,
+15ms/110ms amplitude envelope, and long-pause REST enforcement (C8)."""
+from __future__ import annotations
+
+import math
+import random
+from dataclasses import dataclass
+from enum import Enum
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from engine.curves import clamp01, raised_cosine
+
+
+class V(str, Enum):
+    REST = "REST"
+    BILABIAL = "BILABIAL"
+    LABIODENTAL = "LABIODENTAL"
+    DENTAL = "DENTAL"
+    RETROFLEX = "RETROFLEX"
+    OPEN_A = "OPEN_A"
+    MID_E = "MID_E"
+    CLOSED_I = "CLOSED_I"
+    ROUNDED_TENSE = "ROUNDED_TENSE"
+    ROUNDED_LAX = "ROUNDED_LAX"
+
+
+VOWELS = {V.OPEN_A, V.MID_E, V.CLOSED_I, V.ROUNDED_TENSE, V.ROUNDED_LAX}
+ROUNDED = {V.ROUNDED_TENSE, V.ROUNDED_LAX}
+
+# jaw-drop factor per class (drives vertical mouth stretch in BoneEngine)
+JAW: Dict[V, float] = {
+    V.REST: 0.0, V.BILABIAL: 0.0, V.LABIODENTAL: 0.08, V.DENTAL: 0.18,
+    V.RETROFLEX: 0.30, V.OPEN_A: 1.0, V.MID_E: 0.55, V.CLOSED_I: 0.25,
+    V.ROUNDED_TENSE: 0.35, V.ROUNDED_LAX: 0.55,
+}
+
+# ---- Devanagari G2P mapping ----
+
+_DEV_MAP: Dict[str, V] = {}
+for _chars, _cls in [
+    ("\u092e\u092c\u092a\u092d", V.BILABIAL),              # म ब प भ
+    ("\u092b\u0935", V.LABIODENTAL),                        # फ व
+    ("\u0924\u0925\u0926\u0927\u0928\u0938\u0932\u091c\u091d\u0936\u0937\u091a\u091b\u092f\u0939", V.DENTAL),
+    ("\u091f\u0920\u0921\u0922\u0923\u0915\u0916\u0917\u0918\u0919\u091e\u0930", V.RETROFLEX),
+    ("\u0905\u0906", V.OPEN_A), ("\u093e", V.OPEN_A),       # अ आ, aa matra
+    ("\u090f\u0910", V.MID_E), ("\u0947\u0948", V.MID_E),   # ए ऐ, e/ai matra
+    ("\u0907\u0908", V.CLOSED_I), ("\u093f\u0940", V.CLOSED_I),
+    ("\u090a\u0909", V.ROUNDED_TENSE), ("\u0941\u0942", V.ROUNDED_TENSE),
+    ("\u0913\u0914", V.ROUNDED_LAX), ("\u094b\u094c", V.ROUNDED_LAX),
+]:
+    for c in _chars:
+        _DEV_MAP[c] = _cls
+
+_LAT_MAP: Dict[str, V] = {}
+for _chars, _cls in [
+    ("mbp", V.BILABIAL), ("fvw", V.LABIODENTAL),
+    ("tdnslzjc", V.DENTAL),
+    ("kgrqxh", V.RETROFLEX),
+    ("a", V.OPEN_A), ("e", V.MID_E),
+    ("iy", V.CLOSED_I), ("u", V.ROUNDED_TENSE), ("o", V.ROUNDED_LAX),
+]:
+    for c in _chars:
+        _LAT_MAP[c] = _cls
+
+_VIRAMA = "\u094d"
+_NUKTA = "\u093c"
+_SKIP = set(_VIRAMA + _NUKTA + "\u0902\u0901\u0903\u093d\u093c\u0970")
+
+ATTACK_MS = 15.0
+RELEASE_MS = 110.0
+SHORT_TAIL_MS = 90.0     # short inter-word gaps relax toward REST
+HARD_PAUSE_MS = 300.0    # gaps beyond this force full REST (C8)
+BREATH_PAUSE_MS = 500.0  # gaps beyond this trigger a visible inhale
+
+
+# ---- G2P ----
+
+def g2p(text: str) -> List[V]:
+    """Grapheme to viseme, inherent 'a' insertion for bare Devanagari consonants."""
+    out: List[V] = []
+    chars = list(text)
+    for i, ch in enumerate(chars):
+        if ch in _SKIP or ch.isspace():
+            continue
+        cls = _DEV_MAP.get(ch)
+        if cls is not None:
+            out.append(cls)
+            # Inherent schwa: bare consonant gets an 'a' unless followed by
+            # a vowel sign or virama
+            if "\u0915" <= ch <= "\u0939" and cls not in VOWELS:
+                nxt = chars[i + 1] if i + 1 < len(chars) else ""
+                if nxt not in _DEV_MAP or _DEV_MAP.get(nxt) not in VOWELS:
+                    if nxt != _VIRAMA:
+                        out.append(V.OPEN_A)   # schwa
+            continue
+        cls = _LAT_MAP.get(ch.lower())
+        if cls is not None:
+            out.append(cls)
+    # Collapse immediate repeats
+    dedup: List[V] = []
+    for v in out:
+        if not dedup or dedup[-1] != v:
+            dedup.append(v)
+    return dedup
+
+
+# ---- Timed events ----
+
+@dataclass
+class VisemeEvent:
+    viseme: V
+    start_ms: float
+    end_ms: float
+
+    @property
+    def dur(self) -> float:
+        return self.end_ms - self.start_ms
+
+
+class VisemeTrack:
+    """Timed viseme events with per-frame blended weights and jaw drop."""
+
+    def __init__(self, events: List[VisemeEvent], turn_end_ms: float):
+        self.events = events
+        self.turn_end_ms = turn_end_ms
+
+    @classmethod
+    def from_words(cls, words: Sequence,
+                   turn_end_ms: Optional[float] = None) -> "VisemeTrack":
+        """Build a viseme track from VTT word events."""
+        events: List[VisemeEvent] = []
+        for w in words:
+            phones = g2p(w.text)
+            if not phones:
+                continue
+            # Vowels get more time than consonants (proportional allocation)
+            weights = [1.0 if p in VOWELS else 0.55 for p in phones]
+            total = sum(weights)
+            span = max(40.0, w.end_ms - w.start_ms)
+            t = w.start_ms
+            for p, wt in zip(phones, weights):
+                d = max(35.0, span * wt / total)
+                events.append(VisemeEvent(p, t, min(t + d, w.end_ms)))
+                t += d
+                if t >= w.end_ms:
+                    break
+        end = turn_end_ms if turn_end_ms is not None else (
+            events[-1].end_ms if events else 0.0)
+        return cls(events, end)
+
+    # ---- query ----
+
+    def _find(self, t_ms: float) -> int:
+        """Binary search for the last event starting <= t_ms."""
+        lo, hi = 0, len(self.events) - 1
+        idx = -1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if self.events[mid].start_ms <= t_ms:
+                idx = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return idx
+
+    def _envelope(self, t_ms: float) -> float:
+        """Attack 15ms into speech, release 110ms into silence."""
+        idx = self._find(t_ms)
+        if idx < 0:
+            return 0.0
+        ev = self.events[idx]
+        if t_ms <= ev.end_ms:
+            seg_start = ev.start_ms
+            j = idx
+            while (j > 0 and self.events[j].start_ms
+                    - self.events[j - 1].end_ms < SHORT_TAIL_MS):
+                j -= 1
+                seg_start = self.events[j].start_ms
+            return clamp01((t_ms - seg_start) / ATTACK_MS)
+        # In a gap after ev
+        since = t_ms - ev.end_ms
+        return clamp01(1.0 - since / RELEASE_MS)
+
+    def weights_at(self, t_ms: float,
+                   energy: float = 1.0) -> Tuple[Dict[V, float], float]:
+        """Returns ({viseme: weight} summing to ~1, jaw_drop 0..1)."""
+        if not self.events:
+            return {V.REST: 1.0}, 0.0
+        idx = self._find(t_ms)
+        if idx < 0:
+            return {V.REST: 1.0}, 0.0
+        cur = self.events[idx]
+        weights: Dict[V, float] = {}
+
+        if t_ms > cur.end_ms:                              # inside a gap
+            env = self._envelope(t_ms)
+            if env <= 0.01:
+                return {V.REST: 1.0}, 0.0
+            weights = {cur.viseme: env, V.REST: 1.0 - env}
+            jaw = JAW[cur.viseme] * env * (0.5 + 0.5 * energy)
+            return weights, jaw
+
+        nxt = (self.events[idx + 1]
+               if idx + 1 < len(self.events) else None)
+        blend = 0.0
+        if nxt is not None and nxt.start_ms - cur.end_ms < SHORT_TAIL_MS:
+            T = min(80.0, 0.4 * min(cur.dur, max(1.0, nxt.dur)))
+            into = t_ms - (cur.end_ms - T)
+            if into > 0:
+                raw = clamp01(into / (2.0 * T))
+                # bilabial dominance: lips stay pressed longer / close earlier
+                if cur.viseme == V.BILABIAL:
+                    raw = raw ** 1.8
+                elif nxt is not None and nxt.viseme == V.BILABIAL:
+                    raw = 1.0 - (1.0 - raw) ** 1.8
+                blend = raised_cosine(raw)
+        if blend > 0.0 and nxt is not None:
+            weights[cur.viseme] = 1.0 - blend
+            weights[nxt.viseme] = weights.get(nxt.viseme, 0.0) + blend
+        else:
+            weights[cur.viseme] = 1.0
+
+        # anticipatory rounding in the last 60ms of a vowel before ROUNDED_*
+        if (nxt is not None and nxt.viseme in ROUNDED
+                and cur.viseme in VOWELS and cur.viseme not in ROUNDED):
+            lead = clamp01((t_ms - (cur.end_ms - 60.0)) / 60.0)
+            if lead > 0:
+                r = 0.25 * lead
+                for k in list(weights):
+                    weights[k] *= (1.0 - r)
+                weights[nxt.viseme] = weights.get(nxt.viseme, 0.0) + r
+
+        env = self._envelope(t_ms)
+        if env < 1.0:
+            for k in list(weights):
+                weights[k] *= env
+            weights[V.REST] = weights.get(V.REST, 0.0) + (1.0 - env)
+
+        jaw = sum(JAW[v] * w for v, w in weights.items()) * (
+            0.55 + 0.45 * clamp01(energy))
+        return weights, jaw
+
+    def breath_pauses(self) -> List[float]:
+        """Centers of pauses > 500ms -- puppet plays one slow inhale."""
+        out: List[float] = []
+        for a, b in zip(self.events, self.events[1:]):
+            gap = b.start_ms - a.end_ms
+            if gap >= BREATH_PAUSE_MS:
+                out.append(a.end_ms + min(400.0, gap * 0.4))
+        return out
+
+    def word_started_within(self, t_ms: float,
+                            window_ms: float = 130) -> bool:
+        """True if any viseme event began within the last window_ms.
+        Used for speech-synced micro head nods."""
+        idx = self._find(t_ms)
+        return idx >= 0 and (t_ms - self.events[idx].start_ms) <= window_ms
+
+
+# ---- Legacy compatibility ----
+# The old 6-class names are mapped to new 10-class for any code that
+# still references them
+
+VISEME_CEILING: Dict[str, float] = {v.value: JAW[v] for v in V}
+
+# Per-viseme mouth-openness ceiling (for old code paths)
+def mouth_openness_blend(v_from: str, v_to: str, blend_t: float,
+                         weight: float, amp_level: float) -> float:
+    """Legacy compatibility: openness for a coarticulated pair."""
+    ceiling_from = VISEME_CEILING.get(v_from, 0.6)
+    ceiling_to = VISEME_CEILING.get(v_to, 0.6)
+    ceiling = ceiling_from + (ceiling_to - ceiling_from) * blend_t
+    if ceiling <= 0.0:
+        return 0.0
+    amp = 0.22 + 0.78 * max(0.0, min(1.0, amp_level))
+    return max(0.0, min(1.0, ceiling * weight * amp))
+
+
+class AmplitudeEnvelope:
+    """One-pole attack/release follower. Legacy compatibility."""
+
+    def __init__(self, fps: int, attack_ms: float = 15.0,
+                 release_ms: float = 110.0):
+        dt = 1000.0 / max(1, fps)
+        self._ka = 1.0 - math.exp(-dt / max(1e-3, attack_ms))
+        self._kr = 1.0 - math.exp(-dt / max(1e-3, release_ms))
+        self.level = 0.0
+
+    def step(self, amplitude_db: float) -> float:
+        x = max(0.0, min(1.0, (amplitude_db + 50.0) / 35.0))
+        k = self._ka if x > self.level else self._kr
+        self.level += (x - self.level) * k
+        return self.level
+
+
+def visemes_for_word(word: str) -> List[str]:
+    """Legacy G2P returning string names."""
+    return [v.value for v in g2p(word)]

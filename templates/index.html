@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gudiya & Chintu — Animated Shorts Factory</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #0a0a1e;
+            --bg-card: #12122a;
+            --bg-card-hover: #1a1a3a;
+            --primary: #00D4FF;
+            --secondary: #FFD700;
+            --accent: #FF3366;
+            --success: #00E676;
+            --text: #e0e0f0;
+            --text-dim: #8888aa;
+            --border: #2a2a4a;
+            --radius: 12px;
+            --shadow: 0 4px 24px rgba(0,0,0,0.4);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #0d0d2b 0%, #1a0a2e 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 20px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .header h1 {
+            font-size: 24px;
+            font-weight: 800;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header .subtitle {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        /* Main Layout */
+        .main {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 24px;
+            padding: 24px 32px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+        }
+        .card-title {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .card-title .icon { font-size: 20px; }
+
+        /* Dialogue Editor */
+        .meta-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .meta-row input {
+            width: 100%;
+            padding: 10px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        .meta-row input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        /* Turn Rows */
+        .turns-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 58vh;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+        .turns-container::-webkit-scrollbar { width: 6px; }
+        .turns-container::-webkit-scrollbar-track { background: transparent; }
+        .turns-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+        .turn-row {
+            display: grid;
+            grid-template-columns: 40px 110px 1fr 110px 36px;
+            gap: 8px;
+            align-items: center;
+            padding: 10px 12px;
+            background: var(--bg);
+            border-radius: 8px;
+            border: 1px solid transparent;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .turn-row:hover { border-color: var(--border); background: var(--bg-card-hover); }
+        .turn-row.girl { border-left: 3px solid var(--accent); }
+        .turn-row.boy { border-left: 3px solid var(--primary); }
+        .turn-row.explanation { border-left: 3px solid var(--secondary); }
+
+        .turn-num {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-dim);
+            text-align: center;
+        }
+
+        .turn-row select {
+            padding: 6px 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .turn-row select:focus { outline: none; border-color: var(--primary); }
+
+        .turn-row input[type="text"] {
+            width: 100%;
+            padding: 8px 10px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 13px;
+        }
+        .turn-row input[type="text"]:focus { outline: none; border-color: var(--primary); }
+
+        .btn-remove {
+            width: 28px;
+            height: 28px;
+            border: none;
+            background: transparent;
+            color: var(--text-dim);
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .btn-remove:hover { background: rgba(255,51,102,0.15); color: var(--accent); }
+
+        .add-turn-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .btn-add {
+            flex: 1;
+            padding: 10px;
+            border: 1px dashed var(--border);
+            background: transparent;
+            color: var(--text-dim);
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-add:hover { border-color: var(--primary); color: var(--primary); background: rgba(0,212,255,0.05); }
+
+        /* Right Panel */
+        .right-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* Characters Preview */
+        .characters-preview {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .char-card {
+            text-align: center;
+            padding: 16px 8px;
+            background: var(--bg);
+            border-radius: 8px;
+        }
+        .char-card img {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border);
+            margin-bottom: 8px;
+        }
+        .char-card .name { font-weight: 600; font-size: 14px; }
+        .char-card .role { font-size: 11px; color: var(--text-dim); }
+        .char-gudiya img { border-color: var(--accent); }
+        .char-chintu img { border-color: var(--primary); }
+
+        /* Generate Button */
+        .btn-generate {
+            width: 100%;
+            padding: 14px 20px;
+            background: linear-gradient(135deg, var(--primary), #0088cc);
+            border: none;
+            border-radius: 10px;
+            color: white;
+            font-family: inherit;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(0,212,255,0.3);
+        }
+        .btn-generate:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,212,255,0.4); }
+        .btn-generate:active { transform: translateY(0); }
+        .btn-generate:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        /* Progress */
+        .progress-section { display: none; }
+        .progress-section.active { display: block; }
+        .progress-bar-track {
+            width: 100%;
+            height: 8px;
+            background: var(--bg);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 12px 0;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            border-radius: 4px;
+            transition: width 0.5s ease;
+            width: 0%;
+        }
+        .progress-stage {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+        }
+        .progress-msg {
+            font-size: 12px;
+            color: var(--text-dim);
+            font-family: 'Menlo', monospace;
+        }
+
+        /* Video Preview */
+        .video-preview { display: none; }
+        .video-preview.active { display: block; }
+        .video-preview video {
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            margin-top: 8px;
+        }
+
+        /* JSON Preview Toggle */
+        .json-toggle {
+            padding: 8px 12px;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-dim);
+            font-family: inherit;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .json-toggle:hover { border-color: var(--primary); color: var(--primary); }
+        .json-preview {
+            display: none;
+            margin-top: 12px;
+        }
+        .json-preview.active { display: block; }
+        .json-preview textarea {
+            width: 100%;
+            height: 200px;
+            padding: 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--primary);
+            font-family: 'Menlo', monospace;
+            font-size: 11px;
+            resize: vertical;
+        }
+
+        /* Stats */
+        .stats-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            font-size: 13px;
+        }
+        .stats-row .label { color: var(--text-dim); }
+        .stats-row .value { font-weight: 600; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div>
+        <h1>🎬 Gudiya & Chintu</h1>
+        <div class="subtitle">Animated Shorts Factory — Dialogue Editor</div>
+    </div>
+    <button class="json-toggle" onclick="toggleJSON()">{ } JSON</button>
+</div>
+
+<div class="main">
+    <!-- Left: Dialogue Editor -->
+    <div class="card">
+        <div class="card-title"><span class="icon">📝</span> Dialogue Script</div>
+
+        <div class="meta-row">
+            <input type="text" id="title" placeholder="Topic title (e.g. Escape Velocity kya hai?)" value="Escape Velocity kya hai?">
+            <input type="text" id="tags" placeholder="Tags (comma separated)" value="Physics, JEE, NEET">
+        </div>
+
+        <div class="turns-container" id="turns-container">
+            <!-- Turns are rendered by JS -->
+        </div>
+
+        <div class="add-turn-row">
+            <button class="btn-add" onclick="addTurn('girl')">+ Gudiya (Girl)</button>
+            <button class="btn-add" onclick="addTurn('boy')">+ Chintu (Boy)</button>
+            <button class="btn-add" onclick="addTurn('explanation')">+ Explanation</button>
+        </div>
+
+        <div class="json-preview" id="json-preview">
+            <textarea id="json-editor" readonly></textarea>
+        </div>
+    </div>
+
+    <!-- Right: Controls & Preview -->
+    <div class="right-panel">
+        <div class="card">
+            <div class="card-title"><span class="icon">👧🧒</span> Characters</div>
+            <div class="characters-preview">
+                <div class="char-card char-gudiya">
+                    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%23FF3366'/%3E%3Ctext x='50' y='60' text-anchor='middle' fill='white' font-size='40'%3E👧%3C/text%3E%3C/svg%3E" alt="Gudiya">
+                    <div class="name">Gudiya</div>
+                    <div class="role">The Curious Student</div>
+                </div>
+                <div class="char-card char-chintu">
+                    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%2300D4FF'/%3E%3Ctext x='50' y='60' text-anchor='middle' fill='white' font-size='40'%3E🧒%3C/text%3E%3C/svg%3E" alt="Chintu">
+                    <div class="name">Chintu</div>
+                    <div class="role">The Smart Explainer</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title"><span class="icon">📊</span> Stats</div>
+            <div class="stats-row"><span class="label">Turns</span><span class="value" id="stat-turns">0</span></div>
+            <div class="stats-row"><span class="label">Est. Duration</span><span class="value" id="stat-duration">~0s</span></div>
+            <div class="stats-row"><span class="label">Words</span><span class="value" id="stat-words">0</span></div>
+        </div>
+
+        <div class="card">
+            <div class="card-title"><span class="icon">🚀</span> Generate</div>
+            <button class="btn-generate" id="btn-generate" onclick="startGeneration()">
+                Generate Video
+            </button>
+
+            <div class="progress-section" id="progress-section">
+                <div class="progress-stage" id="progress-stage">Initializing...</div>
+                <div class="progress-bar-track">
+                    <div class="progress-bar-fill" id="progress-fill"></div>
+                </div>
+                <div class="progress-msg" id="progress-msg"></div>
+            </div>
+        </div>
+
+        <div class="card video-preview" id="video-preview">
+            <div class="card-title"><span class="icon">🎥</span> Output</div>
+            <video id="output-video" controls></video>
+        </div>
+    </div>
+</div>
+
+<script>
+// Default dialogue
+const defaultDialogue = {{ default_json | safe }};
+
+let turns = [];
+
+// Initialize with default
+function init() {
+    turns = (defaultDialogue.turns || []).map((t, i) => ({...t, turn_id: i + 1}));
+    document.getElementById('title').value = defaultDialogue.title || '';
+    document.getElementById('tags').value = (defaultDialogue.tags || []).join(', ');
+    renderTurns();
+}
+
+const EMOTIONS = ['curious', 'enthusiastic', 'confident', 'amazed', 'thinking', 'happy', 'explaining', 'dramatic'];
+const SHOTS = ['extreme_closeup', 'two_shot', 'medium', 'fullscreen_explain', 'reaction_cut', 'reveal'];
+
+function renderTurns() {
+    const container = document.getElementById('turns-container');
+    container.innerHTML = '';
+
+    turns.forEach((turn, idx) => {
+        const div = document.createElement('div');
+        div.className = `turn-row ${turn.speaker}`;
+        div.innerHTML = `
+            <span class="turn-num">${idx + 1}</span>
+            <select onchange="updateTurn(${idx}, 'speaker', this.value); renderTurns()">
+                <option value="girl" ${turn.speaker === 'girl' ? 'selected' : ''}>👧 Gudiya</option>
+                <option value="boy" ${turn.speaker === 'boy' ? 'selected' : ''}>🧒 Chintu</option>
+                <option value="explanation" ${turn.speaker === 'explanation' ? 'selected' : ''}>📐 Explain</option>
+            </select>
+            <input type="text" value="${(turn.text || '').replace(/"/g, '&quot;')}"
+                   placeholder="${turn.speaker === 'explanation' ? 'Visual description...' : 'Dialogue in Hindi/Hinglish...'}"
+                   onchange="updateTurn(${idx}, 'text', this.value)">
+            <select onchange="updateTurn(${idx}, 'emotion', this.value)">
+                ${EMOTIONS.map(e => `<option value="${e}" ${turn.emotion === e ? 'selected' : ''}>${e}</option>`).join('')}
+            </select>
+            <button class="btn-remove" onclick="removeTurn(${idx})">✕</button>
+        `;
+        container.appendChild(div);
+    });
+
+    updateStats();
+    updateJSON();
+}
+
+function addTurn(speaker) {
+    turns.push({
+        turn_id: turns.length + 1,
+        speaker: speaker,
+        text: '',
+        emotion: speaker === 'girl' ? 'curious' : speaker === 'boy' ? 'enthusiastic' : 'neutral',
+        shot_type: speaker === 'explanation' ? 'fullscreen_explain' : 'two_shot',
+    });
+    if (speaker === 'explanation') {
+        turns[turns.length - 1].duration_seconds = 4.0;
+        turns[turns.length - 1].visual_elements = [];
+        turns[turns.length - 1].pause_after = 1.0;
+    }
+    renderTurns();
+    // Scroll to bottom
+    const container = document.getElementById('turns-container');
+    container.scrollTop = container.scrollHeight;
+}
+
+function removeTurn(idx) {
+    turns.splice(idx, 1);
+    turns.forEach((t, i) => t.turn_id = i + 1);
+    renderTurns();
+}
+
+function updateTurn(idx, field, value) {
+    turns[idx][field] = value;
+    updateStats();
+    updateJSON();
+}
+
+function updateStats() {
+    const numTurns = turns.length;
+    const words = turns.reduce((sum, t) => sum + (t.text || '').split(/\s+/).filter(w => w).length, 0);
+    // Rough estimate: ~3 words/sec for Hindi speech + pauses
+    const estDuration = Math.round(words / 3 + numTurns * 1.5);
+
+    document.getElementById('stat-turns').textContent = numTurns;
+    document.getElementById('stat-duration').textContent = `~${estDuration}s`;
+    document.getElementById('stat-words').textContent = words;
+}
+
+function buildDialogueJSON() {
+    return {
+        title: document.getElementById('title').value,
+        description: '',
+        tags: document.getElementById('tags').value.split(',').map(t => t.trim()).filter(t => t),
+        turns: turns.map((t, i) => ({...t, turn_id: i + 1})),
+    };
+}
+
+function updateJSON() {
+    const json = buildDialogueJSON();
+    document.getElementById('json-editor').value = JSON.stringify(json, null, 2);
+}
+
+function toggleJSON() {
+    document.getElementById('json-preview').classList.toggle('active');
+    updateJSON();
+}
+
+// Generation
+function startGeneration() {
+    const btn = document.getElementById('btn-generate');
+    const progressSection = document.getElementById('progress-section');
+    const videoPreview = document.getElementById('video-preview');
+
+    btn.disabled = true;
+    progressSection.classList.add('active');
+    videoPreview.classList.remove('active');
+
+    const dialogue = buildDialogueJSON();
+
+    // Start generation
+    fetch('/generate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(dialogue),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error: ' + data.error);
+            btn.disabled = false;
+            return;
+        }
+        // Start polling SSE for progress
+        pollProgress();
+    })
+    .catch(err => {
+        alert('Request failed: ' + err);
+        btn.disabled = false;
+    });
+}
+
+function pollProgress() {
+    const evtSource = new EventSource('/status');
+    evtSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        document.getElementById('progress-stage').textContent = data.stage;
+        document.getElementById('progress-fill').style.width = data.percent + '%';
+        document.getElementById('progress-msg').textContent = data.message;
+
+        if (data.stage === 'DONE') {
+            evtSource.close();
+            document.getElementById('btn-generate').disabled = false;
+            // Show video preview
+            if (data.output_filename) {
+                const videoEl = document.getElementById('output-video');
+                videoEl.src = '/output/' + data.output_filename;
+                document.getElementById('video-preview').classList.add('active');
+            }
+        } else if (data.stage === 'ERROR') {
+            evtSource.close();
+            document.getElementById('btn-generate').disabled = false;
+            alert('Generation failed: ' + data.message);
+        }
+    };
+    evtSource.onerror = () => {
+        evtSource.close();
+        document.getElementById('btn-generate').disabled = false;
+    };
+}
+
+// Init on load
+init();
+</script>
+</body>
+</html>
