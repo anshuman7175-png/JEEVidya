@@ -356,23 +356,31 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
     feather = max(4, cw // 8)
     rig_w, rig_h = rig.size
 
-    def _mouth_center_of(src: Image.Image) -> Tuple[float, float]:
-        """Per-image mouth center: landmarks if possible, else the rig's
-        mouth box mapped through the frame-size ratio."""
+    def _mouth_geo_of(src: Image.Image) -> Tuple[float, float, float, float]:
+        """Per-image mouth center + extent (w, h): landmarks if possible,
+        else the rig's mouth box mapped through the frame-size ratio."""
         lms = _detect_landmarks(src)
         if lms:
             pts = [lms[i] for i in _LM["mouth"]]
-            return (sum(p[0] for p in pts) / len(pts),
-                    sum(p[1] for p in pts) / len(pts))
+            xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+            return (sum(xs) / len(xs), sum(ys) / len(ys),
+                    max(xs) - min(xs), max(ys) - min(ys))
         sx = src.width / max(1, rig_w)
         sy = src.height / max(1, rig_h)
-        return ((x0 + x1) / 2 * sx, (y0 + y1) / 2 * sy)
+        return ((x0 + x1) / 2 * sx, (y0 + y1) / 2 * sy,
+                (x1 - x0) * sx, (y1 - y0) * sy)
 
-    def _feather_mask(w: int, h: int) -> Image.Image:
+    def _feather_mask(w: int, h: int, mvw: float, mvh: float) -> Image.Image:
+        """Feathered ellipse hugging the actual mouth (padded), NOT the
+        whole canvas — keeps hands, collars and hair out of the sprite.
+        Mouth center sits at (w/2, 0.42h) per the BoneEngine contract."""
+        rx = min(w / 2 - 1, max(w * 0.30, mvw * 0.85))
+        ry = min(h * 0.42 - 1, h * (1 - 0.42) - 1,
+                 max(h * 0.24, mvh * 1.05))
+        cx, cy = w / 2, h * 0.42
         m = Image.new("L", (w, h), 0)
         dm = ImageDraw.Draw(m)
-        fx, fy = max(2, int(w * 0.16)), max(2, int(h * 0.16))
-        dm.ellipse((fx, fy, w - fx - 1, h - fy - 1), fill=255)
+        dm.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill=255)
         return m.filter(ImageFilter.GaussianBlur(max(2, feather // 2)))
 
     d = rig_dir(rig.character)
@@ -389,7 +397,7 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             print(f"  [Rig] {rig.character}: bad viseme art {path}: {e}")
             continue
 
-        mcx, mcy = _mouth_center_of(src)
+        mcx, mcy, mvw, mvh = _mouth_geo_of(src)
         # Source-space crop size (rescaled if frames differ)
         s = src.width / max(1, rig_w)
         scw, sch = max(8, int(cw * s)), max(8, int(ch * s))
@@ -401,7 +409,8 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             patch = patch.resize((cw, ch), Image.Resampling.LANCZOS)
 
         # Elliptical feathered alpha so the patch melts into the face
-        mask = _feather_mask(cw, ch)
+        # (mouth extent scaled from source space into sprite space)
+        mask = _feather_mask(cw, ch, mvw / max(s, 1e-6), mvh / max(s, 1e-6))
         a = patch.split()[3]
         blended = (np.asarray(a, dtype=np.float32)
                    * np.asarray(mask, dtype=np.float32) / 255.0
@@ -502,7 +511,14 @@ def _bake_visemes(rig: Rig, img: Image.Image) -> None:
         sprite.save(os.path.join(d, fname))
         rig.visemes[name] = fname
 
-    # Eyelid sprites (blink): skin ellipse + lash line, one per eye
+
+def _bake_eyelids(rig: Rig, img: Image.Image) -> None:
+    """Eyelid sprites (blink): skin ellipse + lash line, one per eye.
+    Baked separately so BOTH the art and procedural viseme paths get
+    blinks."""
+    skin = rig.color("skin")
+    d = rig_dir(rig.character)
+    os.makedirs(d, exist_ok=True)
     for eye in ("eye_l", "eye_r"):
         ex0, ey0, ex1, ey1 = rig.box(eye)
         ew, eh = max(6, ex1 - ex0), max(4, ey1 - ey0)
@@ -539,7 +555,9 @@ def rebake(rig: Rig) -> Rig:
     img = _load_body(rig.character)
     rig.size = img.size
     _slice_layers(rig, img)
-    _bake_visemes(rig, img)
+    if not _bake_visemes_from_art(rig, img):
+        _bake_visemes(rig, img)
+    _bake_eyelids(rig, img)
     rig.save()
     return rig
 
@@ -568,7 +586,9 @@ def build_rig(character: str, force: bool = False) -> Rig:
                   "hair_line_y": geo["hair_line_y"]}
 
     _slice_layers(rig, img)
-    _bake_visemes(rig, img)
+    if not _bake_visemes_from_art(rig, img):
+        _bake_visemes(rig, img)
+    _bake_eyelids(rig, img)
     rig.save()
 
     mode = "face landmarks" if geo["generated_by"] == "mediapipe" else \
