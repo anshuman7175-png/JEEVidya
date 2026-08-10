@@ -5,6 +5,7 @@ jvmake — The JEEVidya Factory CLI (V5)
 One command surface for the whole studio.
 
   jvmake doctor                    Full environment + asset health report
+  jvmake stage                     Tier 1: stage raw poses → characters/ layout
   jvmake rig [character] [--force] Tier 1: build skeletal puppet rig(s)
   jvmake render script.json        Incremental DAG render to MP4 (--force to rebuild)
   jvmake preview script.json       6s half-res preview (~seconds, not minutes)
@@ -215,6 +216,15 @@ def cmd_script(args) -> int:
 # rig (Tier 1 — Bone Engine puppets)
 # ─────────────────────────────────────────────
 
+def cmd_stage(_args) -> int:
+    from tools.pose_stager import stage_all
+    print("\n═══ Tier 1 · Pose Stager ═══\n")
+    if not stage_all():
+        return 1
+    print("\n  Next:  python3 jvmake.py rig --force\n")
+    return 0
+
+
 def cmd_rig(args) -> int:
     from tools.rig_builder import build_rig, build_all
     print("\n═══ Tier 1 · Puppet Rig Builder ═══\n")
@@ -392,6 +402,9 @@ def main() -> int:
     p.add_argument("topic")
     p.add_argument("-o", "--output", default=None)
 
+    sub.add_parser("stage", help="stage raw pose renders into character "
+                                 "poses + viseme sources (Tier 1)")
+
     p = sub.add_parser("rig", help="build skeletal puppet rig(s) (Tier 1)")
     p.add_argument("character", nargs="?", default=None)
     p.add_argument("--force", action="store_true", help="rebuild existing rigs")
@@ -438,6 +451,7 @@ def main() -> int:
         "graph": cmd_graph,
         "test": cmd_test,
         "script": cmd_script,
+        "stage": cmd_stage,
         "rig": cmd_rig,
         "dna": cmd_dna,
         "forge": cmd_forge,
