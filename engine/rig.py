@@ -23,8 +23,31 @@ from typing import Dict, List, Optional, Tuple
 
 from config import settings
 
-RIG_VERSION = 1
-VISEME_NAMES = ["REST", "MBP", "E", "AI", "O", "FV"]
+RIG_VERSION = 2
+# The 10-class viseme set — MUST match engine/visemes.py V enum values,
+# because BoneEngine looks sprites up by pose.viseme (e.g. "OPEN_A").
+VISEME_NAMES = ["REST", "BILABIAL", "LABIODENTAL", "DENTAL", "RETROFLEX",
+                "OPEN_A", "MID_E", "CLOSED_I", "ROUNDED_TENSE", "ROUNDED_LAX"]
+
+# Legacy 5-class sprite names (rig v1) → nearest 10-class name.
+LEGACY_VISEME_ALIAS = {
+    "MBP": "BILABIAL", "FV": "LABIODENTAL", "E": "MID_E",
+    "AI": "OPEN_A", "O": "ROUNDED_LAX",
+}
+
+# When a sprite is missing for a 10-class viseme, fall back to the
+# nearest available shape (ordered by articulatory similarity).
+VISEME_FALLBACK = {
+    "DENTAL": ["MID_E", "LABIODENTAL", "OPEN_A"],
+    "RETROFLEX": ["MID_E", "OPEN_A"],
+    "CLOSED_I": ["MID_E", "DENTAL"],
+    "ROUNDED_TENSE": ["ROUNDED_LAX", "OPEN_A"],
+    "ROUNDED_LAX": ["ROUNDED_TENSE", "OPEN_A"],
+    "LABIODENTAL": ["DENTAL", "MID_E"],
+    "BILABIAL": ["REST"],
+    "MID_E": ["OPEN_A", "DENTAL"],
+    "OPEN_A": ["MID_E"],
+}
 
 Box = Tuple[int, int, int, int]          # x0, y0, x1, y1
 Point = Tuple[float, float]

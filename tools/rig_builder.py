@@ -325,11 +325,108 @@ def _feathered_backing(size: Tuple[int, int], color: Tuple[int, int, int],
     return backing
 
 
+def _art_viseme_dir(character: str) -> str:
+    return os.path.join(settings.CHARACTERS_DIR, character, "visemes_src")
+
+
+def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
+    """
+    PERFECT lip sync path: bake viseme sprites from REAL hand-made art.
+
+    Looks for assets/characters/<name>/visemes_src/<VISEME>.png — one
+    full-body render per mouth shape (identical framing, only the mouth
+    differs). For each one we locate the mouth (MediaPipe per image when
+    available, else the rig's own mouth box scaled to the source frame),
+    crop a padded patch around it, feather the edges with an elliptical
+    alpha falloff, and save it as the viseme sprite.
+
+    Returns True when at least OPEN_A + one closed shape were baked from
+    art (the minimum for convincing speech); False → procedural fallback.
+    """
+    src_dir = _art_viseme_dir(rig.character)
+    if not os.path.isdir(src_dir):
+        return False
+
+    x0, y0, x1, y1 = rig.box("mouth")
+    mw, mh = max(8, x1 - x0), max(6, y1 - y0)
+    # Sprite canvas: same conventions as the procedural path so the
+    # BoneEngine composite (centered-x, 42% above mouth center) is exact.
+    cw = int(mw * 1.7)
+    ch = int(max(mh * 2.2, mw * 1.1))
+    feather = max(4, cw // 8)
+    rig_w, rig_h = rig.size
+
+    def _mouth_center_of(src: Image.Image) -> Tuple[float, float]:
+        """Per-image mouth center: landmarks if possible, else the rig's
+        mouth box mapped through the frame-size ratio."""
+        lms = _detect_landmarks(src)
+        if lms:
+            pts = [lms[i] for i in _LM["mouth"]]
+            return (sum(p[0] for p in pts) / len(pts),
+                    sum(p[1] for p in pts) / len(pts))
+        sx = src.width / max(1, rig_w)
+        sy = src.height / max(1, rig_h)
+        return ((x0 + x1) / 2 * sx, (y0 + y1) / 2 * sy)
+
+    def _feather_mask(w: int, h: int) -> Image.Image:
+        m = Image.new("L", (w, h), 0)
+        dm = ImageDraw.Draw(m)
+        fx, fy = max(2, int(w * 0.16)), max(2, int(h * 0.16))
+        dm.ellipse((fx, fy, w - fx - 1, h - fy - 1), fill=255)
+        return m.filter(ImageFilter.GaussianBlur(max(2, feather // 2)))
+
+    d = rig_dir(rig.character)
+    os.makedirs(d, exist_ok=True)
+    baked: Dict[str, str] = {}
+
+    for name in VISEME_NAMES:
+        path = os.path.join(src_dir, f"{name}.png")
+        if not os.path.exists(path):
+            continue
+        try:
+            src = Image.open(path).convert("RGBA")
+        except Exception as e:
+            print(f"  [Rig] {rig.character}: bad viseme art {path}: {e}")
+            continue
+
+        mcx, mcy = _mouth_center_of(src)
+        # Source-space crop size (rescaled if frames differ)
+        s = src.width / max(1, rig_w)
+        scw, sch = max(8, int(cw * s)), max(8, int(ch * s))
+        # Mouth center sits at 42% of sprite height (BoneEngine contract)
+        left = int(mcx - scw / 2)
+        top = int(mcy - sch * 0.42)
+        patch = src.crop((left, top, left + scw, top + sch))
+        if patch.size != (cw, ch):
+            patch = patch.resize((cw, ch), Image.Resampling.LANCZOS)
+
+        # Elliptical feathered alpha so the patch melts into the face
+        mask = _feather_mask(cw, ch)
+        a = patch.split()[3]
+        blended = (np.asarray(a, dtype=np.float32)
+                   * np.asarray(mask, dtype=np.float32) / 255.0
+                   ).astype(np.uint8)
+        patch.putalpha(Image.fromarray(blended))
+
+        fname = f"mouth_{name.lower()}.png"
+        patch.save(os.path.join(d, fname))
+        baked[name] = fname
+
+    closed = {"REST", "BILABIAL"} & set(baked)
+    if "OPEN_A" in baked and closed:
+        rig.visemes = {**{k: v for k, v in rig.visemes.items()
+                          if k.startswith("LID_")}, **baked}
+        print(f"  [Rig] {rig.character}: {len(baked)} visemes baked "
+              f"from REAL ART ({', '.join(sorted(baked))})")
+        return True
+    return False
+
+
 def _bake_visemes(rig: Rig, img: Image.Image) -> None:
     """
-    Procedurally draw the 6 mouth shapes in the character's own lip/skin
+    Procedurally draw the mouth shapes in the character's own lip/skin
     colors, sized to the detected mouth box. `REST` is the untouched
-    original art (no overlay).
+    original art (no overlay). Used only when no visemes_src/ art exists.
     """
     x0, y0, x1, y1 = rig.box("mouth")
     mw, mh = max(8, x1 - x0), max(6, y1 - y0)
