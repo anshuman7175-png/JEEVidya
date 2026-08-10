@@ -212,6 +212,19 @@ def cmd_script(args) -> int:
 
 
 # ─────────────────────────────────────────────
+# stage (Tier 1 — pose asset staging)
+# ─────────────────────────────────────────────
+
+def cmd_stage(_args) -> int:
+    from tools.pose_stager import stage_all
+    print("\n═══ Tier 1 · Pose Stager ═══\n")
+    ok = stage_all()
+    if ok:
+        print("\n  Next:  python3 jvmake.py rig --force\n")
+    return 0 if ok else 1
+
+
+# ─────────────────────────────────────────────
 # rig (Tier 1 — Bone Engine puppets)
 # ─────────────────────────────────────────────
 
@@ -392,6 +405,8 @@ def main() -> int:
     p.add_argument("topic")
     p.add_argument("-o", "--output", default=None)
 
+    sub.add_parser("stage", help="stage assets/poses into character dirs (Tier 1)")
+
     p = sub.add_parser("rig", help="build skeletal puppet rig(s) (Tier 1)")
     p.add_argument("character", nargs="?", default=None)
     p.add_argument("--force", action="store_true", help="rebuild existing rigs")
@@ -438,6 +453,7 @@ def main() -> int:
         "graph": cmd_graph,
         "test": cmd_test,
         "script": cmd_script,
+        "stage": cmd_stage,
         "rig": cmd_rig,
         "dna": cmd_dna,
         "forge": cmd_forge,
