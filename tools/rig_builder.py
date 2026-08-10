@@ -370,18 +370,54 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
         return ((x0 + x1) / 2 * sx, (y0 + y1) / 2 * sy,
                 (x1 - x0) * sx, (y1 - y0) * sy)
 
-    def _feather_mask(w: int, h: int, mvw: float, mvh: float) -> Image.Image:
-        """Feathered ellipse hugging the actual mouth (padded), NOT the
-        whole canvas — keeps hands, collars and hair out of the sprite.
-        Mouth center sits at (w/2, 0.42h) per the BoneEngine contract."""
-        rx = min(w / 2 - 1, max(w * 0.30, mvw * 0.85))
-        ry = min(h * 0.42 - 1, h * (1 - 0.42) - 1,
-                 max(h * 0.24, mvh * 1.05))
+    def _ellipse_mask(w: int, h: int, rx: float, ry: float,
+                      blur: float) -> Image.Image:
+        """Feathered ellipse centered on the mouth anchor (w/2, 0.42h)
+        per the BoneEngine contract."""
         cx, cy = w / 2, h * 0.42
         m = Image.new("L", (w, h), 0)
-        dm = ImageDraw.Draw(m)
-        dm.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill=255)
-        return m.filter(ImageFilter.GaussianBlur(max(2, feather // 2)))
+        ImageDraw.Draw(m).ellipse((cx - rx, cy - ry, cx + rx, cy + ry),
+                                  fill=255)
+        return m.filter(ImageFilter.GaussianBlur(blur))
+
+    # The exact region of the BASE body that the sprite is composited
+    # onto — the reference for "what belongs around this mouth".
+    base_left = int((x0 + x1) / 2 - cw / 2)
+    base_top = int((y0 + y1) / 2 - ch * 0.42)
+    base_patch = img.crop((base_left, base_top,
+                           base_left + cw, base_top + ch))
+
+    def _ring_clutter(patch: Image.Image,
+                      cover_rx: float, cover_ry: float,
+                      art_rx: float, art_ry: float) -> float:
+        """Fraction of pixels in the ring between the tight mouth
+        ellipse and the cover ellipse that differ STRONGLY from the
+        base body at the same spot. Aligned facial features (glasses,
+        chin shadow, nose) match the base and score ~0; a hand or a
+        shifted collar that isn't there in the neutral pose scores
+        high — meaning the wide window would flash it during speech."""
+        w, h = patch.size
+        cx, cy = w / 2, h * 0.42
+        cover = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(cover).ellipse(
+            (cx - cover_rx, cy - cover_ry, cx + cover_rx, cy + cover_ry),
+            fill=255)
+        art = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(art).ellipse(
+            (cx - art_rx, cy - art_ry, cx + art_rx, cy + art_ry), fill=255)
+        ring = (np.asarray(cover) > 128) & (np.asarray(art) <= 128)
+        if ring.sum() < 16:
+            return 0.0
+        soft = ImageFilter.GaussianBlur(4)
+        pa = np.asarray(patch.filter(soft), dtype=np.float32)
+        ba = np.asarray(base_patch.filter(soft), dtype=np.float32)
+        both = ring & (pa[..., 3] > 128) & (ba[..., 3] > 128)
+        # Silhouette mismatch (sprite opaque where base is transparent,
+        # or vice versa) is always a visible flash.
+        alpha_flash = ring & (np.abs(pa[..., 3] - ba[..., 3]) > 128)
+        diff = np.abs(pa[..., :3] - ba[..., :3]).sum(axis=2)
+        bad = int(alpha_flash.sum()) + int((diff[both] > 140).sum())
+        return bad / float(ring.sum())
 
     d = rig_dir(rig.character)
     os.makedirs(d, exist_ok=True)
@@ -408,14 +444,64 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
         if patch.size != (cw, ch):
             patch = patch.resize((cw, ch), Image.Resampling.LANCZOS)
 
-        # Elliptical feathered alpha so the patch melts into the face
-        # (mouth extent scaled from source space into sprite space)
-        mask = _feather_mask(cw, ch, mvw / max(s, 1e-6), mvh / max(s, 1e-6))
-        a = patch.split()[3]
-        blended = (np.asarray(a, dtype=np.float32)
-                   * np.asarray(mask, dtype=np.float32) / 255.0
-                   ).astype(np.uint8)
-        patch.putalpha(Image.fromarray(blended))
+        # ── Two ellipses, two jobs ──────────────────────────────────
+        # COVER — big enough to fully hide the base pose's mouth that
+        #         sits underneath the sprite at composite time.
+        # ART   — hugs THIS frame's actual detected mouth, so nearby
+        #         hands, hoodie collars and hair can never flash inside
+        #         the sprite (mouth extent scaled into sprite space).
+        s_mvw, s_mvh = mvw / max(s, 1e-6), mvh / max(s, 1e-6)
+        cover_rx = min(cw / 2 - 1, max(cw * 0.30, s_mvw * 0.85))
+        cover_ry = min(ch * 0.42 - 1, ch * (1 - 0.42) - 1,
+                       max(ch * 0.24, s_mvh * 1.05))
+        art_rx = min(cw / 2 - 1, max(s_mvw * 0.65, cw * 0.12))
+        art_ry = min(ch * 0.42 - 1, ch * (1 - 0.42) - 1,
+                     max(s_mvh * 0.65, ch * 0.10))
+
+        # Facial tone near the mouth of THIS frame (just above the lips),
+        # used both for clutter scoring and — if needed — the backing.
+        tone = _sample_color(np.asarray(src), mcx,
+                             max(0.0, mcy - mvh * 1.1), r=6)
+        clutter = _ring_clutter(patch, cover_rx, cover_ry, art_rx, art_ry)
+        occluded = (clutter > 0.10
+                    and (art_rx < cover_rx - 2 or art_ry < cover_ry - 2))
+        blur = max(2, feather // 2)
+
+        if not occluded:
+            # Clean surroundings: keep the full patch (real cheeks and
+            # chin shading) inside one wide feathered window, exactly
+            # as large as needed to cover the base mouth.
+            mask = _ellipse_mask(cw, ch, max(cover_rx, art_rx),
+                                 max(cover_ry, art_ry), blur)
+            a = patch.split()[3]
+            blended = (np.asarray(a, dtype=np.float32)
+                       * np.asarray(mask, dtype=np.float32) / 255.0
+                       ).astype(np.uint8)
+            patch.putalpha(Image.fromarray(blended))
+        else:
+            # Occluders (hand/collar/hair) in the ring around the mouth:
+            # keep only a tight ellipse of real mouth art and slide a
+            # feathered skin-toned backing underneath — sampled from
+            # this very frame so tone and lighting match — to occlude
+            # the base mouth without pulling the occluder in.
+            print(f"  [Rig] {rig.character}: {name} occluder detected "
+                  f"(clutter {clutter:.2f}) — tight-mouth hybrid bake")
+            art_mask = _ellipse_mask(cw, ch, art_rx, art_ry, blur)
+            a = patch.split()[3]
+            blended = (np.asarray(a, dtype=np.float32)
+                       * np.asarray(art_mask, dtype=np.float32) / 255.0
+                       ).astype(np.uint8)
+            patch.putalpha(Image.fromarray(blended))
+
+            backing = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+            bcx, bcy = cw / 2, ch * 0.42
+            ImageDraw.Draw(backing).ellipse(
+                (bcx - cover_rx, bcy - cover_ry,
+                 bcx + cover_rx, bcy + cover_ry), fill=tone + (255,))
+            backing.putalpha(backing.split()[3].filter(
+                ImageFilter.GaussianBlur(max(3, feather))))
+            backing.alpha_composite(patch)
+            patch = backing
 
         fname = f"mouth_{name.lower()}.png"
         patch.save(os.path.join(d, fname))
