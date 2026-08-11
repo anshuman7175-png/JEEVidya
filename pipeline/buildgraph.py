@@ -184,6 +184,64 @@ class VideoBuild:
 
     # ─── Public API ────────────────────────────────────────
 
+    @staticmethod
+    def _ensure_character_assets(report) -> None:
+        """
+        Fail loudly (or auto-repair) if character art is missing.
+
+        A blank video with only voice + captions means the compositor found
+        neither a puppet rig nor expression PNGs. If assets/poses has source
+        art, auto-run pose staging + rig build; otherwise raise so the render
+        never silently produces an empty frame.
+        """
+        def _chars_ok() -> bool:
+            for name in ("gudiya", "chintu"):
+                char_dir = os.path.join(settings.CHARACTERS_DIR, name)
+                has_body = any(
+                    os.path.exists(os.path.join(char_dir, f"body{e}"))
+                    for e in (".png", ".jpg"))
+                if not has_body:
+                    return False
+            return True
+
+        if _chars_ok():
+            return
+
+        report("ASSETS", 1, "Character assets missing — auto-staging "
+                            "from assets/poses...")
+        try:
+            from tools.pose_stager import stage_all
+            stage_all()
+        except Exception:
+            # Older stager exposes main(); fall back to module execution
+            import subprocess, sys as _sys
+            r = subprocess.run(
+                [_sys.executable, os.path.join(settings.BASE_DIR
+                 if hasattr(settings, "BASE_DIR") else ".",
+                 "tools", "pose_stager.py")], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError(
+                    "Character assets are missing and auto-staging failed.\n"
+                    f"{r.stderr[-500:]}\n"
+                    "Run: python3 tools/pose_stager.py && "
+                    "python3 jvmake.py rig") from None
+
+        # Build puppet rigs so lip-sync uses the real mouth art
+        try:
+            from tools.rig_builder import build_all
+            build_all()
+        except Exception as e:
+            report("ASSETS", 2, f"Rig build failed ({e}) — expression "
+                                "fallback will be used.")
+
+        if not _chars_ok():
+            raise RuntimeError(
+                "Character assets are missing (assets/characters/ is empty) "
+                "and could not be auto-staged from assets/poses/. The video "
+                "would render BLANK. Run: python3 tools/pose_stager.py && "
+                "python3 jvmake.py rig, then re-render.")
+        report("ASSETS", 2, "Characters auto-staged + rigged ✓")
+
     def run(self, progress_callback=None, force: bool = False) -> str:
         """Full build: TTS → timeline → DAG (mix + segments + final) → MP4."""
         def report(stage: str, pct: float, msg: str):
@@ -194,6 +252,11 @@ class VideoBuild:
         mode = "preview 540p/6s" if self.preview else "full 1080p"
         report("INIT", 0, f"jvmake DAG build ({mode}): {self.title}")
         self._reset_temp()
+
+        # Guard: characters MUST exist before rendering, otherwise the
+        # compositor silently pastes nothing and the video comes out blank
+        # (voice + captions only). Auto-stage from assets/poses if possible.
+        self._ensure_character_assets(report)
 
         # Asset prep mutates assets/characters — MUST precede fingerprinting
         try:
