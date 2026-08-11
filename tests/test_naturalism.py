@@ -9,8 +9,8 @@ import pytest
 
 from engine.cinematics import CameraDynamics
 from engine.gestures import GestureTrack
-from engine.visemes import (AmplitudeEnvelope, VISEME_CEILING, VisemeTrack,
-                            mouth_openness_blend, visemes_for_word)
+from engine.visemes import (AmplitudeEnvelope, JAW, V, VisemeTrack,
+                            visemes_for_word)
 from pipeline.compositor import CinematicCompositor
 
 
@@ -30,52 +30,66 @@ class _Frame(CinematicCompositor):
 
 # ─── Coarticulation ─────────────────────────────────────────
 
-def test_sample_blend_never_emits_unknown_viseme():
-    track = VisemeTrack([_Word("namaste", 0, 600), _Word("bhaiyo", 650, 1200)])
-    legal = set(VISEME_CEILING)
+def test_weights_never_emit_unknown_viseme():
+    track = VisemeTrack.from_words(
+        [_Word("namaste", 0, 600), _Word("bhaiyo", 650, 1200)])
+    legal = set(V)
     for t in range(-100, 1400, 7):
-        v_from, v_to, b, w = track.sample_blend(float(t))
-        assert v_from in legal and v_to in legal
-        assert 0.0 <= b <= 1.0
-        assert w >= 0.0
+        weights, jaw = track.weights_at(float(t))
+        assert weights, f"empty weight dict at t={t}ms"
+        for v, w in weights.items():
+            assert v in legal, f"unknown viseme {v!r} at t={t}ms"
+            assert 0.0 <= w <= 1.0 + 1e-6
+        assert sum(weights.values()) <= 1.0 + 1e-6
+        assert jaw >= 0.0
 
 
-def test_blend_is_continuous_across_boundaries():
-    """Openness must glide at 30 fps. Openings are slow (jaw drops with
+def test_jaw_is_continuous_across_boundaries():
+    """Jaw drop must glide at 30 fps. Openings are slow (jaw drops with
     inertia); closings may be fast — bilabial closure IS a fast event —
     but never a full-range single-frame snap."""
-    track = VisemeTrack([_Word("dekho", 0, 500), _Word("magnet", 520, 1100)])
+    track = VisemeTrack.from_words(
+        [_Word("dekho", 0, 500), _Word("magnet", 520, 1100)])
     prev = None
     for t in range(0, 1300, 33):          # 30 fps sampling
-        v_from, v_to, b, w = track.sample_blend(float(t))
-        openness = mouth_openness_blend(v_from, v_to, b, w, 1.0)
+        _, jaw = track.weights_at(float(t))
         if prev is not None:
-            delta = openness - prev
+            delta = jaw - prev
             # Old hard-switch code jumped ±0.85 in one frame. A plosive
             # release ("ma") legitimately opens ~0.4/frame at 30 fps —
             # and the sprite cross-fade smooths the shape on top.
             assert delta < 0.50, f"opening pop at t={t}ms ({delta:+.2f})"
             assert delta > -0.65, f"closing snap at t={t}ms ({delta:+.2f})"
-        prev = openness
+        prev = jaw
 
 
 def test_bilabial_dominance_reaches_closure_early():
-    """Blending INTO an MBP closure must run ahead of linear time."""
-    track = VisemeTrack([_Word("aam", 0, 400)])   # AI → MBP
-    saw_dominant = False
+    """Blending INTO a bilabial closure must run ahead of linear time:
+    the lips should own >50% of the mix before the vowel event ends."""
+    track = VisemeTrack.from_words([_Word("aam", 0, 400)])  # OPEN_A → BILABIAL
+    vowel_end = next(e.end_ms for e in track.events
+                     if e.viseme == V.OPEN_A)
+    entered_blend = False
+    early_closure = False
     for t in range(0, 400, 5):
-        v_from, v_to, b, _ = track.sample_blend(float(t))
-        if v_from != "MBP" and v_to == "MBP" and 0.05 < b < 0.95:
-            saw_dominant = True
-    assert saw_dominant, "AI→MBP boundary never entered its blend window"
+        weights, _ = track.weights_at(float(t))
+        w_bil = weights.get(V.BILABIAL, 0.0)
+        if 0.05 < w_bil < 0.95 and weights.get(V.OPEN_A, 0.0) > 0.0:
+            entered_blend = True
+        if t < vowel_end and w_bil >= 0.5:
+            early_closure = True
+    assert entered_blend, "OPEN_A→BILABIAL boundary never entered its blend window"
+    assert early_closure, "bilabial closure did not dominate ahead of linear time"
 
 
 def test_rest_outside_track():
-    track = VisemeTrack([_Word("hi", 1000, 1400)])
-    assert track.sample_blend(300.0)[0] == "REST"
-    v_from, v_to, b, w = track.sample_blend(5000.0)
-    assert (v_to if b >= 0.5 else v_from) == "REST"
-    assert w == 0.0
+    track = VisemeTrack.from_words([_Word("hi", 1000, 1400)])
+    weights, jaw = track.weights_at(300.0)
+    assert weights.get(V.REST, 0.0) == pytest.approx(1.0)
+    assert jaw == pytest.approx(0.0)
+    weights, jaw = track.weights_at(5000.0)
+    assert max(weights, key=weights.get) == V.REST
+    assert jaw == pytest.approx(0.0)
 
 
 def test_visemes_for_word_never_empty():

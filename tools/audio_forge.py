@@ -100,7 +100,9 @@ def master(x: np.ndarray, target: float = TARGET_LUFS) -> np.ndarray:
     """Gain to target loudness, then soft-clip stray peaks (tanh knee)."""
     gain = 10 ** ((target - loudness_lufs(x)) / 20)
     y = x * gain
-    return np.tanh(y * 0.9) / 0.9 * 0.98
+    # tanh has unity slope at 0, so small signals pass at target loudness
+    # while peaks compress toward the 0.98 ceiling (never clips).
+    return np.tanh(y) * 0.98
 
 
 def _to_segment(x: np.ndarray):
@@ -122,7 +124,7 @@ def sfx_whoosh(seconds: float = 0.55, seed: int = 11) -> np.ndarray:
     sweep = np.linspace(300, 4200, n)
     # Ring-modulate noise into the sweep band, then band-shape
     t = _t(seconds)
-    carrier = np.sin(2 * np.pi * np.cumsum(sweep) / SR)
+    carrier = np.sin(2 * np.pi * np.cumsum(sweep) / SR).astype(np.float32)
     x = _lowpass_fft(noise * carrier, 5000.0)
     return x * _env(n, 0.25, 0.45) * 0.9
 
@@ -146,9 +148,11 @@ def sfx_riser(seconds: float = 1.6, seed: int = 13) -> np.ndarray:
         freq = np.linspace(70, 460 + det * 8, n) * (1 + det * 0.004)
         phase = 2 * np.pi * np.cumsum(freq) / SR
         x += ((phase / np.pi) % 2 - 1) * 0.28              # saw
-    x += _lowpass_fft(_noise(n, seed), 3000) * np.linspace(0, 0.7, n)
+    x += _lowpass_fft(_noise(n, seed), 3000) * np.linspace(0, 0.7, n,
+                                                           dtype=np.float32)
     x = _lowpass_fft(x, 2600)
-    return x * np.linspace(0.15, 1.0, n) ** 1.4 * _env(n, 0.02, 0.06)
+    ramp = np.linspace(0.15, 1.0, n, dtype=np.float32) ** 1.4
+    return x * ramp * _env(n, 0.02, 0.06)
 
 
 def sfx_bass_drop(seconds: float = 0.9, seed: int = 14) -> np.ndarray:

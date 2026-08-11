@@ -63,6 +63,16 @@ for _chars, _cls in [
     for c in _chars:
         _LAT_MAP[c] = _cls
 
+# Digits are spoken aloud, so a numeric token ("9.8") must still move the
+# mouth. Map each digit to the viseme run of its spoken English name —
+# a coarse but correct-order approximation for lip sync.
+_DIGIT_NAMES = ("zero", "one", "two", "three", "four",
+                "five", "six", "seven", "eight", "nine")
+_DIGIT_G2P: Dict[int, List[V]] = {
+    d: [_LAT_MAP[c] for c in name if c in _LAT_MAP]
+    for d, name in enumerate(_DIGIT_NAMES)
+}
+
 _VIRAMA = "\u094d"
 _NUKTA = "\u093c"
 _SKIP = set(_VIRAMA + _NUKTA + "\u0902\u0901\u0903\u093d\u093c\u0970")
@@ -97,6 +107,12 @@ def g2p(text: str) -> List[V]:
         cls = _LAT_MAP.get(ch.lower())
         if cls is not None:
             out.append(cls)
+            continue
+        if ch.isdigit():
+            try:
+                out.extend(_DIGIT_G2P[int(ch)])   # spoken digit name
+            except (ValueError, KeyError):
+                pass
     # Collapse immediate repeats
     dedup: List[V] = []
     for v in out:
@@ -150,6 +166,16 @@ class VisemeTrack:
         return cls(events, end)
 
     # ---- query ----
+
+    @staticmethod
+    def _blend_window(a: "VisemeEvent", b: "VisemeEvent") -> float:
+        """Half-width of the cross-fade window centered on the a→b boundary.
+        Scales with articulator travel: a full jaw excursion (BILABIAL→
+        OPEN_A) physically takes longer than a small shape change, and a
+        window shorter than ~2 frames at 30 fps reads as a mouth pop."""
+        travel = abs(JAW[b.viseme] - JAW[a.viseme])
+        return min(80.0, max(0.4 * min(a.dur, max(1.0, b.dur)),
+                             60.0 * travel))
 
     def _find(self, t_ms: float) -> int:
         """Binary search for the last event starting <= t_ms."""
@@ -205,7 +231,7 @@ class VisemeTrack:
                if idx + 1 < len(self.events) else None)
         blend = 0.0
         if nxt is not None and nxt.start_ms - cur.end_ms < SHORT_TAIL_MS:
-            T = min(80.0, 0.4 * min(cur.dur, max(1.0, nxt.dur)))
+            T = self._blend_window(cur, nxt)
             into = t_ms - (cur.end_ms - T)
             if into > 0:
                 raw = clamp01(into / (2.0 * T))
@@ -220,6 +246,27 @@ class VisemeTrack:
             weights[nxt.viseme] = weights.get(nxt.viseme, 0.0) + blend
         else:
             weights[cur.viseme] = 1.0
+
+        # Complete the incoming half of the previous boundary's cross-fade.
+        # The blend window is centered on prv.end_ms; without this branch
+        # the mix snaps to 100% cur the instant t enters cur (single-frame
+        # jaw pop at every event boundary).
+        prv = self.events[idx - 1] if idx > 0 else None
+        if prv is not None and cur.start_ms - prv.end_ms < SHORT_TAIL_MS:
+            T = self._blend_window(prv, cur)
+            into = t_ms - (prv.end_ms - T)
+            if 0.0 < into < 2.0 * T:
+                raw = clamp01(into / (2.0 * T))
+                if prv.viseme == V.BILABIAL:
+                    raw = raw ** 1.8
+                elif cur.viseme == V.BILABIAL:
+                    raw = 1.0 - (1.0 - raw) ** 1.8
+                blend_in = raised_cosine(raw)
+                if blend_in < 1.0:
+                    for k in list(weights):
+                        weights[k] *= blend_in
+                    weights[prv.viseme] = (weights.get(prv.viseme, 0.0)
+                                           + (1.0 - blend_in))
 
         # anticipatory rounding in the last 60ms of a vowel before ROUNDED_*
         if (nxt is not None and nxt.viseme in ROUNDED
@@ -295,5 +342,6 @@ class AmplitudeEnvelope:
 
 
 def visemes_for_word(word: str) -> List[str]:
-    """Legacy G2P returning string names."""
-    return [v.value for v in g2p(word)]
+    """Legacy G2P returning string names. Never returns an empty list:
+    unmappable tokens fall back to REST so callers can always index."""
+    return [v.value for v in g2p(word)] or [V.REST.value]
