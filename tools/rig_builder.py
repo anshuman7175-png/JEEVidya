@@ -312,7 +312,7 @@ def _slice_layers(rig: Rig, img: Image.Image) -> None:
 # VISEME + EYELID SPRITE BAKING
 # ═══════════════════════════════════════════
 
-def _feathered_backing(size: Tuple[int, int], color: Tuple[int, int, int],
+def _feathered_skin_patch(size: Tuple[int, int], color: Tuple[int, int, int],
                        feather: int) -> Image.Image:
     """Skin-colored ellipse with a soft alpha edge — hides the source mouth."""
     w, h = size
@@ -408,7 +408,7 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
     base_patch = img.crop((base_left, base_top,
                            base_left + cw, base_top + ch))
 
-    def _ring_clutter(patch: Image.Image,
+    def _ring_clutter_score(patch: Image.Image,
                       cover_rx: float, cover_ry: float,
                       art_rx: float, art_ry: float) -> float:
         """Fraction of pixels in the ring between the tight mouth
@@ -440,7 +440,7 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
         bad = int(alpha_flash.sum()) + int((diff[both] > 140).sum())
         return bad / float(ring.sum())
 
-    def _tone_match(patch: Image.Image,
+    def _match_skin_tone(patch: Image.Image,
                     art_rx: float, art_ry: float) -> Image.Image:
         """Per-channel LINEAR tone match (gain + offset) of the source
         patch to the base body, fit over the skin surrounding the mouth
@@ -531,7 +531,7 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
         # tone-matching pulls an occluding hand/collar toward the base
         # skin color, shrinking its diff below the threshold and wrongly
         # disabling the tight-mouth occluder path.
-        clutter = _ring_clutter(patch, cover_rx, cover_ry, art_rx, art_ry)
+        clutter = _ring_clutter_score(patch, cover_rx, cover_ry, art_rx, art_ry)
         occluded = (clutter > 0.10
                     and (art_rx < cover_rx - 2 or art_ry < cover_ry - 2))
 
@@ -547,8 +547,8 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
 
         # Global per-channel linear tone match toward the base body —
         # applied to EVERY viseme (both paths), replacing per-path
-        # spot-sample gains. See _tone_match.
-        patch = _tone_match(patch, art_rx, art_ry)
+        # spot-sample gains. See _match_skin_tone.
+        patch = _match_skin_tone(patch, art_rx, art_ry)
 
         if not occluded:
             # Clean surroundings: keep the full patch (real cheeks and
@@ -573,7 +573,7 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             # the new tight mouth art.
             print(f"  [Rig] {rig.character}: {name} occluder detected "
                   f"(clutter {clutter:.2f}) — tight-mouth hybrid bake")
-            # (Skin already tone-matched to the base by _tone_match
+            # (Skin already tone-matched to the base by _match_skin_tone
             # above — no per-path spot-sample gain needed.)
 
             # Art window: the actual OUTER-LIP polygon from this frame's
@@ -694,7 +694,7 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
     return False
 
 
-def _bake_visemes(rig: Rig, img: Image.Image) -> None:
+def _bake_synth_visemes(rig: Rig, img: Image.Image) -> None:
     """
     Procedurally draw the mouth shapes in the character's own lip/skin
     colors, sized to the detected mouth box. `REST` is the untouched
@@ -714,7 +714,7 @@ def _bake_visemes(rig: Rig, img: Image.Image) -> None:
     cx_, cy_ = cw / 2, ch / 2
 
     def canvas():
-        return _feathered_backing((cw, ch), skin, feather), None
+        return _feathered_skin_patch((cw, ch), skin, feather), None
 
     def ellipse(draw, rx, ry, fill, outline=None, width=0, dy=0.0):
         draw.ellipse((cx_ - rx, cy_ - ry + dy, cx_ + rx, cy_ + ry + dy),
@@ -775,7 +775,7 @@ def _bake_visemes(rig: Rig, img: Image.Image) -> None:
         rig.visemes[name] = fname
 
 
-def _bake_eyelids(rig: Rig, img: Image.Image) -> None:
+def _bake_lid_sprites(rig: Rig, img: Image.Image) -> None:
     """Eyelid sprites (blink), baked from the character's OWN artwork.
 
     A flat skin-colored ellipse reads as a pale salmon panel on painterly
@@ -897,8 +897,8 @@ def rebake(rig: Rig) -> Rig:
     rig.size = img.size
     _slice_layers(rig, img)
     if not _bake_visemes_from_art(rig, img):
-        _bake_visemes(rig, img)
-    _bake_eyelids(rig, img)
+        _bake_synth_visemes(rig, img)
+    _bake_lid_sprites(rig, img)
     rig.save()
     return rig
 
@@ -928,8 +928,8 @@ def build_rig(character: str, force: bool = False) -> Rig:
 
     _slice_layers(rig, img)
     if not _bake_visemes_from_art(rig, img):
-        _bake_visemes(rig, img)
-    _bake_eyelids(rig, img)
+        _bake_synth_visemes(rig, img)
+    _bake_lid_sprites(rig, img)
     rig.save()
 
     mode = "face landmarks" if geo["generated_by"] == "mediapipe" else \

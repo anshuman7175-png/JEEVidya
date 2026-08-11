@@ -204,7 +204,7 @@ def _q(v: float, step: float) -> float:
     return round(v / step) * step
 
 
-def _crop_lid_feathered(lid: Image.Image, cut: int, eye_h: int) -> Image.Image:
+def _feather_crop_lid(lid: Image.Image, cut: int, eye_h: int) -> Image.Image:
     """Crop the top `cut` px off a descending eyelid sprite, then fade the
     fresh cut edge with a vertical alpha ramp so the clip line never reads
     as a hard horizontal seam against the brow. The feather distance scales
@@ -419,25 +419,6 @@ class BoneEngine:
         return (int(box[0] - ox), int(box[1] - oy),
                 int(box[2] - ox), int(box[3] - oy))
 
-    def _make_backing(self, size: Tuple[int, int], crop: Image.Image) -> Image.Image:
-        from PIL import ImageDraw, ImageFilter
-        import numpy as np
-        w, h = max(4, size[0]), max(4, size[1])
-        arr = np.asarray(crop)
-        if arr.shape[-1] == 4:
-            mask = arr[..., 3] > 50
-            if mask.any():
-                avg_color = tuple(arr[mask, :3].mean(axis=0).astype(int))
-            else:
-                avg_color = self.skin
-        else:
-            avg_color = self.skin
-        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(img).ellipse((0, 0, w - 1, h - 1), fill=avg_color + (255,))
-        img.putalpha(img.split()[3].filter(
-            ImageFilter.GaussianBlur(max(2, w // 10))))
-        return img
-
     # ─── torso (quad-mesh spine bend) ─────────────────────
 
     def _bent_torso(self, lean: float) -> Image.Image:
@@ -474,25 +455,6 @@ class BoneEngine:
     def _composed_head(self, pose: PuppetPose) -> Image.Image:
         key = self._compose_key(pose)
         return self._head_cache.get_or(key, lambda: self._compose_head(*key))
-
-    def _staged_head(self, pose: PuppetPose, angle_q: float,
-                     lag_q: float) -> Tuple[Image.Image, Tuple[float, float]]:
-        """Fully-staged head (compose → hair shear → rotate) with the
-        paste pivot. All three stages cached by quantized channels."""
-        key = self._compose_key(pose) + (angle_q, lag_q)
-
-        def build():
-            head = self._composed_head(pose)
-            head = self._hair_shear(head, lag_q)
-            squish = head.width / self.head_base.width
-            pivot = (self.pivot[0] * squish, self.pivot[1])
-            if abs(angle_q) > 0.2:
-                head = head.rotate(angle_q,
-                                   resample=Image.Resampling.BILINEAR,
-                                   center=pivot, expand=False)
-            return head, pivot
-
-        return self._rot_cache.get_or(key, build)
 
     def _compose_head(self, viseme: str, mouth_open: float, blink: float,
                       brow: float, yaw: float,
@@ -536,7 +498,7 @@ class BoneEngine:
                     cut = clip_top - y
                     if cut >= lid.height:
                         continue
-                    lid = _crop_lid_feathered(lid, cut, box[3] - box[1])
+                    lid = _feather_crop_lid(lid, cut, box[3] - box[1])
                     y = clip_top
                 head.alpha_composite(lid, dest=(x, y))
 
@@ -649,7 +611,7 @@ class BoneEngine:
                     cut = clip_top - ly
                     if cut >= lid.height:
                         continue
-                    lid = _crop_lid_feathered(lid, cut, box[3] - box[1])
+                    lid = _feather_crop_lid(lid, cut, box[3] - box[1])
                     ly = clip_top
                 canvas.alpha_composite(lid, dest=(lx, ly))
 
