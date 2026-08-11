@@ -120,21 +120,51 @@ def synthesize_with_word_boundaries(text: str, voice: str, rate: str,
 
 
 def _get_audio_duration_ms(audio_path: str) -> int:
-    """Get audio file duration in milliseconds. Uses moviepy (imageio_ffmpeg)."""
+    """Get audio file duration in milliseconds.
+
+    Decodes via ffmpeg subprocess (imageio_ffmpeg bundles ffmpeg but NOT
+    ffprobe, and moviepy 2.x removed the `moviepy.editor` module, so both
+    of the old probes silently failed and every turn fell back to 2000ms,
+    corrupting the whole timeline).
+    """
+    import re
+    import subprocess
     try:
-        from moviepy.editor import AudioFileClip
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        ffmpeg_exe = "ffmpeg"
+
+    # Decode to null muxer — the LAST "time=" ffmpeg reports is the true
+    # decoded duration (container "Duration:" headers can lie for VBR mp3).
+    try:
+        proc = subprocess.run(
+            [ffmpeg_exe, "-v", "info", "-i", audio_path, "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60,
+        )
+        matches = re.findall(
+            r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", proc.stderr)
+        if matches:
+            h, m, s = matches[-1]
+            return int((int(h) * 3600 + int(m) * 60 + float(s)) * 1000)
+        # Fallback: container header
+        header = re.search(
+            r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", proc.stderr)
+        if header:
+            h, m, s = header.groups()
+            return int((int(h) * 3600 + int(m) * 60 + float(s)) * 1000)
+    except Exception:
+        pass
+
+    # Fallback: moviepy 2.x API (no moviepy.editor)
+    try:
+        from moviepy import AudioFileClip
         clip = AudioFileClip(audio_path)
         dur = int(clip.duration * 1000)
         clip.close()
         return dur
     except Exception:
-        # Fallback: try pydub
-        try:
-            from pydub import AudioSegment
-            seg = AudioSegment.from_file(audio_path)
-            return len(seg)
-        except Exception:
-            return 2000  # Default 2 seconds if both fail
+        return 2000  # Default 2 seconds if all probes fail
 
 
 # Voice profiles per character
