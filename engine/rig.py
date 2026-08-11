@@ -181,12 +181,22 @@ class HeadGeometry:
         )
 
     def eye_dict(self, left: bool) -> dict:
-        """The EyeGeometry payload for one side (engine/eye_model.py)."""
+        """The EyeGeometry payload for one side (engine/eye_model.py).
+
+        The socket is DERIVED from the two baked lid margins (upper
+        left→right, then lower right→left) rather than stored: a stored
+        socket could disagree with the lids it is supposed to bound, and
+        a sclera that leaks past a lid is exactly the class of bug Law 1
+        forbids representing. Derivation makes the two consistent by
+        construction.
+        """
+        upper = [tuple(p) for p in (self.lid_upper_l if left else self.lid_upper_r)]
+        lower = [tuple(p) for p in (self.lid_lower_l if left else self.lid_lower_r)]
+        socket = upper + list(reversed(lower))
         return {
-            "lid_upper": [list(p) for p in
-                          (self.lid_upper_l if left else self.lid_upper_r)],
-            "lid_lower": [list(p) for p in
-                          (self.lid_lower_l if left else self.lid_lower_r)],
+            "socket": [list(p) for p in socket],
+            "lid_upper": [list(p) for p in upper],
+            "lid_lower": [list(p) for p in lower],
             "iris": list(self.iris_l if left else self.iris_r),
         }
 
