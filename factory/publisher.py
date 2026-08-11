@@ -29,6 +29,53 @@ DAILY_UNITS = 10_000
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
+class GateRefusal(RuntimeError):
+    """The publisher refused an artifact. Not a bug — the constitution."""
+
+
+def admission_check(video: str, strict: bool = True) -> None:
+    """The publisher's admission gate (Part XII §12.1 + Part XIX).
+
+    Nothing un-gated reaches YouTube, mechanically rather than by
+    convention:
+      • a QC-pass manifest must exist, match the video's checksum, and
+        report every delivery gate green (`pipeline/delivery_qc.py`);
+      • a sealed beat ledger must exist and agree with the muxed
+        timeline (`factory/beats.py`) — the learning loop's ground truth
+        is gate-protected like the pixels are.
+
+    `strict=False` (or JV_PUBLISH_UNGATED=1) downgrades to a loud warning
+    for local dry runs; the batch/ship path never sets it.
+    """
+    if os.environ.get("JV_PUBLISH_UNGATED") == "1":
+        strict = False
+    problems: List[str] = []
+
+    try:
+        from pipeline.delivery_qc import verify_manifest
+        ok, reason = verify_manifest(video)
+    except Exception as e:                       # noqa: BLE001
+        ok, reason = False, f"QC manifest unreadable: {e}"
+    if not ok:
+        problems.append(f"delivery QC: {reason}")
+
+    try:
+        from factory.beats import verify as verify_beats
+        ok_b, reason_b = verify_beats(video)
+    except Exception as e:                       # noqa: BLE001
+        ok_b, reason_b = False, f"beat ledger unreadable: {e}"
+    if not ok_b:
+        problems.append(f"beat ledger: {reason_b}")
+
+    if not problems:
+        return
+    msg = ("refusing to publish " + os.path.basename(video) + " — "
+           + "; ".join(problems))
+    if strict:
+        raise GateRefusal(msg)
+    print(f"  [Publish] WARNING (ungated): {msg}")
+
+
 def can_upload() -> bool:
     try:
         import googleapiclient  # noqa: F401
@@ -41,7 +88,8 @@ def can_upload() -> bool:
 class Publisher:
 
     def publish_bundle(self, bundle_dir: str,
-                       schedule_iso: Optional[str] = None) -> Dict[str, Any]:
+                       schedule_iso: Optional[str] = None,
+                       strict: bool = True) -> Dict[str, Any]:
         """Publish one batch bundle (video.mp4 + meta.json + thumbnail)."""
         video = os.path.join(bundle_dir, "video.mp4")
         meta_path = os.path.join(bundle_dir, "meta.json")
@@ -51,6 +99,9 @@ class Publisher:
         if os.path.exists(meta_path):
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
+
+        # The constitution, enforced before a single byte is uploaded.
+        admission_check(video, strict=strict)
 
         if can_upload():
             return self._upload(video, bundle_dir, meta, schedule_iso)
@@ -108,6 +159,24 @@ class Publisher:
             Flywheel().register_video(video_id, meta)
         except Exception as e:                   # noqa: BLE001
             print(f"  [Publish] flywheel registration skipped: {e}")
+
+        # Pin the (gate-verified) beat ledger so per-moment retention can
+        # be joined onto it as soon as Analytics has data.
+        try:
+            from factory.retention import RetentionEngine
+            RetentionEngine().register_from_video(
+                video_id, video, arm=meta.get("policy_arm"))
+        except Exception as e:                   # noqa: BLE001
+            print(f"  [Publish] beat registration skipped: {e}")
+
+        # Advance syllabus coverage so the scheduler stops re-proposing it.
+        topic = meta.get("topic_id")
+        if topic:
+            try:
+                from factory.syllabus import Syllabus
+                Syllabus().mark_taught(str(topic), video_id)
+            except Exception as e:               # noqa: BLE001
+                print(f"  [Publish] syllabus update skipped: {e}")
 
         return {"mode": "upload", "video_id": video_id}
 
@@ -173,13 +242,14 @@ class Publisher:
                     published += 1
                     time.sleep(3)
                 else:
+                    video = os.path.join(bundle, "video.mp4")
+                    admission_check(video)
                     meta_path = os.path.join(bundle, "meta.json")
                     meta = {}
                     if os.path.exists(meta_path):
                         with open(meta_path, "r", encoding="utf-8") as f:
                             meta = json.load(f)
-                    results.append(self._export(
-                        os.path.join(bundle, "video.mp4"), bundle, meta))
+                    results.append(self._export(video, bundle, meta))
             except Exception as e:               # noqa: BLE001 — isolate bundles
                 print(f"  [Publish] {name} failed: {e}")
                 results.append({"mode": "error", "bundle": name,

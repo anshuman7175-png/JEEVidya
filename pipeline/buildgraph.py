@@ -324,8 +324,69 @@ class VideoBuild:
                            f"{clean_title}{suffix}_{int(time.time())}.mp4")
         os.makedirs(settings.OUTPUT_DIR, exist_ok=True)
         shutil.copy2(final.path, out)
+
+        # ── Post-mux delivery stage (Part XI + Part XIX): the beat ledger
+        #    and the QC-pass manifest are what the publisher demands. A
+        #    preview render skips it (it is deliberately 6 s of 540p).
+        if not self.preview:
+            self.deliver(out, timeline, report)
+
         report("DONE", 100, f"✓ Video saved to: {out}")
         return out
+
+    # ─── Delivery: beat ledger + decoded-pixel/loudness QC ────
+
+    def deliver(self, video_path: str, timeline,
+                report=None, strict: bool = False) -> Dict[str, Any]:
+        """Emit `<video>.beats.json` + `<video>.qc-manifest.json`.
+
+        Nothing downstream trusts a render without these two artifacts:
+        `factory/publisher.admission_check` refuses to upload without a
+        green manifest AND a checksum-valid ledger. Failures are reported
+        (and raised under `strict`), never silently swallowed.
+        """
+        def say(stage: str, pct: float, msg: str):
+            if report:
+                report(stage, pct, msg)
+            else:
+                print(f"  [{stage}] {msg}")
+
+        result: Dict[str, Any] = {"video": video_path}
+
+        # 1 · beat ledger — the learning loop's ground truth
+        try:
+            from factory.beats import emit as emit_beats
+            result["beats"] = emit_beats(self.dialogue, timeline,
+                                         video_path, self.fps)
+            say("BEATS", 96, f"beat ledger → {os.path.basename(result['beats'])}")
+        except Exception as e:                   # noqa: BLE001
+            result["beats_error"] = str(e)
+            say("BEATS", 96, f"beat ledger FAILED: {e}")
+            if strict:
+                raise
+
+        # 2 · delivery QC on the MUXED file (decoded pixels, loudness,
+        #     colour metadata, A/V start offset, phone-scale legibility)
+        try:
+            from pipeline.delivery_qc import audit, write_manifest
+            qc = audit(video_path)
+            extra: Dict[str, Any] = {"fps": self.fps, "title": self.title}
+            ledger_path = result.get("beats")
+            if ledger_path and os.path.exists(ledger_path):
+                from factory.beats import BeatLedger
+                extra["beats_checksum"] = BeatLedger.load(
+                    ledger_path).checksum
+            write_manifest(video_path, qc, extra)
+            result["qc_passed"] = qc.passed
+            say("QC", 98, qc.summary())
+            if strict and not qc.passed:
+                raise RuntimeError("delivery QC failed — see the manifest")
+        except Exception as e:                   # noqa: BLE001
+            result["qc_error"] = str(e)
+            say("QC", 98, f"delivery QC FAILED: {e}")
+            if strict:
+                raise
+        return result
 
     def describe(self) -> str:
         """`jvmake graph`: every node's cache status, building nothing."""
