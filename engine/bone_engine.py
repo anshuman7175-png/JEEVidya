@@ -28,7 +28,8 @@ from typing import Dict, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from engine.rig import Rig, rig_dir
+from engine.rig import (Rig, rig_dir, LEGACY_VISEME_ALIAS, VISEME_FALLBACK,
+                        VISEME_NAMES)
 
 # Working resolution cap: puppet layers are downscaled so the canvas is at
 # most this tall. Keeps the pose caches small enough to live in RAM.
@@ -250,6 +251,36 @@ class BoneEngine:
                 self.lid_sprites[name[4:].lower()] = img
             else:
                 self.viseme_sprites[name] = img
+
+        # Resolve legacy sprite keys (rig v1 procedural bakes use
+        # MBP/E/AI/O/FV) onto their 10-class names — the lip-sync
+        # pipeline emits ONLY 10-class names (engine/visemes.py V enum),
+        # so without this remap a procedural rig renders no mouth at
+        # all during speech.
+        for legacy, modern in LEGACY_VISEME_ALIAS.items():
+            sp = self.viseme_sprites.get(legacy)
+            if sp is not None and modern not in self.viseme_sprites:
+                self.viseme_sprites[modern] = sp
+
+        # Fill still-missing 10-class shapes from the nearest available
+        # articulatory neighbour (engine/rig.py VISEME_FALLBACK).
+        # Iterated to a fixpoint because chains reference each other
+        # (e.g. CLOSED_I → MID_E → OPEN_A): each pass fills at least
+        # one entry or stops, so it terminates in ≤ len(VISEME_NAMES)
+        # passes. Shapes with no reachable fallback stay absent, which
+        # the render path treats as "keep the base resting mouth".
+        filled = True
+        while filled:
+            filled = False
+            for name in VISEME_NAMES:
+                if name in self.viseme_sprites:
+                    continue
+                for alt in VISEME_FALLBACK.get(name, ()):
+                    sp = self.viseme_sprites.get(alt)
+                    if sp is not None:
+                        self.viseme_sprites[name] = sp
+                        filled = True
+                        break
 
         # Skeleton + geometry (work space)
         self.skel = Skeleton(pt(rig.joint("hips")), pt(rig.joint("neck")),
