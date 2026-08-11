@@ -65,6 +65,12 @@ class StreamEncoder:
             "-crf", str(crf),
             "-pix_fmt", "yuv420p",
             "-profile:v", "high",
+            # BT.709 color metadata (Terminal Plan §XI): wrong/missing flags
+            # shift skin tones on every phone. Set AND asserted post-mux by
+            # pipeline/delivery_qc.py — verified, never assumed.
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+            "-colorspace", "bt709",
             "-movflags", "+faststart",
         ]
         if audio_path and os.path.exists(audio_path):

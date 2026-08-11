@@ -262,7 +262,19 @@ def mixdown(turn_data: List[Dict[str, Any]], out_path: str,
     # ── SOUND DESIGN ──
     sfx_l, sfx_r = render_events(plan_events(timeline, turn_data), total_ms)
 
-    # ── MUSIC: per-DNA bed, envelope-ducked, Haas-widened ──
+    # ── FOLEY (Part XVIII): breath before phrases, cloth on gestures ──
+    # Breath sounds land exactly where §VII.5 schedules the visible
+    # inhale — seeing AND hearing the breath is the coherence signal.
+    from engine.foley import (breath_schedule_manifest, plan_breaths,
+                              render_foley)
+    breath_events = plan_breaths(timeline.spans)
+    foley_l, foley_r = render_foley(breath_events, total_ms)
+    # Persist the schedule next to the mix for the A/V co-occurrence gate.
+    import json as _json
+    with open(out_path + ".breaths.json", "w", encoding="utf-8") as f:
+        _json.dump(breath_schedule_manifest(breath_events), f)
+
+    # ── MUSIC: per-DNA bed, LOOKAHEAD-ducked, Haas-widened ──
     bed = forge_bgm(dna, seconds=total_ms / 1000 + 1)[:n]
     if len(bed) < n:
         bed = np.pad(bed, (0, n - len(bed)))
@@ -273,6 +285,14 @@ def mixdown(turn_data: List[Dict[str, Any]], out_path: str,
     duck = 1.0 / (1.0 + (env / 0.02) ** 2) * 0.55 + 0.45  # −7 dB under speech
     duck = np.repeat(duck, hop)
     duck = np.pad(duck, (0, n - len(duck)), mode="edge")
+    # Lookahead (Part XVIII): the bed starts ducking 150 ms BEFORE
+    # dialogue onset — timings are known from the timeline, so use them.
+    # Anticipatory ducking reads as a human mix engineer; the min() with
+    # the unshifted duck keeps recovery on the natural release.
+    look = int(SR * 0.150)
+    duck_ahead = np.concatenate([duck[look:],
+                                 np.full(look, duck[-1], dtype=duck.dtype)])
+    duck = np.minimum(duck, duck_ahead)
     # smooth the duck (30 ms) so it breathes instead of pumping
     k = int(SR * 0.03)
     kernel = np.ones(k, dtype=np.float32) / k
@@ -283,8 +303,8 @@ def mixdown(turn_data: List[Dict[str, Any]], out_path: str,
     bed_r = np.concatenate([np.zeros(haas, dtype=np.float32), bed])[:n]
 
     # ── SUM + MASTER (−14 LUFS on the mid channel) ──
-    left = voice + bed + sfx_l
-    right = voice + bed_r + sfx_r
+    left = voice + bed + sfx_l + foley_l
+    right = voice + bed_r + sfx_r + foley_r
     mid = (left + right) * 0.5
     g = 10 ** ((-14.0 - loudness_lufs(mid)) / 20)
     left = np.tanh(left * g * 0.92) / 0.92
