@@ -295,12 +295,19 @@ class BoneEngine:
 
         # Brow patches cropped from head_img with feathered alpha mask (no rectangular edges)
         self._brow_patches: Dict[str, Image.Image] = {}
+        # World-space paste position of each patch at brow=0. Must be the
+        # exact crop origin mapped back to canvas coords — pasting at the
+        # raw box top-left ignores the pad_y crop extension and shifts the
+        # feathered skin patch down onto the eyes (nose-band ghosting).
+        self._brow_patch_pos: Dict[str, Tuple[int, int]] = {}
         for name, box in list(self.brow_boxes.items()):
             local = self._to_head_local(box)
             pad_y = max(2, (local[3] - local[1]) // 2)
             lb = (max(0, local[0]), max(0, local[1] - pad_y),
                   min(head_img.width, local[2]),
                   min(head_img.height, local[3] + pad_y))
+            self._brow_patch_pos[name] = (int(lb[0] + self.head_off[0]),
+                                          int(lb[1] + self.head_off[1]))
             raw_patch = head_img.crop(lb)
 
             # Feather outer 25% to eliminate rectangular box edges
@@ -592,27 +599,31 @@ class BoneEngine:
         # face_dx = 0.0 (facial features locked 100% to character landmark coordinates)
         face_dx = 0.0
 
-        # 2a. Eyelid Blinks (smooth descending vertical glide)
+        # 2a. Eyelid Blinks (smooth descending vertical glide).
+        # y_closed anchors to the eye-box TOP (matching _compose_head) so a
+        # full blink covers the eye instead of landing on the cheek.
         if pose.blink > 0.05:
             for name, box in self.eye_boxes.items():
                 lid = self.lid_sprites.get(name)
                 if lid is None:
                     continue
                 lx = int((box[0] + box[2]) / 2 + pose.eye_dx - lid.width / 2)
-                y_closed = (box[1] + box[3]) / 2 + pose.eye_dy - lid.height * 0.15
+                y_closed = box[1] + pose.eye_dy - lid.height * 0.15
                 y_open = y_closed - lid.height * 0.85
                 ly = int(y_open + (y_closed - y_open) * min(1.0, pose.blink))
                 canvas.alpha_composite(lid, dest=(lx, ly))
 
-        # 2b. Brows (composite eyebrow patches cleanly when brow != 0)
+        # 2b. Brows: paste each patch at its exact crop-back position so it
+        # realigns pixel-perfectly with the artwork underneath at brow=0
+        # and only the raise offset moves it.
         if abs(pose.brow) > 0.08:
             for name, box in self.brow_boxes.items():
                 patch = self._brow_patches.get(name)
                 if patch is None:
                     continue
-                bx0, by0 = box[0], box[1]
+                px0, py0 = self._brow_patch_pos[name]
                 raise_px = int(-pose.brow * 0.35 * (box[3] - box[1]))
-                canvas.alpha_composite(patch, dest=(bx0, by0 + raise_px))
+                canvas.alpha_composite(patch, dest=(px0, py0 + raise_px))
 
         # 2c. Mouth Viseme Overlay (10-class Hindi viseme blend + underlying mouth erase pass)
         if pose.mouth_open > 0.03 or pose.viseme not in ("REST", "BILABIAL"):
