@@ -4,6 +4,7 @@ jvmake — The JEEVidya Factory CLI (V5)
 ══════════════════════════════════════
 One command surface for the whole studio.
 
+  jvmake setup [--force]           Fresh-clone bootstrap: stage+rig+font+forge+doctor
   jvmake doctor                    Full environment + asset health report
   jvmake rig [character] [--force] Tier 1: build skeletal puppet rig(s)
   jvmake render script.json        Incremental DAG render to MP4 (--force to rebuild)
@@ -238,6 +239,137 @@ def cmd_script(args) -> int:
 
 
 # ─────────────────────────────────────────────
+# setup (Tier 0 — one-shot fresh-clone bootstrap)
+# ─────────────────────────────────────────────
+
+# Bundled caption font: assets/ is gitignored, so every fresh clone loses
+# it. Candidates are tried in order; all serve the same OFL-licensed file.
+_DEVANAGARI_FONT_URLS = (
+    "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/"
+    "NotoSansDevanagari/NotoSansDevanagari-Regular.ttf",
+    "https://github.com/notofonts/devanagari/raw/main/fonts/"
+    "NotoSansDevanagari/hinted/ttf/NotoSansDevanagari-Regular.ttf",
+)
+
+
+def _ensure_devanagari_font(force: bool = False) -> bool:
+    """Download the bundled Noto Sans Devanagari if no capable font is
+    resolvable. Returns True when a usable font is present afterwards."""
+    from engine.render_fast import devanagari_font_path
+    if devanagari_font_path() and not force:
+        return True
+    dest = os.path.join(settings.FONTS_DIR, "NotoSansDevanagari-Regular.ttf")
+    import urllib.request
+    for url in _DEVANAGARI_FONT_URLS:
+        try:
+            print(f"  ↓ font: {url.split('/')[-1]}")
+            urllib.request.urlretrieve(url, dest)
+            if os.path.getsize(dest) > 50_000:  # sanity: not an error page
+                return True
+        except Exception as e:
+            print(f"    failed ({e}); trying next mirror")
+    if os.path.exists(dest) and os.path.getsize(dest) <= 50_000:
+        os.remove(dest)
+    return devanagari_font_path() is not None
+
+
+def _repair_opencv_headless() -> bool:
+    """mediapipe pins the GUI opencv-contrib-python, which dies on headless
+    servers ('libxcb.so.1: cannot open shared object file'). Detect that
+    exact failure and swap in the headless build automatically."""
+    try:
+        import cv2  # noqa: F401
+        return True
+    except ImportError as e:
+        if "libxcb" not in str(e) and "libGL" not in str(e):
+            print(f"    ✗ cv2 import failed for another reason: {e}")
+            return False
+    import subprocess
+    print("    GUI OpenCV on a headless server — swapping to headless build")
+    pip = [sys.executable, "-m", "pip"]
+    subprocess.run(pip + ["uninstall", "-q", "-y", "opencv-contrib-python"],
+                   check=False)
+    subprocess.run(pip + ["install", "-q", "--force-reinstall",
+                          "opencv-contrib-python-headless"], check=False)
+    # cv2 was already partially imported above; a clean check needs a
+    # fresh interpreter.
+    rc = subprocess.run([sys.executable, "-c", "import cv2"],
+                        capture_output=True).returncode
+    return rc == 0
+
+
+def cmd_setup(args) -> int:
+    """Idempotent fresh-clone bootstrap: everything under assets/ except
+    assets/poses/ is gitignored, so a new checkout has no staged
+    characters, rigs, caption font, or SFX. One command rebuilds all of
+    it, then runs doctor as the gate."""
+    force = getattr(args, "force", False)
+    failures = []
+    print("\n═══ Tier 0 · Setup (fresh-clone bootstrap) ═══\n")
+
+    # 0 · OpenCV headless repair (must run before the rig builder, which
+    # imports cv2 via mediapipe)
+    print("[0/4] opencv variant check")
+    if _repair_opencv_headless():
+        print("    ✓ cv2 imports cleanly")
+    else:
+        failures.append("opencv")
+        print("    ✗ cv2 broken — rigs will fall back to the heuristic")
+
+    # 1 · Stage pose assets → character dirs (skip if already staged)
+    need_stage = force or not all(
+        os.path.exists(os.path.join(settings.CHARACTERS_DIR, c, "body.png"))
+        for c in ("gudiya", "chintu"))
+    if need_stage:
+        from tools.pose_stager import stage_all
+        print("[1/4] staging pose assets")
+        if not stage_all():
+            failures.append("stage")
+    else:
+        print("[1/4] characters already staged — skip")
+
+    # 2 · Puppet rigs (mediapipe face landmarks; heuristic fallback)
+    from engine.rig import has_rig
+    need_rig = force or not all(has_rig(c) for c in ("gudiya", "chintu"))
+    if need_rig:
+        from tools.rig_builder import build_all
+        print("[2/4] building puppet rigs")
+        if not build_all(force=True):
+            failures.append("rig")
+    else:
+        print("[2/4] rigs already built — skip")
+
+    # 3 · Devanagari caption font
+    print("[3/4] caption font")
+    if _ensure_devanagari_font(force=False):
+        print("    ✓ Devanagari font available")
+    else:
+        failures.append("font")
+        print("    ✗ no Devanagari font — Hindi captions will render as boxes")
+
+    # 4 · SFX/BGM library
+    sfx_files = (os.listdir(settings.SFX_DIR)
+                 if os.path.isdir(settings.SFX_DIR) else [])
+    if force or not sfx_files:
+        from tools.audio_forge import forge_library
+        print("[4/4] forging SFX/BGM library")
+        try:
+            forge_library(force=force)
+        except Exception as e:
+            failures.append("forge")
+            print(f"    ✗ forge failed: {e}")
+    else:
+        print(f"[4/4] SFX library present ({len(sfx_files)} files) — skip")
+
+    print()
+    doctor_rc = cmd_doctor(args)
+    if failures:
+        print(f"Setup finished with failures: {', '.join(failures)}\n")
+        return 1
+    return doctor_rc
+
+
+# ─────────────────────────────────────────────
 # stage (Tier 1 — pose asset staging)
 # ─────────────────────────────────────────────
 
@@ -406,6 +538,11 @@ def main() -> int:
 
     sub.add_parser("doctor", help="environment + asset health report")
 
+    p = sub.add_parser("setup", help="fresh-clone bootstrap: stage + rig + "
+                                     "font + forge + doctor (idempotent)")
+    p.add_argument("--force", action="store_true",
+                   help="rebuild even if assets already exist")
+
     p = sub.add_parser("render", help="incremental DAG render of a dialogue JSON")
     p.add_argument("script")
     p.add_argument("--preview", action="store_true")
@@ -474,6 +611,7 @@ def main() -> int:
     args = parser.parse_args()
     return {
         "doctor": cmd_doctor,
+        "setup": cmd_setup,
         "render": cmd_render,
         "preview": cmd_preview,
         "graph": cmd_graph,
