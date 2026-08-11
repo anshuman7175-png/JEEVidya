@@ -1,0 +1,385 @@
+"""
+JEEVidya — Unified Head Assembly (Terminal Plan, Part VI)
+════════════════════════════════════════════════════════
+THE one head-compose path. Defect D4 existed because `_compose_head`
+and `_staged_head` coexisted with a flat `render()` that ignored both;
+two implementations of one idea always diverge, and the divergence put a
+mouth on a pair of eyes. Law 1 says make that unrepresentable: this
+module is the only place a head is built, and `engine/bone_engine.py`
+calls it. There is nothing left to diverge from.
+
+Per frame, exactly:
+
+  1. body   = crossfade(headless[from], headless[to], eased_t)   # D2
+  2. plate  = head_plate ⊕ brows ⊕ eyes/lids ⊕ parametric mouth  # D3/D5/D9
+  3. M      = compose(interp(xform[from], xform[to], eased_t), …) # D1/D4
+             head = plate.transform(ONE affine, BICUBIC)          # one resample
+  4. body  ← alpha_composite(head, sub-pixel dest)
+  5. body  ← alpha_composite(occluder[from→to])                   # hands in front
+
+Both caches the plan requires live here: level 1 (face-channel key →
+composed plate) and level 2 (plate id + quantized affine → transformed
+head, in `engine/head_transform.TransformCache`).
+
+Every registration prediction QC needs is exposed by `predict()`, which
+runs the SAME affine the renderer used — so a passing gate proves the
+renderer, not a parallel model of it.
+"""
+from __future__ import annotations
+
+import math
+import os
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Tuple
+
+import numpy as np
+from PIL import Image
+
+from engine import head_transform as ht
+from engine.eye_model import EyeGeometry, EyePair, EyeState
+from engine.mouth_model import MouthParams
+from engine.mouth_raster import MouthRasterizer
+from engine.registration import SimilarityTransform
+from engine.rig import Rig, rig_dir
+
+# Brow polyline warp gain: fraction of the brow's own span the raise
+# travels at |brow| = 1. Conservative — brows that fly are a cartoon tell.
+BROW_RAISE_GAIN = 0.30
+
+# Face-channel cache quantization. Fine enough to be invisible, coarse
+# enough that steady-state speech is a cache hit.
+_Q_BROW = 1 / 32
+_Q_EYE = 1 / 32
+
+
+@dataclass(frozen=True)
+class FaceChannels:
+    """Everything that changes INSIDE the head plate for one frame."""
+    mouth: MouthParams = field(default_factory=MouthParams)
+    viseme_class: str = "REST"
+    eyes: EyeState = field(default_factory=EyeState)
+    brow: float = 0.0
+
+    def key(self) -> Tuple:
+        return (self.mouth.quantized_key(), self.viseme_class,
+                self.eyes.quantized_key(), round(self.brow / _Q_BROW) * _Q_BROW)
+
+
+class HeadAssembly:
+    """Owns the head plate, the eye pair, the mouth rasterizer and both
+    caches for ONE character. v3-only by contract: a pre-v3 rig raises
+    instead of silently placing the face with body.png's boxes (D1)."""
+
+    def __init__(self, rig: Rig, scale: float = 1.0, fps: int = 60,
+                 seed: Optional[str] = None, plate_cache: int = 64,
+                 depth: bool = False):
+        rig.require_v3()
+        self.rig = rig
+        self.scale = float(scale)
+        geo = rig.head
+        d = rig_dir(rig.character)
+
+        plate_path = rig.head_plate_path()
+        if plate_path is None:
+            raise FileNotFoundError(
+                f"character '{rig.character}': rig claims v3 but "
+                f"{geo.plate} is missing. Run `jvmake rig --force`.")
+        self.plate = self._load(plate_path)
+
+        # Plate origin in puppet space, and plate size in work space.
+        self.plate_offset = (geo.offset[0] * self.scale,
+                             geo.offset[1] * self.scale)
+        self.plate_size = self.plate.size
+        self.face_height = geo.face_height * self.scale
+
+        shading = None
+        if geo.shading:
+            sp = os.path.join(d, geo.shading)
+            if os.path.exists(sp):
+                shading = self._load(sp).convert("L")
+
+        pal = geo.palette
+        self.mouth = MouthRasterizer(self._pts(geo.lip_outer), pal, shading)
+        self.eyes = EyePair(
+            EyeGeometry.from_rig_dict(self._scaled_eye(geo.eye_dict(True))),
+            EyeGeometry.from_rig_dict(self._scaled_eye(geo.eye_dict(False))),
+            palette=pal, seed=seed or rig.character, fps=fps)
+
+        # Brow polylines in plate space (warped, never patch-pasted: a
+        # feathered ellipse patch was how brow ghosting reached the eyes)
+        self.brow_l = self._pts(geo.brow_l)
+        self.brow_r = self._pts(geo.brow_r)
+
+        # Art viseme sprites, when the character has them: geometry from
+        # the model, pixels from the artwork (Part IV §4.3).
+        self.art: Dict[str, Image.Image] = {}
+        for name, fname in (rig.visemes or {}).items():
+            if name.startswith("LID_"):
+                continue
+            p = os.path.join(d, fname)
+            if os.path.exists(p):
+                try:
+                    self.art[name] = self._load(p)
+                except Exception:
+                    pass
+
+        # Level-1 cache: face channels → composed plate
+        self._plates: "OrderedDict[Tuple, Image.Image]" = OrderedDict()
+        self._plate_cap = int(plate_cache)
+        self.plate_hits = 0
+        self.plate_misses = 0
+        # Level-2 cache: (plate key, quantized affine) → transformed head
+        self._xcache = ht.TransformCache()
+
+        # Headless bodies + occluders, lazily loaded per pose
+        self._headless: Dict[str, Image.Image] = {}
+        self._occluders: Dict[str, Optional[Image.Image]] = {}
+
+        # 2.5D depth head (Part XV) — behind a flag; when off the affine
+        # path renders identically to the Terminal core.
+        self.depth = None
+        if depth:
+            try:
+                from engine.depth_head import DepthHead
+                self.depth = DepthHead(
+                    np.asarray(self._pts(geo.landmarks), dtype=np.float64),
+                    np.asarray(self.plate.getchannel("A")))
+            except Exception as e:      # never let the ceiling break the floor
+                print(f"  [HeadAssembly] depth head disabled: {e}")
+                self.depth = None
+
+    # ─── loading helpers ──────────────────────────────────
+
+    def _load(self, path: str) -> Image.Image:
+        img = Image.open(path).convert("RGBA")
+        if self.scale != 1.0:
+            img = img.resize((max(1, int(img.width * self.scale)),
+                              max(1, int(img.height * self.scale))),
+                             Image.LANCZOS)
+        return img
+
+    def _pts(self, pts) -> list:
+        return [(p[0] * self.scale, p[1] * self.scale) for p in pts]
+
+    def _scaled_eye(self, d: dict) -> dict:
+        out = {k: [[x * self.scale, y * self.scale] for x, y in v]
+               for k, v in d.items() if k != "iris"}
+        cx, cy, r = d["iris"]
+        out["iris"] = [cx * self.scale, cy * self.scale, r * self.scale]
+        return out
+
+    def headless(self, pose: str) -> Optional[Image.Image]:
+        if pose not in self._headless:
+            path = self.rig.pose_file(pose, "headless")
+            self._headless[pose] = self._load(path) if path else None
+        return self._headless[pose]
+
+    def occluder(self, pose: str) -> Optional[Image.Image]:
+        if pose not in self._occluders:
+            path = self.rig.pose_file(pose, "occluder")
+            self._occluders[pose] = self._load(path) if path else None
+        return self._occluders[pose]
+
+    # ─── step 1: the headless body cross-fade (D2) ────────
+
+    def body(self, from_pose: str, to_pose: str, blend_t: float
+             ) -> Optional[Image.Image]:
+        """Cross-fade two HEADLESS bodies. Because neither carries a face,
+        a cross-fade can no longer produce two heads and three mouths —
+        D2 is fixed by what the images ARE, not by render-time care."""
+        a = self.headless(from_pose) or self.headless(self.rig.canonical_pose)
+        b = self.headless(to_pose) or a
+        if a is None:
+            return None
+        t = max(0.0, min(1.0, blend_t))
+        if b is None or b is a or t <= 0.005:
+            return a.copy()
+        if t >= 0.995:
+            return b.copy()
+        out = a.copy()
+        top = b.copy()
+        top.putalpha(top.getchannel("A").point(lambda v, k=t: int(v * k)))
+        out.alpha_composite(top)
+        return out
+
+    # ─── step 2: the composed plate (D3/D5/D9/D10) ────────
+
+    def compose_plate(self, ch: FaceChannels) -> Image.Image:
+        key = ch.key()
+        hit = self._plates.get(key)
+        if hit is not None:
+            self._plates.move_to_end(key)
+            self.plate_hits += 1
+            return hit
+        self.plate_misses += 1
+        plate = self._build_plate(ch)
+        self._plates[key] = plate
+        if len(self._plates) > self._plate_cap:
+            self._plates.popitem(last=False)
+        return plate
+
+    def _build_plate(self, ch: FaceChannels) -> Image.Image:
+        plate = self.plate.copy()
+        self._draw_brows(plate, ch.brow)
+        self.eyes.composite(plate, ch.eyes)
+        art = self.art.get(ch.viseme_class)
+        self.mouth.composite(plate, ch.mouth, ch.viseme_class,
+                             art=art, art_weight=0.55 if art else 0.0)
+        return plate
+
+    def _draw_brows(self, plate: Image.Image, brow: float) -> None:
+        """Warp the baked brow polylines instead of sliding a patch.
+
+        A rectangular (or feathered-ellipse) patch carries its own
+        neighbourhood with it, which is how a raised brow used to smear a
+        skin panel across the eyes. A polyline warp moves only the brow.
+        """
+        if abs(brow) < 0.02:
+            return
+        for poly in (self.brow_l, self.brow_r):
+            if len(poly) < 2:
+                continue
+            xs = [p[0] for p in poly]
+            ys = [p[1] for p in poly]
+            x0, x1 = int(math.floor(min(xs))), int(math.ceil(max(xs)))
+            y0, y1 = int(math.floor(min(ys))), int(math.ceil(max(ys)))
+            span = max(2.0, (y1 - y0))
+            pad = int(span * 2.0)
+            box = (max(0, x0 - pad), max(0, y0 - pad),
+                   min(plate.width, x1 + pad), min(plate.height, y1 + pad))
+            if box[2] - box[0] < 3 or box[3] - box[1] < 3:
+                continue
+            dy = -brow * BROW_RAISE_GAIN * span
+            patch = plate.crop(box)
+            # Sub-pixel vertical shift of the brow band only, with the
+            # band's own alpha feathered top and bottom so no edge shows.
+            shifted = patch.transform(patch.size, Image.AFFINE,
+                                      (1, 0, 0, 0, 1, -dy),
+                                      resample=Image.BICUBIC)
+            a = np.asarray(shifted.getchannel("A"), dtype=np.float32)
+            h = a.shape[0]
+            ramp = np.minimum(np.linspace(0, 1, h, dtype=np.float32) * 3.0,
+                              np.linspace(1, 0, h, dtype=np.float32) * 3.0)
+            a *= np.clip(ramp, 0.0, 1.0)[:, None]
+            shifted.putalpha(Image.fromarray(a.astype(np.uint8), "L"))
+            plate.alpha_composite(shifted, (box[0], box[1]))
+
+    # ─── step 3: THE affine ───────────────────────────────
+
+    def affine(self, from_pose: str, to_pose: str, blend_t: float,
+               head: ht.HeadPose) -> ht.ComposedAffine:
+        """The single composed head→body affine for this frame.
+
+        `M_pose` is interpolated with the SAME eased blend_t the body
+        cross-fade uses, so the head travels in lockstep through every
+        transition — that lockstep IS the D1 fix.
+        """
+        xa = self.rig.pose_xform(from_pose)
+        xb = self.rig.pose_xform(to_pose)
+        xf = self._rescale(xa.lerp(xb, max(0.0, min(1.0, blend_t))))
+        # Fold the plate origin INTO the pose similarity. Plate space +
+        # offset IS canonical body space, and P(x + o) = sR·x + (sR·o + t)
+        # is still a similarity — so the composed affine maps plate
+        # pixels straight to canvas pixels with no second translate to
+        # get wrong. Adding the offset AFTER the rotation (the obvious
+        # mistake) drifts the head as soon as any pose has roll.
+        ox, oy = self.plate_offset
+        tx, ty = xf.apply_point(ox, oy)
+        xf = SimilarityTransform(xf.s, xf.theta, tx, ty, xf.rms)
+        return ht.compose(xf, head, self.plate_size, self._pivot())
+
+    def _rescale(self, xf: SimilarityTransform) -> SimilarityTransform:
+        """Pose transforms were fitted in ORIGINAL art pixels; the work
+        canvas may be downscaled. Translation scales, rotation and scale
+        are invariant — getting this wrong is a silent sub-pixel drift,
+        so it is done once, here, and nowhere else."""
+        if self.scale == 1.0:
+            return xf
+        return SimilarityTransform(s=xf.s, theta=xf.theta,
+                                   tx=xf.tx * self.scale,
+                                   ty=xf.ty * self.scale,
+                                   rms=getattr(xf, "rms", 0.0))
+
+    def _pivot(self) -> Tuple[float, float]:
+        """Neck joint in plate space: the pin a cut-out puppet turns on."""
+        neck = self.rig.joints.get("neck")
+        if neck is None:
+            return (self.plate_size[0] / 2.0, float(self.plate_size[1]))
+        return (neck[0] * self.scale - self.plate_offset[0],
+                neck[1] * self.scale - self.plate_offset[1])
+
+    # ─── step 4/5: the frame ──────────────────────────────
+
+    def render(self, ch: FaceChannels, head: ht.HeadPose,
+               from_pose: str, to_pose: str, blend_t: float,
+               canvas_size: Tuple[int, int]) -> Image.Image:
+        """Assemble one full-body frame. Exactly one head resample."""
+        body = self.body(from_pose, to_pose, blend_t)
+        if body is None:
+            body = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+        elif body.size != canvas_size:
+            frame = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+            frame.alpha_composite(body, (0, 0))
+            body = frame
+
+        plate = self.compose_plate(ch)
+        aff = self.affine(from_pose, to_pose, blend_t, head)
+
+        # Feature parallax lives INSIDE head space, before the affine.
+        if abs(aff.face_dx) > 1e-4 or abs(aff.face_dy) > 1e-4:
+            plate = ht.shift_features_subpixel(plate, aff.face_dx, aff.face_dy)
+        if self.depth is not None and (abs(head.yaw) > 1e-3
+                                       or abs(head.nod) > 1e-3):
+            plate = self.depth.warp(plate, head.yaw * ht.YAW_PARALLAX_GAIN * 30.0,
+                                    head.nod * 8.0)
+
+        # `aff` already maps plate pixels → canvas pixels (the plate
+        # origin is folded into the pose similarity in `affine()`).
+        head_img = self._xcache.transform(plate, ch.key(), aff, canvas_size)
+        body.alpha_composite(head_img, (0, 0))
+
+        occ = self.occluder(from_pose)
+        if occ is not None:
+            if occ.size != canvas_size:
+                pad = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+                pad.alpha_composite(occ, (0, 0))
+                occ = pad
+            body.alpha_composite(occ, (0, 0))
+        return body
+
+    # ─── QC surface ───────────────────────────────────────
+
+    def predict(self, ch: FaceChannels, head: ht.HeadPose,
+                from_pose: str, to_pose: str, blend_t: float
+                ) -> Dict[str, Tuple[float, float]]:
+        """Where the mouth centroid and both iris centres MUST land, in
+        canvas coordinates, for exactly these channels. QC compares
+        re-detected pixels against this; the renderer and the prediction
+        share `affine()`, so the gate cannot pass a lie."""
+        aff = self.affine(from_pose, to_pose, blend_t, head)
+
+        def feat(x: float, y: float) -> Tuple[float, float]:
+            return aff.apply_feature_point(x, y)
+
+        mcx, mcy = self.mouth.predicted_centroid(ch.mouth)
+        il = self.eyes.left.geo
+        ir = self.eyes.right.geo
+        gaze_l = (il.iris_c[0] + ch.eyes.eye_dx * il.iris_r * 0.55,
+                  il.iris_c[1] + ch.eyes.eye_dy * il.iris_r * 0.55)
+        gaze_r = (ir.iris_c[0] + ch.eyes.eye_dx * ir.iris_r * 0.55,
+                  ir.iris_c[1] + ch.eyes.eye_dy * ir.iris_r * 0.55)
+        return {"mouth": feat(mcx, mcy),
+                "iris_l": feat(*gaze_l),
+                "iris_r": feat(*gaze_r)}
+
+    def cache_report(self) -> Dict[str, float]:
+        n = self.plate_hits + self.plate_misses
+        return {"plate_hit_rate": self.plate_hits / n if n else 0.0,
+                "mouth_hit_rate": self.mouth.hit_rate,
+                "affine_hit_rate": (
+                    self._xcache.hits /
+                    max(1, self._xcache.hits + self._xcache.misses))}
+
+
+__all__ = ["HeadAssembly", "FaceChannels", "BROW_RAISE_GAIN"]
