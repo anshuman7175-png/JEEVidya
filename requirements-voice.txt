@@ -1,0 +1,20 @@
+# JEEVidya — Voice-cloning stack (Terminal Plan Part X, §2.1)
+# Isolated from requirements.txt ON PURPOSE: the face pipeline must never
+# break because the TTS stack failed to build. Install with:
+#     pip install -r requirements-voice.txt
+#
+# Primary engine — IndexTTS-2 (Apache-2.0, disentangled emotion, MPS-capable)
+#   pip install indextts        # or follow github.com/index-tts/index-tts2
+# Fallback engine — Chatterbox Multilingual (MIT, Hindi supported)
+chatterbox-tts>=0.1.2
+
+# Shared audio stack
+soundfile>=0.12
+pyloudnorm>=0.1.1          # ITU-R BS.1770 loudness (per-line normalize gate)
+resemblyzer>=0.1.4         # optional neural speaker embedding (identity gate)
+
+# Alignment (pronunciation gate) — already in requirements.txt, pinned here
+# for standalone installs of the voice stack:
+torch>=2.2
+torchaudio>=2.2
+uroman
