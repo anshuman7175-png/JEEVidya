@@ -91,5 +91,7 @@ class ColorGrade:
         if self._grain:
             graded += self._grain[frame_num % _N_GRAIN_TILES]
 
+        # Pillow deprecated the explicit `mode` argument; a C-contiguous
+        # uint8 HxWx3 array infers RGB automatically.
         return Image.fromarray(
-            np.clip(graded, 0, 255).astype(np.uint8), "RGB")
+            np.ascontiguousarray(np.clip(graded, 0, 255).astype(np.uint8)))
