@@ -50,6 +50,44 @@ SCAN_DIRS = ("engine", "pipeline", "tools", "config", "factory", "agents")
 _SELF = os.path.abspath(__file__)
 
 
+def code_only(src: str) -> str:
+    """Return `src` with comments and string literals blanked out.
+
+    Without this the linter flags its own doctrine: a docstring saying
+    "`.cuda()` NEVER appears in this codebase" reads as a violation. A
+    gate that reports false positives gets switched off, and a gate that
+    is switched off protects nothing — so the match runs on real tokens.
+    Line structure is preserved so reported line content stays truthful.
+    """
+    import io
+    import tokenize
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        # Unparseable file: fall back to raw text. Better a false
+        # positive than a silently unscanned file.
+        return src
+
+    lines = src.splitlines(keepends=True)
+    out = list(lines)
+    for tok in toks:
+        if tok.type not in (tokenize.COMMENT, tokenize.STRING):
+            continue
+        (r0, c0), (r1, c1) = tok.start, tok.end
+        for row in range(r0, r1 + 1):
+            i = row - 1
+            if i >= len(out):
+                break
+            line = out[i]
+            start = c0 if row == r0 else 0
+            end = c1 if row == r1 else len(line.rstrip("\n"))
+            keep_nl = "\n" if line.endswith("\n") else ""
+            body = line.rstrip("\n")
+            body = body[:start] + " " * max(0, end - start) + body[end:]
+            out[i] = body + keep_nl
+    return "".join(out)
+
+
 def _py_files():
     for d in SCAN_DIRS:
         root = os.path.join(PROJECT_ROOT, d)
@@ -73,7 +111,8 @@ def run() -> int:
             continue
         rel = os.path.relpath(path, PROJECT_ROOT)
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            src = f.read()
+            raw = f.read()
+        src = code_only(raw)
 
         for name, pat in def_patterns:
             if pat.search(src):
