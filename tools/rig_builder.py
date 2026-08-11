@@ -377,13 +377,28 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
                   291, 409, 270, 269, 267, 0, 37, 39, 40, 185]
 
     def _ellipse_mask(w: int, h: int, rx: float, ry: float,
-                      blur: float) -> Image.Image:
+                      blur: float,
+                      ry_top: Optional[float] = None) -> Image.Image:
         """Feathered ellipse centered on the mouth anchor (w/2, 0.42h)
-        per the BoneEngine contract."""
+        per the BoneEngine contract. `ry_top` (when given) makes the
+        ellipse ASYMMETRIC — a shorter upward radius so the feathered
+        edge can be clamped below the nose without shrinking the
+        downward reach that hides the base chin/lower-lip line."""
         cx, cy = w / 2, h * 0.42
-        m = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(m).ellipse((cx - rx, cy - ry, cx + rx, cy + ry),
-                                  fill=255)
+        if ry_top is None or abs(ry_top - ry) < 1.0:
+            m = Image.new("L", (w, h), 0)
+            ImageDraw.Draw(m).ellipse(
+                (cx - rx, cy - ry, cx + rx, cy + ry), fill=255)
+            return m.filter(ImageFilter.GaussianBlur(blur))
+        top = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(top).ellipse(
+            (cx - rx, cy - ry_top, cx + rx, cy + ry_top), fill=255)
+        bot = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(bot).ellipse(
+            (cx - rx, cy - ry, cx + rx, cy + ry), fill=255)
+        ta, ba = np.asarray(top), np.asarray(bot)
+        rows = np.arange(h, dtype=np.float32)[:, None]
+        m = Image.fromarray(np.where(rows < cy, ta, ba).astype(np.uint8))
         return m.filter(ImageFilter.GaussianBlur(blur))
 
     # The exact region of the BASE body that the sprite is composited
@@ -424,6 +439,47 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
         diff = np.abs(pa[..., :3] - ba[..., :3]).sum(axis=2)
         bad = int(alpha_flash.sum()) + int((diff[both] > 140).sum())
         return bad / float(ring.sum())
+
+    def _tone_match(patch: Image.Image,
+                    art_rx: float, art_ry: float) -> Image.Image:
+        """Per-channel LINEAR tone match (gain + offset) of the source
+        patch to the base body, fit over the skin surrounding the mouth
+        — every pixel opaque in both frames and OUTSIDE both mouths.
+        Separately-rendered viseme frames often carry globally shifted
+        lighting/blush; blended through a feathered window that shift
+        reads as a milky panel. Mapping src→base over the shared skin
+        removes the shift while leaving real mouth differences intact.
+        Gains/offsets are gently clamped so a bad fit can't recolor."""
+        w, h = patch.size
+        cx, cy = w / 2, h * 0.42
+        excl = Image.new("L", (w, h), 0)
+        dr = ImageDraw.Draw(excl)
+        # This frame's mouth + the base frame's mouth are both excluded
+        # from the fit — only the shared surrounding skin drives it.
+        dr.ellipse((cx - art_rx * 1.25, cy - art_ry * 1.35,
+                    cx + art_rx * 1.25, cy + art_ry * 1.35), fill=255)
+        dr.ellipse((cx - mw * 0.60, cy - mh * 0.80,
+                    cx + mw * 0.60, cy + mh * 0.80), fill=255)
+        soft = ImageFilter.GaussianBlur(3)
+        pa = np.asarray(patch.filter(soft), dtype=np.float32)
+        ba = np.asarray(base_patch.filter(soft), dtype=np.float32)
+        sel = ((np.asarray(excl) <= 128)
+               & (pa[..., 3] > 200) & (ba[..., 3] > 200))
+        if int(sel.sum()) < 64:
+            return patch                     # not enough shared skin
+        out = np.asarray(patch, dtype=np.float32)
+        for c in range(3):
+            s, b = pa[..., c][sel], ba[..., c][sel]
+            sv = float(s.var())
+            if sv < 1e-3:
+                gain, off = 1.0, float(b.mean() - s.mean())
+            else:
+                gain = float(((s - s.mean()) * (b - b.mean())).mean() / sv)
+                off = float(b.mean() - gain * s.mean())
+            gain = float(np.clip(gain, 0.80, 1.25))
+            off = float(np.clip(off, -24.0, 24.0))
+            out[..., c] = np.clip(out[..., c] * gain + off, 0, 255)
+        return Image.fromarray(out.astype(np.uint8), "RGBA")
 
     # Base frame's own landmarks — used to inpaint the base mouth under
     # tight hybrid bakes. Detected once, reused per viseme.
@@ -469,21 +525,38 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
         art_ry = min(ch * 0.42 - 1, ch * (1 - 0.42) - 1,
                      max(s_mvh * 0.65, ch * 0.10))
 
-        # Facial tone near the mouth of THIS frame (just above the lips),
-        # used both for clutter scoring and — if needed — the backing.
-        tone = _sample_color(np.asarray(src), mcx,
-                             max(0.0, mcy - mvh * 1.1), r=6)
+        blur = max(2, feather // 2)
+
+        # Clutter MUST be scored on the RAW patch, BEFORE tone matching:
+        # tone-matching pulls an occluding hand/collar toward the base
+        # skin color, shrinking its diff below the threshold and wrongly
+        # disabling the tight-mouth occluder path.
         clutter = _ring_clutter(patch, cover_rx, cover_ry, art_rx, art_ry)
         occluded = (clutter > 0.10
                     and (art_rx < cover_rx - 2 or art_ry < cover_ry - 2))
-        blur = max(2, feather // 2)
+
+        # Clamp the cover ellipse's UPWARD radius so its feathered edge
+        # (ellipse + ~2*blur of Gaussian reach) stays below the base
+        # frame's nose — a taller window ghosts the source frame's nose
+        # and cheek shading over the base face. The downward radius is
+        # untouched (it must still hide the base chin/smile creases).
+        cover_ry_top = cover_ry
+        if base_lms and len(base_lms) > 2:
+            nose_gap = ((y0 + y1) / 2 - base_lms[2][1]) - blur * 2.0
+            cover_ry_top = max(mh * 0.75, min(cover_ry, nose_gap))
+
+        # Global per-channel linear tone match toward the base body —
+        # applied to EVERY viseme (both paths), replacing per-path
+        # spot-sample gains. See _tone_match.
+        patch = _tone_match(patch, art_rx, art_ry)
 
         if not occluded:
             # Clean surroundings: keep the full patch (real cheeks and
             # chin shading) inside one wide feathered window, exactly
             # as large as needed to cover the base mouth.
             mask = _ellipse_mask(cw, ch, max(cover_rx, art_rx),
-                                 max(cover_ry, art_ry), blur)
+                                 max(cover_ry, art_ry), blur,
+                                 ry_top=max(cover_ry_top, art_ry))
             a = patch.split()[3]
             blended = (np.asarray(a, dtype=np.float32)
                        * np.asarray(mask, dtype=np.float32) / 255.0
@@ -500,18 +573,8 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             # the new tight mouth art.
             print(f"  [Rig] {rig.character}: {name} occluder detected "
                   f"(clutter {clutter:.2f}) — tight-mouth hybrid bake")
-            base_tone = _sample_color(np.asarray(img), (x0 + x1) / 2,
-                                      max(0.0, y0 - mh * 0.6), r=6)
-            # Tone-match the source frame's skin to the base frame's, so
-            # the kept mouth art can't read as a lighter/darker panel.
-            # `tone` = skin just above the source mouth; per-channel gain
-            # toward `base_tone`, gently clamped.
-            pa = np.asarray(patch, dtype=np.float32)
-            gain = np.array([np.clip(bt / max(t, 1.0), 0.72, 1.38)
-                             for bt, t in zip(base_tone, tone)],
-                            dtype=np.float32)
-            pa[..., :3] = np.clip(pa[..., :3] * gain, 0, 255)
-            patch = Image.fromarray(pa.astype(np.uint8), "RGBA")
+            # (Skin already tone-matched to the base by _tone_match
+            # above — no per-path spot-sample gain needed.)
 
             # Art window: the actual OUTER-LIP polygon from this frame's
             # landmarks (grown slightly, small feather) — keeps ONLY the
@@ -587,7 +650,8 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             backing = Image.fromarray(out.astype(np.uint8), "RGBA")
             # Feather the backing window edge (matches the base below,
             # but guards against sub-pixel drift under head rotation).
-            cover_mask = _ellipse_mask(cw, ch, cover_rx, cover_ry, blur)
+            cover_mask = _ellipse_mask(cw, ch, cover_rx, cover_ry, blur,
+                                       ry_top=cover_ry_top)
             back_a = (np.asarray(backing.split()[3], dtype=np.float32)
                       * np.asarray(cover_mask, dtype=np.float32) / 255.0
                       ).astype(np.uint8)
