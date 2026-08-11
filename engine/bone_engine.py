@@ -204,6 +204,24 @@ def _q(v: float, step: float) -> float:
     return round(v / step) * step
 
 
+def _crop_lid_feathered(lid: Image.Image, cut: int, eye_h: int) -> Image.Image:
+    """Crop the top `cut` px off a descending eyelid sprite, then fade the
+    fresh cut edge with a vertical alpha ramp so the clip line never reads
+    as a hard horizontal seam against the brow. The feather distance scales
+    with the eye height so it stays proportional across characters."""
+    cropped = lid.crop((0, cut, lid.width, lid.height))
+    feather = max(2, int(eye_h * 0.30))
+    feather = min(feather, cropped.height)
+    if feather <= 0 or cropped.height == 0:
+        return cropped
+    alpha = np.asarray(cropped.getchannel("A"), dtype=np.float32)
+    ramp = (np.arange(feather, dtype=np.float32) + 1.0) / float(feather)
+    alpha[:feather, :] *= ramp[:, None]
+    out = cropped.copy()
+    out.putalpha(Image.fromarray(alpha.astype(np.uint8), mode="L"))
+    return out
+
+
 # ═══════════════════════════════════════════
 # BONE ENGINE
 # ═══════════════════════════════════════════
@@ -518,7 +536,7 @@ class BoneEngine:
                     cut = clip_top - y
                     if cut >= lid.height:
                         continue
-                    lid = lid.crop((0, cut, lid.width, lid.height))
+                    lid = _crop_lid_feathered(lid, cut, box[3] - box[1])
                     y = clip_top
                 head.alpha_composite(lid, dest=(x, y))
 
