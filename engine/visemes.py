@@ -134,12 +134,86 @@ class VisemeEvent:
         return self.end_ms - self.start_ms
 
 
+# Sub-frame integration (Terminal Plan §7.4): a 20 ms plosive closure
+# must contribute ~60% weight to the frame it lives in instead of
+# vanishing between samples. 4 sub-samples per rendered frame,
+# box-filtered; total viseme-weight mass is conserved (asserted in tests).
+SUBFRAMES = 4
+
+# Articulatory dominance rank for min-duration coalescing: when an event
+# is too short to survive one sub-frame, it merges into whichever
+# neighbour is MORE articulatorily dominant — bilabials win (a closure
+# cannot be deleted), open vowels lose (they are the default backdrop).
+COALESCE_RANK: Dict[V, int] = {
+    V.BILABIAL: 9, V.LABIODENTAL: 8, V.ROUNDED_TENSE: 7, V.ROUNDED_LAX: 6,
+    V.CLOSED_I: 5, V.RETROFLEX: 4, V.DENTAL: 3, V.MID_E: 2,
+    V.OPEN_A: 1, V.REST: 0,
+}
+
+
+def coalesce_events(events: List[VisemeEvent],
+                    min_dur_ms: float) -> List[VisemeEvent]:
+    """Merge events shorter than min_dur_ms into the articulatorily
+    dominant neighbour. The short event's TIME goes to the winner —
+    total timeline coverage is preserved exactly."""
+    if not events:
+        return events
+    evs = [VisemeEvent(e.viseme, e.start_ms, e.end_ms) for e in events]
+    changed = True
+    while changed and len(evs) > 1:
+        changed = False
+        for i, e in enumerate(evs):
+            if e.dur >= min_dur_ms:
+                continue
+            prev_e = evs[i - 1] if i > 0 else None
+            next_e = evs[i + 1] if i + 1 < len(evs) else None
+            # pick the more dominant ADJACENT event (bilabials win)
+            cand = []
+            if prev_e is not None and prev_e.end_ms >= e.start_ms - 1e-6:
+                cand.append(("prev", COALESCE_RANK[prev_e.viseme]))
+            if next_e is not None and next_e.start_ms <= e.end_ms + 1e-6:
+                cand.append(("next", COALESCE_RANK[next_e.viseme]))
+            if not cand:
+                continue
+            # If the SHORT event itself is the most dominant (a clipped
+            # bilabial), it absorbs its weaker neighbour's time instead.
+            self_rank = COALESCE_RANK[e.viseme]
+            weakest = min(cand, key=lambda c: c[1])
+            if self_rank > max(r for _, r in cand):
+                if weakest[0] == "prev" and prev_e is not None:
+                    e.start_ms = prev_e.start_ms
+                    del evs[i - 1]
+                elif next_e is not None:
+                    e.end_ms = next_e.end_ms
+                    del evs[i + 1]
+                changed = True
+                break
+            winner = max(cand, key=lambda c: c[1])
+            if winner[0] == "prev" and prev_e is not None:
+                prev_e.end_ms = e.end_ms
+            elif next_e is not None:
+                next_e.start_ms = e.start_ms
+            del evs[i]
+            changed = True
+            break
+    return evs
+
+
 class VisemeTrack:
     """Timed viseme events with per-frame blended weights and jaw drop."""
 
     def __init__(self, events: List[VisemeEvent], turn_end_ms: float):
         self.events = events
         self.turn_end_ms = turn_end_ms
+
+    @classmethod
+    def from_aligned_events(cls, events: List[VisemeEvent],
+                            turn_end_ms: float, fps: int) -> "VisemeTrack":
+        """Build from engine/align.py phoneme-exact events (the Tier-1/2
+        path). Coalesces events shorter than one SUB-frame at this fps
+        into the articulatorily dominant neighbour (§7.4)."""
+        min_dur = (1000.0 / max(1, fps)) / SUBFRAMES
+        return cls(coalesce_events(events, min_dur), turn_end_ms)
 
     @classmethod
     def from_words(cls, words: Sequence,
@@ -287,6 +361,25 @@ class VisemeTrack:
         jaw = sum(JAW[v] * w for v, w in weights.items()) * (
             0.55 + 0.45 * clamp01(energy))
         return weights, jaw
+
+    def weights_at_frame(self, t_ms: float, fps: int,
+                         energy: float = 1.0) -> Tuple[Dict[V, float], float]:
+        """§7.4: box-filtered sampling at SUBFRAMES points across the
+        rendered frame centered on t_ms. A 20 ms closure inside a
+        16.7 ms frame contributes proportional weight instead of being
+        missed by the single-instant sampler. Weight mass is conserved:
+        the average of normalized distributions is normalized."""
+        frame_ms = 1000.0 / max(1, fps)
+        acc: Dict[V, float] = {}
+        jaw_acc = 0.0
+        for k in range(SUBFRAMES):
+            # sub-sample centers, symmetric about t_ms
+            ts = t_ms + frame_ms * ((k + 0.5) / SUBFRAMES - 0.5)
+            w, jaw = self.weights_at(ts, energy)
+            for v, wt in w.items():
+                acc[v] = acc.get(v, 0.0) + wt / SUBFRAMES
+            jaw_acc += jaw / SUBFRAMES
+        return acc, jaw_acc
 
     def breath_pauses(self) -> List[float]:
         """Centers of pauses > 500ms -- puppet plays one slow inhale."""
