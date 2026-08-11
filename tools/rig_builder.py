@@ -634,9 +634,30 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             rad = max(6.0, mh * 0.9)
 
             def _nblur(x: np.ndarray) -> np.ndarray:
-                import cv2
-                k = int(rad * 3) | 1     # odd kernel ≈ 3 sigma
-                return cv2.GaussianBlur(x.astype(np.float32), (k, k), rad)
+                """Gaussian blur on a float array. OpenCV when present;
+                otherwise a separable NumPy convolution (edge-padded) —
+                cv2 is NOT a declared dependency (it only rides along
+                with mediapipe), so the occluded-bake path must never
+                hard-require it. PIL is no help here: its GaussianBlur
+                rejects 32-bit float ("F" mode) images."""
+                x = x.astype(np.float32)
+                try:
+                    import cv2
+                    k = int(rad * 3) | 1     # odd kernel ≈ 3 sigma
+                    return cv2.GaussianBlur(x, (k, k), rad)
+                except ImportError:
+                    r = max(1, int(rad * 1.5))
+                    t = np.arange(-r, r + 1, dtype=np.float32)
+                    kern = np.exp(-0.5 * (t / rad) ** 2)
+                    kern /= kern.sum()
+                    pad = np.pad(x, ((0, 0), (r, r)), mode="edge")
+                    out = np.apply_along_axis(
+                        lambda v: np.convolve(v, kern, mode="valid"),
+                        1, pad)
+                    pad = np.pad(out, ((r, r), (0, 0)), mode="edge")
+                    return np.apply_along_axis(
+                        lambda v: np.convolve(v, kern, mode="valid"),
+                        0, pad).astype(np.float32)
 
             wgt = (1.0 - lm_arr) * (ba_arr[..., 3] / 255.0)
             wb = _nblur(wgt) + 1e-4
