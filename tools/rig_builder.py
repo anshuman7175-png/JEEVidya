@@ -356,10 +356,11 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
     feather = max(4, cw // 8)
     rig_w, rig_h = rig.size
 
-    def _mouth_geo_of(src: Image.Image) -> Tuple[float, float, float, float]:
+    def _mouth_geo_of(src: Image.Image,
+                      lms: Optional[List[Tuple[float, float]]]
+                      ) -> Tuple[float, float, float, float]:
         """Per-image mouth center + extent (w, h): landmarks if possible,
         else the rig's mouth box mapped through the frame-size ratio."""
-        lms = _detect_landmarks(src)
         if lms:
             pts = [lms[i] for i in _LM["mouth"]]
             xs, ys = [p[0] for p in pts], [p[1] for p in pts]
@@ -369,6 +370,11 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
         sy = src.height / max(1, rig_h)
         return ((x0 + x1) / 2 * sx, (y0 + y1) / 2 * sy,
                 (x1 - x0) * sx, (y1 - y0) * sy)
+
+    # Outer lip contour ring (MediaPipe FaceMesh) — traces the actual
+    # lip boundary so the occluded-bake mask hugs the real mouth.
+    OUTER_LIPS = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375,
+                  291, 409, 270, 269, 267, 0, 37, 39, 40, 185]
 
     def _ellipse_mask(w: int, h: int, rx: float, ry: float,
                       blur: float) -> Image.Image:
@@ -433,7 +439,8 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             print(f"  [Rig] {rig.character}: bad viseme art {path}: {e}")
             continue
 
-        mcx, mcy, mvw, mvh = _mouth_geo_of(src)
+        src_lms = _detect_landmarks(src)
+        mcx, mcy, mvw, mvh = _mouth_geo_of(src, src_lms)
         # Source-space crop size (rescaled if frames differ)
         s = src.width / max(1, rig_w)
         scw, sch = max(8, int(cw * s)), max(8, int(ch * s))
@@ -480,26 +487,71 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             patch.putalpha(Image.fromarray(blended))
         else:
             # Occluders (hand/collar/hair) in the ring around the mouth:
-            # keep only a tight ellipse of real mouth art and slide a
-            # feathered skin-toned backing underneath — sampled from
-            # this very frame so tone and lighting match — to occlude
-            # the base mouth without pulling the occluder in.
+            # keep only a tight ellipse of real mouth art, and build the
+            # backing from the BASE body's own pixels — pixel-identical
+            # to what sits underneath at composite time, so the seam is
+            # invisible by construction. Only the base's own mouth line
+            # gets a small feathered skin dab (tone sampled from the
+            # base frame just above its mouth) so it can't peek around
+            # the new tight mouth art.
             print(f"  [Rig] {rig.character}: {name} occluder detected "
                   f"(clutter {clutter:.2f}) — tight-mouth hybrid bake")
-            art_mask = _ellipse_mask(cw, ch, art_rx, art_ry, blur)
+            base_tone = _sample_color(np.asarray(img), (x0 + x1) / 2,
+                                      max(0.0, y0 - mh * 0.6), r=6)
+            # Tone-match the source frame's skin to the base frame's, so
+            # the kept mouth art can't read as a lighter/darker panel.
+            # `tone` = skin just above the source mouth; per-channel gain
+            # toward `base_tone`, gently clamped.
+            pa = np.asarray(patch, dtype=np.float32)
+            gain = np.array([np.clip(bt / max(t, 1.0), 0.72, 1.38)
+                             for bt, t in zip(base_tone, tone)],
+                            dtype=np.float32)
+            pa[..., :3] = np.clip(pa[..., :3] * gain, 0, 255)
+            patch = Image.fromarray(pa.astype(np.uint8), "RGBA")
+
+            # Art window: the actual OUTER-LIP polygon from this frame's
+            # landmarks (grown slightly, small feather) — keeps ONLY the
+            # lips and mouth interior, so surrounding source skin,
+            # chin shadows, collars, and hands can never ghost over the
+            # base face. Ellipse fallback when landmarks are missing.
+            if src_lms:
+                pts = [src_lms[i] for i in OUTER_LIPS]
+                pcx = sum(p[0] for p in pts) / len(pts)
+                pcy = sum(p[1] for p in pts) / len(pts)
+                grow = 1.22
+                poly = [(((pcx + (px - pcx) * grow) - left) * cw / scw,
+                         ((pcy + (py - pcy) * grow) - top) * ch / sch)
+                        for px, py in pts]
+                m = Image.new("L", (cw, ch), 0)
+                ImageDraw.Draw(m).polygon(poly, fill=255)
+                art_mask = m.filter(
+                    ImageFilter.GaussianBlur(max(2.0, blur * 0.75)))
+            else:
+                art_mask = _ellipse_mask(cw, ch, art_rx * 0.92,
+                                         art_ry * 0.88, blur * 2.0)
             a = patch.split()[3]
             blended = (np.asarray(a, dtype=np.float32)
                        * np.asarray(art_mask, dtype=np.float32) / 255.0
                        ).astype(np.uint8)
             patch.putalpha(Image.fromarray(blended))
 
-            backing = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+            backing = base_patch.copy()
             bcx, bcy = cw / 2, ch * 0.42
-            ImageDraw.Draw(backing).ellipse(
-                (bcx - cover_rx, bcy - cover_ry,
-                 bcx + cover_rx, bcy + cover_ry), fill=tone + (255,))
-            backing.putalpha(backing.split()[3].filter(
-                ImageFilter.GaussianBlur(max(3, feather))))
+            dab = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+            drx, dry = mw * 0.62, mh * 0.80
+            ImageDraw.Draw(dab).ellipse(
+                (bcx - drx, bcy - dry, bcx + drx, bcy + dry),
+                fill=base_tone + (255,))
+            dab.putalpha(dab.split()[3].filter(
+                ImageFilter.GaussianBlur(max(2, blur))))
+            backing.alpha_composite(dab)
+            # Feather the backing window edge (matches the base below,
+            # but guards against sub-pixel drift under head rotation).
+            cover_mask = _ellipse_mask(cw, ch, cover_rx, cover_ry, blur)
+            back_a = (np.asarray(backing.split()[3], dtype=np.float32)
+                      * np.asarray(cover_mask, dtype=np.float32) / 255.0
+                      ).astype(np.uint8)
+            backing.putalpha(Image.fromarray(back_a))
             backing.alpha_composite(patch)
             patch = backing
 
