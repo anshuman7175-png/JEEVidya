@@ -42,6 +42,18 @@ try:
 except ImportError:
     pass
 
+# Wire pydub to the bundled imageio-ffmpeg binary so every subcommand
+# (forge, render, …) works on machines with no system ffmpeg install.
+try:
+    import imageio_ffmpeg as _ioff
+    import pydub as _pydub
+    _ffmpeg = _ioff.get_ffmpeg_exe()
+    _pydub.AudioSegment.converter = _ffmpeg
+    _pydub.AudioSegment.ffprobe = _ffmpeg
+    os.environ.setdefault("FFMPEG_BINARY", _ffmpeg)
+except ImportError:
+    pass
+
 from config import settings  # noqa: E402
 
 
@@ -111,6 +123,20 @@ def cmd_doctor(_args) -> int:
             check(f"character: {name} puppet rig", False,
                   "run: python3 jvmake.py rig — characters stay static "
                   "without it", warn=True)
+
+    # OpenCV variant (mediapipe drags in the GUI build, which breaks
+    # headless servers with libxcb/libGL ImportErrors)
+    try:
+        import cv2  # noqa: F401
+        check("dep: cv2 (headless-safe)", True)
+    except ImportError as e:
+        if "libxcb" in str(e) or "libGL" in str(e):
+            check("dep: cv2 (headless-safe)", False,
+                  "GUI OpenCV installed on a headless server — fix: "
+                  "pip uninstall -y opencv-contrib-python && "
+                  "pip install --force-reinstall opencv-contrib-python-headless")
+        else:
+            check("dep: cv2 (headless-safe)", False, str(e), warn=True)
 
     # mediapipe (auto-rigging quality)
     try:

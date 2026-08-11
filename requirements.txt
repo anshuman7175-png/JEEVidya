@@ -14,7 +14,12 @@ audioop-lts>=0.2.1; python_version >= "3.13"
 # Auto-rigging: mediapipe face landmarks give pixel-accurate face geometry.
 # Without it the rig builder falls back to a proportion heuristic that is
 # badly wrong for chibi characters (mouth lands on the eyes).
-# The GUI OpenCV build needs libxcb/X11 which headless servers lack —
-# ALWAYS use the -headless variant.
+#
+# GOTCHA: mediapipe declares a dependency on the GUI opencv-contrib-python,
+# which needs libxcb/X11 that headless servers lack (cv2 import dies with
+# "libxcb.so.1: cannot open shared object file"). After installing this
+# file, ALWAYS run the two-step fix (also detected by `jvmake doctor`):
+#   pip uninstall -y opencv-contrib-python
+#   pip install --force-reinstall opencv-contrib-python-headless
 mediapipe>=1.0.0
 opencv-contrib-python-headless>=4.9
