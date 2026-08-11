@@ -462,21 +462,67 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
         #         hands, hoodie collars and hair can never flash inside
         #         the sprite (mouth extent scaled into sprite space).
         s_mvw, s_mvh = mvw / max(s, 1e-6), mvh / max(s, 1e-6)
+        blur = max(2, feather // 2)
         cover_rx = min(cw / 2 - 1, max(cw * 0.30, s_mvw * 0.85))
         cover_ry = min(ch * 0.42 - 1, ch * (1 - 0.42) - 1,
                        max(ch * 0.24, s_mvh * 1.05))
+        # Never let the cover window (or its blur reach) climb onto the
+        # base frame's NOSE — the viseme renders shade the nose slightly
+        # differently, and a window that touches it ghosts a second nose
+        # over the face. Landmark 2 = nose bottom (subnasale).
+        if base_lms:
+            nose_y = base_lms[2][1] - base_top
+            nose_gap = ch * 0.42 - nose_y          # px above mouth center
+            if nose_gap > 8:
+                cover_ry = min(cover_ry,
+                               max(ch * 0.16, nose_gap - 2.0 * blur))
         art_rx = min(cw / 2 - 1, max(s_mvw * 0.65, cw * 0.12))
         art_ry = min(ch * 0.42 - 1, ch * (1 - 0.42) - 1,
                      max(s_mvh * 0.65, ch * 0.10))
 
+        # ── Global tone match: source frame → base frame ───────────
+        # Each viseme render is lit slightly differently from the
+        # neutral body (renderer variance).  Blended through the wide
+        # feathered window, even a modest shading offset reads as a
+        # milky panel over the cheeks.  Fit a per-channel linear map
+        # (gain + offset, least squares) on the SKIN RING around the
+        # mouth — pixels opaque in both frames, excluding the mouth
+        # itself and the top quartile of differences (lips, occluders)
+        # — and apply it to the whole patch before any masking.
+        _pa = np.asarray(patch, dtype=np.float32)
+        _ba = np.asarray(base_patch, dtype=np.float32)
+        _ring_img = Image.new("L", (cw, ch), 0)
+        _rd = ImageDraw.Draw(_ring_img)
+        _cx_, _cy_ = cw / 2, ch * 0.42
+        _rd.ellipse((_cx_ - cover_rx, _cy_ - cover_ry,
+                     _cx_ + cover_rx, _cy_ + cover_ry), fill=255)
+        _rd.ellipse((_cx_ - art_rx, _cy_ - art_ry,
+                     _cx_ + art_rx, _cy_ + art_ry), fill=0)
+        _ring = ((np.asarray(_ring_img) > 128)
+                 & (_pa[..., 3] > 200) & (_ba[..., 3] > 200))
+        if _ring.sum() >= 64:
+            _d = np.abs(_pa[..., :3] - _ba[..., :3]).sum(axis=2)
+            _keep = _ring & (_d <= np.percentile(_d[_ring], 75))
+            if _keep.sum() >= 64:
+                for _c in range(3):
+                    xs = _pa[..., _c][_keep]
+                    ys = _ba[..., _c][_keep]
+                    var = float(xs.var())
+                    a_ = (float(((xs - xs.mean()) * (ys - ys.mean())).mean())
+                          / var) if var > 1.0 else 1.0
+                    a_ = float(np.clip(a_, 0.65, 1.5))
+                    b_ = float(np.clip(ys.mean() - a_ * xs.mean(),
+                                       -48.0, 48.0))
+                    _pa[..., _c] = np.clip(_pa[..., _c] * a_ + b_, 0, 255)
+                patch = Image.fromarray(_pa.astype(np.uint8), "RGBA")
+
         # Facial tone near the mouth of THIS frame (just above the lips),
-        # used both for clutter scoring and — if needed — the backing.
+        # used for clutter scoring.
         tone = _sample_color(np.asarray(src), mcx,
                              max(0.0, mcy - mvh * 1.1), r=6)
         clutter = _ring_clutter(patch, cover_rx, cover_ry, art_rx, art_ry)
         occluded = (clutter > 0.10
                     and (art_rx < cover_rx - 2 or art_ry < cover_ry - 2))
-        blur = max(2, feather // 2)
 
         if not occluded:
             # Clean surroundings: keep the full patch (real cheeks and
@@ -500,18 +546,8 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             # the new tight mouth art.
             print(f"  [Rig] {rig.character}: {name} occluder detected "
                   f"(clutter {clutter:.2f}) — tight-mouth hybrid bake")
-            base_tone = _sample_color(np.asarray(img), (x0 + x1) / 2,
-                                      max(0.0, y0 - mh * 0.6), r=6)
-            # Tone-match the source frame's skin to the base frame's, so
-            # the kept mouth art can't read as a lighter/darker panel.
-            # `tone` = skin just above the source mouth; per-channel gain
-            # toward `base_tone`, gently clamped.
-            pa = np.asarray(patch, dtype=np.float32)
-            gain = np.array([np.clip(bt / max(t, 1.0), 0.72, 1.38)
-                             for bt, t in zip(base_tone, tone)],
-                            dtype=np.float32)
-            pa[..., :3] = np.clip(pa[..., :3] * gain, 0, 255)
-            patch = Image.fromarray(pa.astype(np.uint8), "RGBA")
+            # (Skin tone already matched to the base by the global
+            # per-channel linear fit above.)
 
             # Art window: the actual OUTER-LIP polygon from this frame's
             # landmarks (grown slightly, small feather) — keeps ONLY the
