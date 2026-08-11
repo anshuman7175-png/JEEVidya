@@ -9,3 +9,5 @@ pydub>=0.25.1
 rembg[cpu]>=2.0.50
 onnxruntime>=1.16.0
 mcp[cli]>=1.27,<2
+imageio-ffmpeg>=0.4.9
+audioop-lts>=0.2.1; python_version >= "3.13"
