@@ -42,12 +42,37 @@ SR = 44100
 # DECODE / ENCODE
 # ═══════════════════════════════════════════
 
+def _ffmpeg_exe() -> str:
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return "ffmpeg"
+
+
 def _decode(path: str) -> np.ndarray:
-    """Any audio file → float32 mono @ SR."""
-    from pydub import AudioSegment
-    seg = AudioSegment.from_file(path).set_frame_rate(SR).set_channels(1)
-    arr = np.array(seg.get_array_of_samples(), dtype=np.float32)
-    return arr / float(1 << (8 * seg.sample_width - 1))
+    """Any audio file → float32 mono @ SR.
+
+    Decodes via a direct ffmpeg subprocess (raw s16le pipe) so pydub's
+    ffprobe dependency is never needed — imageio_ffmpeg bundles only
+    ffmpeg, not ffprobe.
+    """
+    import subprocess
+    try:
+        proc = subprocess.run(
+            [_ffmpeg_exe(), "-v", "error", "-i", path,
+             "-f", "s16le", "-acodec", "pcm_s16le",
+             "-ar", str(SR), "-ac", "1", "pipe:1"],
+            capture_output=True, check=True,
+        )
+        arr = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32)
+        return arr / 32768.0
+    except (subprocess.CalledProcessError, OSError):
+        # Fallback: pydub direct load (works when a real ffprobe exists)
+        from pydub import AudioSegment
+        seg = AudioSegment.from_file(path).set_frame_rate(SR).set_channels(1)
+        arr = np.array(seg.get_array_of_samples(), dtype=np.float32)
+        return arr / float(1 << (8 * seg.sample_width - 1))
 
 
 def _encode_stereo(left: np.ndarray, right: np.ndarray, out_path: str) -> str:
