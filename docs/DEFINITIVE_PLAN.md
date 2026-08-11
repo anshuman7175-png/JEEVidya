@@ -1,7 +1,9 @@
-# JEEVidya — The Definitive Production Plan (Terminal Edition)
+# JEEVidya — The Definitive Production Plan (Singularity Edition)
 
 **Target:** a professional, million-subscriber-grade automated Shorts channel running on a MacBook M2 / 16 GB, 100% free & libre tooling, zero cloud dependency on the critical path.
-**Scope:** this supersedes and absorbs the prior 9-phase face/voice plan. Everything in that plan survives; this document hardens it, upgrades three of its weakest links (viseme blending, acting, QC scope), and extends it from "the face is perfect" to "the *channel* is perfect" — because at millions of subs the pipeline IS the product.
+**Scope:** this supersedes and absorbs the prior 9-phase face/voice plan. Everything in that plan survives; this document hardens it, upgrades its weakest links, and extends it from "the face is perfect" to "the *channel* is perfect" — because at millions of subs the pipeline IS the product.
+
+**Structure:** Parts 0–XIV are the Terminal core — correctness by construction. Parts XV–XXII are the Singularity layer — the ceiling-breakers: a 2.5D depth head from flat art, a physics-based motion grammar, a unified affect nervous system, multimodal foley coherence, beat-level retention intelligence, a real-time performance engine, and adversarial QC that attacks the renderer instead of merely checking it. The Terminal core makes the face *correct*. The Singularity layer makes it *impossible to tell it was made by a machine* — and makes the machine learn faster than any human editor could.
 
 This is the terminal plan. There should never be a v-next, because every decision below is either (a) correct by construction, (b) gated on rendered-pixel evidence, or (c) behind a swappable contract.
 
@@ -383,7 +385,7 @@ Because Part VII derives lip sync from audio, a re-dub **re-syncs automatically*
 
 ---
 
-## Part XIV — Order of work (each step gated)
+## Part XIV — Order of work for the Terminal core (each step gated)
 
 ```
 0. Env bootstrap + device.py + doctor + determinism self-test + FPS 60 de-hardcoding
@@ -403,3 +405,133 @@ Because Part VII derives lip sync from audio, a re-dub **re-syncs automatically*
 **Gate at each step:** `jvmake verify-face --strict` (and from step 6, the golden corpus) must pass before moving on.
 
 **Sequencing note:** steps 0–7 fix the face and are fully useful with today's edge-tts voices. Step 8 swaps in your voice with no further face work, because step 5 made timing derive from audio. Record your reference clips any time before step 8. Step 10 turns a video machine into a channel machine — and by then every artifact that reaches YouTube has passed a constitution that no human needs to remember to enforce.
+
+---
+
+---
+
+# THE SINGULARITY LAYER
+
+Everything above makes the pipeline *correct*. Everything below makes it *transcendent*. Each Singularity part rides on the Terminal core's contracts (rig v3 landmarks, aligner timings, the QC constitution, the content-addressed DAG) — nothing here weakens a gate; every part adds new ones. Each is independently shippable and independently gated (Law 5), so the core never waits on the ceiling.
+
+---
+
+## Part XV — The 2.5D depth head: real parallax from flat art
+
+The Terminal core shifts features for yaw (§Part VI). That reads as "good puppet." A million-sub channel needs "how is that flat art *turning*?" — Live2D-grade depth, procedurally, from the single painted head.
+
+`engine/depth_head.py` (new):
+
+- **Delaunay mesh over the head plate:** triangulate the 478 landmarks + hair/silhouette boundary points sampled from the alpha contour. The head becomes a warpable mesh, not a sprite.
+- **Procedural depth proxy:** assign each vertex a depth from an anatomical prior fitted to the landmarks — nose tip nearest, ears/jawline farthest, forehead/cheeks interpolated on a face-topology heightfield. No neural depth model, no download: the MediaPipe canonical 3D face model *already ships z-coordinates* for all 478 points; use them, scaled to the art.
+- **Yaw/pitch → per-vertex parallax:** vertex displacement = `depth(v) × sin(angle)` in head space, rendered as a piecewise-affine warp (scipy `griddata`/PiecewiseAffineTransform, cached per quantized angle). The nose leads the turn, the far cheek foreshortens, the near jawline swings wide — actual 2.5D rotation, ±12° range where flat art stays believable.
+- **Occlusion-aware hair layers:** split hair alpha into front/back layers at the face contour during the rig bake; back hair parallaxes *less* than the face, front bangs parallax *more* — three-plane depth for free.
+- **Dynamic shading:** a single baked normal-proxy map (from the depth heightfield) modulated by a fixed key-light direction → cheek/nose shading shifts subtly with yaw. One multiply, painted-style preserved, no relighting uncanny valley.
+- **QC gates (new):** mesh fold-over detector (no triangle flips at any angle in the sweep); silhouette continuity (alpha boundary stays simple-connected); landmark re-detection on warped renders must recover the analytically predicted positions within 0.8 px across the full ±12° sweep.
+- **Fallback contract:** `depth_head.enabled` flag; when off, Part VI's affine path renders identically to the Terminal core. The golden corpus is blessed separately per mode.
+
+---
+
+## Part XVI — The motion grammar: physics and the twelve principles, encoded
+
+Human animators apply the Disney principles by instinct. Encode them as a procedural layer so every motion channel obeys them mechanically.
+
+`engine/motion_grammar.py` (new) — a post-processor over ALL animation channels (head, brows, gaze, gestures, body) before rendering:
+
+- **Spring-damper secondary motion:** hair strands and any loose costume element (baked as chains of 3–5 verlet points from the rig's hair layers) driven by head acceleration — the hair *follows through* and *overlaps* after a head turn, settles with critically-damped wobble. Deterministic (fixed timestep, seeded), cheap (dozens of points).
+- **Anticipation injector:** any gesture or pose transition above a velocity threshold gets an automatic 2–4 frame counter-motion first (head dips before it rises, hand pulls back before it points). Amplitude proportional to the main motion, capped, C¹-blended.
+- **Follow-through & settle:** every channel's keyframe target is reached via a slightly-underdamped second-order filter (tunable ζ ≈ 0.85) instead of pure easing — motions *arrive* with a 1–2% overshoot and settle, which is the difference between tweened and alive. The existing physics_overshoot on head roll generalizes to every channel.
+- **Smear discipline:** on any frame where head angular velocity exceeds a threshold, apply directional motion blur to the head layer only (2–3 tap directional box in motion direction) — fast turns stop strobing at 60 fps.
+- **OU-noise idle:** replace every sine-based idle (breathe wobble, sway) with seeded Ornstein–Uhlenbeck processes — mean-reverting noise that never visibly loops. Sines read as robotic within 10 seconds; OU never repeats.
+- **Arc enforcement:** gaze and head targets travel along slight arcs (quadratic bow ∝ distance), never straight lines — straight-line interpolation is the single biggest "computer did this" tell.
+- **QC gates (new):** jerk budget per channel (third derivative bounded); settle detector (no channel oscillates > 3 visible cycles); smear frames must never appear during a held pose; determinism ledger covers physics state.
+
+---
+
+## Part XVII — The affect engine: one nervous system, not per-channel triggers
+
+Part VII.5 wires prosody to acting per-channel. The ceiling-breaker: a single continuous emotional state that ALL channels read from, so the whole body agrees about how the character feels — coherence is what audiences unconsciously read as "real."
+
+`engine/affect.py` (new):
+
+- **Valence–arousal state:** a 2-D continuous state per character, updated per frame by: the script's per-turn `emotion` tag (target), prosody (RMS/F0 push arousal), and dialogue events (being addressed, reveals). Follows targets through the §XVI second-order filter — emotions *transition*, never snap.
+- **Channel mapping matrix:** one declarative table maps (valence, arousal) → resting mouth `pull`/`press` bias, brow height/inner-raise, lid openness, blink-rate multiplier, gaze-hold duration, head-tilt bias, gesture amplitude gain, breath rate/depth, and — once Part X lands — the voice-emotion reference intensity. Every channel reads the SAME state: an excited character blinks faster, breathes shallower, gestures bigger, holds gaze shorter, and *sounds* brighter, all from one number pair.
+- **Listener reactions (multi-character scenes):** the non-speaking character's affect state tracks the speaker's with 300–500 ms lag and 0.4 gain → automatic reactive listening: nods on the speaker's pitch accents, brow raise on their reveals, gaze at the speaker with natural check-away saccades. Dead-eyed listeners are the #1 tell of automated dialogue; this kills it with zero new art.
+- **Micro-expression grammar:** brief (120–200 ms) sub-threshold expression flickers on affect-state transitions (surprise onset before the smile), scheduled deterministically from the state trajectory.
+- **QC gates (new):** affect-coherence audit — per-frame correlation between channel outputs and the state trajectory must exceed threshold (a smiling mouth with fear-brows fails the render); state continuity (bounded derivative, no snaps).
+
+---
+
+## Part XVIII — Multimodal coherence: the body you hear
+
+Sound and image must agree at the millisecond level — audiences forgive a flat image long before they forgive incoherent audio.
+
+Extends `pipeline/mixdown.py` + `engine/affect.py`:
+
+- **Synthesized breath foley:** Part VII.5 schedules visible inhales; synthesize the matching breath *sound* (filtered noise burst shaped by breath depth from the affect state) at the exact aligned instant, −38 dB under dialogue. Seeing AND hearing the inhale is a subliminal "alive" signal almost no automated channel has.
+- **Cloth/motion foley:** gesture onsets above an amplitude threshold trigger a soft cloth swish from a small seeded procedural synthesizer, panned to the character's screen position. Sub-audible consciously; missed when absent.
+- **Room coherence:** all dialogue passes through one shared convolution with a subtle small-room impulse response (generated procedurally, seeded) so both characters exist in the SAME acoustic space — separately synthesized TTS lines otherwise sound like they were recorded on different planets, and everyone hears it without knowing why.
+- **Ducking with lookahead:** music bed ducks 150 ms *before* dialogue onset (timings are known from the aligner — use them), recovers on phrase-final F0 declination. Ducking that anticipates reads as a human mix engineer.
+- **Mouth de-click + emphasis micro-dynamics:** spectral de-click on TTS output; +0.5–1 dB micro-lift on aligner-identified emphasis words, matched to the pupil/gesture emphasis so audio and body stress the same syllables.
+- **QC gates (new):** breath A/V co-occurrence (every visible inhale has its sound within ±1 frame); shared-reverb verification (cross-correlation of late-tail signatures between speakers); duck-timing assertion against aligner onsets.
+
+---
+
+## Part XIX — Retention intelligence: learning at the beat, not the video
+
+The Terminal flywheel learns per-video. YouTube Analytics exposes per-moment audience retention — the flywheel must learn per-*beat*, which is 100× more signal from the same uploads.
+
+Extends `factory/flywheel.py` + `agents/` :
+
+- **Beat ledger:** the script JSON already has turns/beats; the ship DAG emits a `beats.json` mapping every script beat to its exact timestamp span in the final video (free — the aligner knows).
+- **Retention-curve join:** pull the per-video audience-retention curve (free YouTube Analytics API), resample onto the beat ledger → every beat gets a retention delta. Aggregated across videos, every *type* of beat (hook style, reveal pacing, gesture density, emotion arc, formula-on-screen vs. spoken) accumulates evidence.
+- **Beat-level bandit:** the Thompson sampler's arm space extends from video-level genes to beat-level policies: hook archetype, time-to-first-reveal, cut-rate curve shape, affect-arc template (§XVII gives every video a parameterized emotional trajectory — now it's learnable), caption density. Week 1 it guesses; week 6 it knows *which second* loses viewers and why.
+- **Comment mining → topic engine:** `agents/` gains a comment miner (free Data API): cluster questions and misconceptions from comments; feed the scriptwriter a ranked queue of "what your actual audience is confused about." Combined with a JEE-syllabus coverage graph (topic dependency DAG, spaced-repetition scheduling of revisits), topic selection stops being guesswork forever.
+- **Counterfactual discipline:** every learned policy change ships as an A/B arm first, never as a global flip; the ledger records which policy version produced every video, so regressions are attributable.
+- **QC gate (new):** the publisher refuses upload if the beat ledger is missing or fails checksum against the muxed timeline — the learning loop's ground truth is gate-protected like everything else.
+
+---
+
+## Part XX — The performance engine: render speed is a creative feature
+
+Iteration speed compounds into quality: a pipeline that renders 5× faster tunes 5× more. Target: **≤ 0.5× realtime** for a 60 s Short at 1080×1920@60 on the M2 (≤ 30 s wall-clock per render after caches warm).
+
+- **Dirty-region rendering:** per frame, only the head box, gesture-swept regions, caption band, and particle deltas change; the background scene composite is reused. The frame becomes a sparse update, not a full repaint.
+- **numpy compositing core:** replace per-frame PIL `alpha_composite` chains with a single vectorized premultiplied-alpha numpy pipeline over uint16 intermediates (no float boxing, no PIL object churn). PIL remains for I/O and text only.
+- **Scene-parallel rendering:** scenes are independent given the rig and audio — `multiprocessing` over scenes with deterministic per-scene seeds; frame ledger hashes are order-independent by construction. M2 has 8 cores; use them.
+- **Pipe to encoder:** frames stream to ffmpeg over stdin (rawvideo) — no PNG encode/decode round-trip on the critical path; PNG dumps become a `--debug-frames` mode.
+- **Warm-cache contract:** LRU layers (head plates, transformed heads, mouth shapes, warp grids) sized so a typical script's working set fits in ~4 GB; hit-rate reported per render, regression-gated.
+- **Perf gates (new):** wall-clock per video and per-stage budgets tracked in the ledger; CI fails a commit that regresses golden-corpus render time > 15%. Speed is a gated invariant, exactly like pixels.
+
+---
+
+## Part XXI — Adversarial QC: attack the renderer, don't just check it
+
+The Terminal QC verifies known invariants. The Singularity QC goes looking for unknown failures — because at millions of views, one-in-ten-thousand-frames bugs WILL be screenshotted.
+
+`tests/adversarial/` (new):
+
+- **Property-based testing (`hypothesis`):** generate thousands of random-but-valid inputs — parameter vectors, alignment tracks, pose sequences, affect trajectories — and assert the invariants hold on ALL of them: mouth continuity, no fold-overs, blink closure, jerk budget, weight-mass conservation. Bugs are found by search, not by luck.
+- **Metamorphic tests:** transformations with known output relations — time-reversed audio must produce time-reversed jaw envelope; a 2× slowed script must produce identical shapes at 2× spacing; muting a turn must produce a sealed resting mouth for its span. Each violated relation is a bug no example-based test would find.
+- **Renderer fuzzing:** malformed scripts, zero-length turns, emoji in dialogue, 400-word run-ons, single-frame scenes, characters with 1 pose — the pipeline must fail *loudly and diagnosably* (typed errors with artifact paths), never render garbage silently. Silent garbage at scale is channel death.
+- **Perceptual flicker metric:** temporal SSIM between consecutive frames in held moments — catches shimmer, cache-boundary popping, and dithering artifacts that per-landmark checks can't see. Threshold calibrated on blessed corpus renders.
+- **Optical-flow sanity:** dense flow (cv2 Farnebäck) over rendered output; flow magnitude must be spatially coherent with commanded motion — a region moving when nothing commanded it (the historical "third mouth" class) is detected *generically*, forever, without knowing the bug in advance.
+- **The nightly gauntlet:** hypothesis corpus + fuzz corpus + flicker + flow run nightly on the M2 (it's asleep anyway); failures land as diagnostic sheets in the runbook queue. The machine hunts its own bugs while you sleep.
+
+---
+
+## Part XXII — Order of work for the Singularity layer (each independently gated)
+
+```
+S0. Perf engine (§XX)                      → 0.5× realtime gate; makes every later step iterate faster — DO THIS FIRST
+S1. Motion grammar (§XVI)                  → jerk/settle/smear gates green on golden corpus
+S2. Affect engine (§XVII)                  → coherence audit green; listener reactions on dialogue corpus
+S3. 2.5D depth head (§XV)                  → fold-over + silhouette + sweep gates green; A/B blessed vs. flat mode
+S4. Multimodal coherence (§XVIII)          → breath-sync + shared-reverb + duck-timing gates green
+S5. Adversarial QC (§XXI)                  → nightly gauntlet running clean for 7 consecutive nights
+S6. Retention intelligence (§XIX)          → beat ledger in every upload; first beat-level posterior after 20 videos
+```
+
+**Dependency contract:** S0–S5 depend only on the Terminal core (steps 0–9). S6 depends on the ship DAG (step 10). Any Singularity part can be deferred without blocking publishing — the channel ships on the Terminal core from day one and gets *inevitably* better as each layer lands, each behind its own gate, each reversible by flag.
+
+**The end state:** a machine that renders faster than realtime, moves with physics, feels with one nervous system, breathes audibly and visibly in sync, turns its head in true depth, hunts its own bugs nightly, and learns from every second of every viewer's attention — deterministic to the byte, free to the core, gated to the pixel. There is no ceiling above this because above this there is no ceiling.
