@@ -425,6 +425,10 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
         bad = int(alpha_flash.sum()) + int((diff[both] > 140).sum())
         return bad / float(ring.sum())
 
+    # Base frame's own landmarks — used to inpaint the base mouth under
+    # tight hybrid bakes. Detected once, reused per viseme.
+    base_lms = _detect_landmarks(img)
+
     d = rig_dir(rig.character)
     os.makedirs(d, exist_ok=True)
     baked: Dict[str, str] = {}
@@ -535,16 +539,52 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
                        ).astype(np.uint8)
             patch.putalpha(Image.fromarray(blended))
 
-            backing = base_patch.copy()
+            # Hide the BASE frame's own mouth by INPAINTING it from the
+            # surrounding skin (normalized-convolution blur) instead of
+            # stamping a flat-tone ellipse — a flat fill erases the 3D
+            # shading of the face and reads as a pale panel. The mask is
+            # the base frame's own outer-lip polygon (grown slightly);
+            # ellipse fallback sized to the mouth box when landmarks
+            # are unavailable.
+            # The mask must cover the FULL drawn smile, not just the
+            # landmark lip polygon — cartoon smile creases extend well
+            # past the landmark corners, so union the grown polygon
+            # with an ellipse sized to the rig's (padded) mouth box.
+            lip_mask = Image.new("L", (cw, ch), 0)
             bcx, bcy = cw / 2, ch * 0.42
-            dab = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
-            drx, dry = mw * 0.62, mh * 0.80
-            ImageDraw.Draw(dab).ellipse(
-                (bcx - drx, bcy - dry, bcx + drx, bcy + dry),
-                fill=base_tone + (255,))
-            dab.putalpha(dab.split()[3].filter(
-                ImageFilter.GaussianBlur(max(2, blur))))
-            backing.alpha_composite(dab)
+            ImageDraw.Draw(lip_mask).ellipse(
+                (bcx - mw * 0.60, bcy - mh * 0.70,
+                 bcx + mw * 0.60, bcy + mh * 0.70), fill=255)
+            if base_lms:
+                bpts = [base_lms[i] for i in OUTER_LIPS]
+                bpcx = sum(p[0] for p in bpts) / len(bpts)
+                bpcy = sum(p[1] for p in bpts) / len(bpts)
+                bgrow = 1.45
+                bpoly = [((bpcx + (px - bpcx) * bgrow) - base_left,
+                          (bpcy + (py - bpcy) * bgrow) - base_top)
+                         for px, py in bpts]
+                ImageDraw.Draw(lip_mask).polygon(bpoly, fill=255)
+            lip_mask = lip_mask.filter(
+                ImageFilter.GaussianBlur(max(2.0, blur * 0.5)))
+            lm_arr = np.asarray(lip_mask, dtype=np.float32) / 255.0
+            ba_arr = np.asarray(base_patch, dtype=np.float32)
+            rad = max(6.0, mh * 0.9)
+
+            def _nblur(x: np.ndarray) -> np.ndarray:
+                import cv2
+                k = int(rad * 3) | 1     # odd kernel ≈ 3 sigma
+                return cv2.GaussianBlur(x.astype(np.float32), (k, k), rad)
+
+            wgt = (1.0 - lm_arr) * (ba_arr[..., 3] / 255.0)
+            wb = _nblur(wgt) + 1e-4
+            fill = np.stack(
+                [_nblur(ba_arr[..., c] * wgt) / wb for c in range(3)],
+                axis=-1)
+            m3 = lm_arr[..., None]
+            out = ba_arr.copy()
+            out[..., :3] = np.clip(
+                ba_arr[..., :3] * (1.0 - m3) + fill * m3, 0, 255)
+            backing = Image.fromarray(out.astype(np.uint8), "RGBA")
             # Feather the backing window edge (matches the base below,
             # but guards against sub-pixel drift under head rotation).
             cover_mask = _ellipse_mask(cw, ch, cover_rx, cover_ry, blur)
