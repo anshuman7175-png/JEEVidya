@@ -510,6 +510,16 @@ class BoneEngine:
                 y_closed = box[1] - oy + p - lid.height * 0.15 + saccade_dy
                 y_open = y_closed - lid.height * 0.85
                 y = int(y_open + (y_closed - y_open) * min(1.0, blink))
+                # Clip the descending lid to the eye region (same fix
+                # as the flat render() path): a mid-blink lid must not
+                # hover over the brow as a translucent disc.
+                clip_top = int(box[1] - oy + p - (box[3] - box[1]) * 0.35)
+                if y < clip_top:
+                    cut = clip_top - y
+                    if cut >= lid.height:
+                        continue
+                    lid = lid.crop((0, cut, lid.width, lid.height))
+                    y = clip_top
                 head.alpha_composite(lid, dest=(x, y))
 
         # Mouth: coarticulated cross-fade between two viseme sprites.
@@ -611,6 +621,18 @@ class BoneEngine:
                 y_closed = box[1] + pose.eye_dy - lid.height * 0.15
                 y_open = y_closed - lid.height * 0.85
                 ly = int(y_open + (y_closed - y_open) * min(1.0, pose.blink))
+                # Clip the descending lid to the eye region: without
+                # this, a mid-blink lid hangs ABOVE the eye over the
+                # brow/forehead as a translucent skin disc ("goggles"
+                # artifact). Only the portion that has actually slid
+                # into the eye area is drawn.
+                clip_top = int(box[1] - (box[3] - box[1]) * 0.35)
+                if ly < clip_top:
+                    cut = clip_top - ly
+                    if cut >= lid.height:
+                        continue
+                    lid = _crop_lid_feathered(lid, cut, box[3] - box[1])
+                    ly = clip_top
                 canvas.alpha_composite(lid, dest=(lx, ly))
 
         # 2b. Brows: paste each patch at its exact crop-back position so it
@@ -625,29 +647,23 @@ class BoneEngine:
                 raise_px = int(-pose.brow * 0.35 * (box[3] - box[1]))
                 canvas.alpha_composite(patch, dest=(px0, py0 + raise_px))
 
-        # 2c. Mouth Viseme Overlay (10-class Hindi viseme blend + underlying mouth erase pass)
+        # 2c. Mouth Viseme Overlay (10-class Hindi viseme blend).
+        # NO separate erase pass: every baked sprite (art bake AND
+        # procedural bake) already carries its own feathered backing
+        # that hides the base pose's resting mouth by construction.
+        # A render-time flat skin ellipse on top of that is (a)
+        # redundant, (b) erases the face's painted 3D shading into a
+        # pale panel, and (c) — because the ellipse touched its canvas
+        # bounds and PIL's GaussianBlur edge-extends at borders — left
+        # hard straight alpha edges (the top/left "band" artifact).
         if pose.mouth_open > 0.03 or pose.viseme not in ("REST", "BILABIAL"):
             sp = self.viseme_sprites.get(pose.viseme)
             if sp is not None:
                 mx0, my0, mx1, my1 = self.mouth_box
                 mcx = (mx0 + mx1) // 2
                 mcy = (my0 + my1) // 2
-                mw_box, mh_box = mx1 - mx0, my1 - my0
 
-                # Erase underlying printed resting mouth on canvas using skin backing patch
-                if not hasattr(self, "_mouth_backing") or self._mouth_backing is None:
-                    pad_w = int(mw_box * 0.35)
-                    pad_h = int(mh_box * 0.45)
-                    bw, bh = mw_box + 2 * pad_w, mh_box + 2 * pad_h
-                    b_img = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
-                    d = ImageDraw.Draw(b_img)
-                    d.ellipse((0, 0, bw - 1, bh - 1), fill=self.skin + (255,))
-                    self._mouth_backing = b_img.filter(ImageFilter.GaussianBlur(radius=max(3, bh // 6)))
-
-                bw, bh = self._mouth_backing.size
-                canvas.alpha_composite(self._mouth_backing, dest=(int(mcx - bw / 2), int(mcy - bh / 2)))
-
-                # Composite animated mouth sprite on top
+                # Composite animated mouth sprite (self-backed)
                 mw, mh = sp.size
                 canvas.alpha_composite(sp, dest=(int(mcx - mw / 2), int(mcy - mh * 0.42)))
 

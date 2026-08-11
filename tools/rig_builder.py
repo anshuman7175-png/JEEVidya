@@ -776,23 +776,101 @@ def _bake_visemes(rig: Rig, img: Image.Image) -> None:
 
 
 def _bake_eyelids(rig: Rig, img: Image.Image) -> None:
-    """Eyelid sprites (blink): skin ellipse + lash line, one per eye.
-    Baked separately so BOTH the art and procedural viseme paths get
-    blinks."""
+    """Eyelid sprites (blink), baked from the character's OWN artwork.
+
+    A flat skin-colored ellipse reads as a pale salmon panel on painterly
+    art — the exact failure mode the viseme bake documents and avoids.
+    Instead the eye region is INPAINTED from the surrounding skin via a
+    normalized-convolution blur (same technique as the occluded viseme
+    bake), so a closed lid carries the face's real shading, blush and
+    tone. A lash line in the character's own darkened skin tone rides
+    the lower lid edge, and the alpha is feathered with an ellipse inset
+    far enough from the sprite bounds that the Gaussian falloff is never
+    clipped (no straight alpha edges)."""
     skin = rig.color("skin")
+    lash = tuple(max(0, int(c * 0.45)) for c in skin)
     d = rig_dir(rig.character)
     os.makedirs(d, exist_ok=True)
+
+    def _nblur2(x: np.ndarray, rad: float) -> np.ndarray:
+        """Gaussian blur on a float array (cv2 when present, else a
+        separable edge-padded NumPy convolution — cv2 only rides along
+        with mediapipe and is not a hard dependency)."""
+        x = x.astype(np.float32)
+        try:
+            import cv2
+            k = int(rad * 3) | 1
+            return cv2.GaussianBlur(x, (k, k), rad)
+        except ImportError:
+            r = max(1, int(rad * 1.5))
+            t = np.arange(-r, r + 1, dtype=np.float32)
+            kern = np.exp(-0.5 * (t / rad) ** 2)
+            kern /= kern.sum()
+            pad = np.pad(x, ((0, 0), (r, r)), mode="edge")
+            out = np.apply_along_axis(
+                lambda v: np.convolve(v, kern, mode="valid"), 1, pad)
+            pad = np.pad(out, ((r, r), (0, 0)), mode="edge")
+            return np.apply_along_axis(
+                lambda v: np.convolve(v, kern, mode="valid"),
+                0, pad).astype(np.float32)
+
     for eye in ("eye_l", "eye_r"):
         ex0, ey0, ex1, ey1 = rig.box(eye)
         ew, eh = max(6, ex1 - ex0), max(4, ey1 - ey0)
-        lid = Image.new("RGBA", (int(ew * 1.4), int(eh * 1.6)), (0, 0, 0, 0))
+        # Padded crop around the eye — the pad supplies real skin for
+        # the inpaint AND room for the feathered alpha falloff.
+        px, py = int(ew * 0.30), int(eh * 0.45)
+        cx0 = max(0, ex0 - px)
+        cy0 = max(0, ey0 - py)
+        cx1 = min(img.width, ex1 + px)
+        cy1 = min(img.height, ey1 + py)
+        patch = img.crop((cx0, cy0, cx1, cy1))
+        w, h = patch.size
+        pa = np.asarray(patch, dtype=np.float32)
+
+        # Eye mask (grown slightly past the box so lashes/eye-liner in
+        # the art are fully covered by the inpaint).
+        m = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(m).ellipse(
+            ((ex0 - cx0) - ew * 0.12, (ey0 - cy0) - eh * 0.20,
+             (ex1 - cx0) + ew * 0.12, (ey1 - cy0) + eh * 0.20), fill=255)
+        m = m.filter(ImageFilter.GaussianBlur(max(2, eh // 6)))
+        marr = np.asarray(m, dtype=np.float32) / 255.0
+
+        # Normalized-convolution inpaint from the surrounding skin.
+        rad = max(4.0, eh * 0.8)
+        wgt = (1.0 - marr) * (pa[..., 3] / 255.0)
+        wb = _nblur2(wgt, rad) + 1e-4
+        fill = np.stack(
+            [_nblur2(pa[..., c] * wgt, rad) / wb for c in range(3)],
+            axis=-1)
+        m3 = marr[..., None]
+        out = pa.copy()
+        out[..., :3] = np.clip(pa[..., :3] * (1.0 - m3) + fill * m3, 0, 255)
+        out[..., 3] = 255
+        lid = Image.fromarray(out.astype(np.uint8), "RGBA")
+
+        # Lash line riding the lower lid edge (descends with the lid).
         ld = ImageDraw.Draw(lid)
-        ld.ellipse((0, 0, lid.width - 1, lid.height - 1), fill=skin + (255,))
-        lash = tuple(max(0, int(c * 0.45)) for c in skin)
-        ld.arc((2, lid.height * 0.15, lid.width - 3, lid.height * 1.1),
-               start=15, end=165, fill=lash + (255,), width=max(2, eh // 5))
-        a = lid.split()[3].filter(ImageFilter.GaussianBlur(max(2, ew // 12)))
-        lid.putalpha(a)
+        ld.arc((int(w * 0.10), int(h * 0.10),
+                int(w * 0.90), int(h * 0.98)),
+               start=25, end=155, fill=lash + (230,),
+               width=max(2, eh // 6))
+
+        # Feathered elliptical alpha. The feather can stay TIGHT: the
+        # sprite is cropped from the same artwork at the same position,
+        # so outside the inpainted eye it is pixel-identical to what
+        # sits underneath — a wide feather only makes the lid read as
+        # translucent over the eye. Inset by the blur radius so the
+        # edge-extending GaussianBlur can't leave straight alpha edges.
+        blur_r = max(2, min(px, py) // 3)
+        inset = blur_r
+        am = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(am).ellipse(
+            (inset, inset, w - 1 - inset, h - 1 - inset), fill=255)
+        am = am.filter(ImageFilter.GaussianBlur(max(1, int(blur_r * 0.6))))
+        lid.putalpha(am)
+
         fname = f"lid_{eye}.png"
         lid.save(os.path.join(d, fname))
         rig.visemes[f"LID_{eye.upper()}"] = fname
