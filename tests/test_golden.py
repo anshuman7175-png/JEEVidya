@@ -102,7 +102,7 @@ def test_render_is_deterministic():
     """Same inputs → byte-identical pixels (the Tier 0 contract)."""
     a = _render_reference_frames()
     b = _render_reference_frames()
-    for i, (fa, fb) in enumerate(zip(a, b)):
+    for i, (fa, fb) in enumerate(zip(a, b, strict=True)):
         assert np.array_equal(np.asarray(fa.convert("RGB")),
                               np.asarray(fb.convert("RGB"))), \
             f"frame {i} is non-deterministic"

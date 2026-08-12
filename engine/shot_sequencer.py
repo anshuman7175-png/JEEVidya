@@ -70,7 +70,7 @@ class ShotSequencer:
 
     def apply(self, turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Mutate turns in place with the planned shots. Returns turns."""
-        for turn, shot in zip(turns, self.plan(turns)):
+        for turn, shot in zip(turns, self.plan(turns), strict=True):
             turn["shot_type"] = shot
         return turns
 

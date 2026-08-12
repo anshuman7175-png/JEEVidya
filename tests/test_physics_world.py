@@ -19,14 +19,14 @@ def test_determinism_same_seed():
     for _ in range(120):
         a.step()
         b.step()
-    for ba, bb in zip(a.bodies, b.bodies):
+    for ba, bb in zip(a.bodies, b.bodies, strict=True):
         assert abs(ba.x - bb.x) < 1e-9 and abs(ba.y - bb.y) < 1e-9
 
 
 def test_different_seeds_diverge():
     a, b = _world(1), _world(2)
     a.step(), b.step()
-    assert any(abs(ba.x - bb.x) > 1e-6 for ba, bb in zip(a.bodies, b.bodies))
+    assert any(abs(ba.x - bb.x) > 1e-6 for ba, bb in zip(a.bodies, b.bodies, strict=True))
 
 
 def test_gravity_reaction_pulls_down():

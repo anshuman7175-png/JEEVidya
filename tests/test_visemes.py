@@ -20,6 +20,7 @@ Coverage maps 1:1 onto the plan's verification matrix:
 from __future__ import annotations
 
 import random
+from itertools import pairwise
 
 from engine.visemes import (JAW, ROUNDED, SUBFRAMES, VOWELS, V,
                             AmplitudeEnvelope, VisemeEvent, VisemeTrack,
@@ -280,7 +281,7 @@ def test_coalesce_preserves_span_and_contiguity():
         assert out
         assert abs(out[0].start_ms - first) < 1e-6
         assert abs(out[-1].end_ms - last) < 1e-6
-        for a, b in zip(out, out[1:]):
+        for a, b in pairwise(out):
             assert abs(b.start_ms - a.end_ms) < 1e-6
 
 

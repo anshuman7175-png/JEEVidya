@@ -1,0 +1,59 @@
+# JEEVidya CI — the Phase 0.2 gate (see plan/).
+#
+# Design contract:
+#   * This gate must finish in well under a minute. It installs ONLY
+#     requirements-dev.txt (pytest, hypothesis, ruff) — never the render
+#     stack. tests/conftest.py derives each test module's dependency
+#     closure and reports — loudly, in the summary — which modules were
+#     skipped for missing optional deps, so a skip can never masquerade
+#     as a pass.
+#   * Lint and tests are separate jobs so a style finding never hides a
+#     logic regression (and vice versa) in the PR checks list.
+#   * Python 3.10 is the repo floor (zip(strict=), itertools.pairwise);
+#     the matrix pins the floor and the current release so a floor break
+#     is caught the day it lands.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: ruff (code-health floor)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff (pinned via requirements-dev.txt)
+        run: python -m pip install --quiet -r requirements-dev.txt
+      - name: Lint
+        run: ruff check . --output-format=github
+
+  pure-logic-tests:
+    name: pure-logic tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dev deps only (no render stack — by design)
+        run: python -m pip install --quiet -r requirements-dev.txt
+      - name: Run suite
+        run: python -m pytest tests/ -q --tb=short

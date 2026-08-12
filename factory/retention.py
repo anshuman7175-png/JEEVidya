@@ -267,7 +267,7 @@ class RetentionEngine:
             slopes = np.array([m[1] for m in metrics])
             med_level = float(np.median(levels))
             med_slope = float(np.median(slopes))
-            for (idx, kind, policy, f0, f1), (lvl, slp) in zip(rows, metrics):
+            for (idx, kind, policy, f0, f1), (lvl, slp) in zip(rows, metrics, strict=True):
                 out.append({
                     "video_id": vid, "index": idx, "kind": kind,
                     "policy": json.loads(policy),
