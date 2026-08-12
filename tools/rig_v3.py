@@ -554,10 +554,29 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     for name, path in pose_files.items():
         img = body if not path else Image.open(path).convert("RGBA")
         if img.size != body.size:
-            raise BakeError(
-                f"pose '{name}' is {img.size}, canonical is {body.size}. "
-                f"Poses must share the canonical canvas or every "
-                f"registration is meaningless.")
+            # A pose exported at the wrong canvas must not destroy the
+            # whole bake (BakeError here demoted the rig to v2 and the
+            # render path refused it). Same aspect ratio ⇒ it is just a
+            # different-resolution export of the same canvas: rescale it.
+            # Different aspect ⇒ registration is meaningless: EXCLUDE the
+            # pose and keep the rest of the rig v3.
+            src_aspect = img.size[0] / img.size[1]
+            dst_aspect = body.size[0] / body.size[1]
+            if abs(src_aspect - dst_aspect) <= 0.01 * dst_aspect:
+                note = (f"pose '{name}' is {img.size}, canonical is "
+                        f"{body.size} — same aspect, rescaled to the "
+                        f"canonical canvas.")
+                print(f"  [RigV3] {rig.character}: ⚠ {note}")
+                report.notes.append(note)
+                img = img.resize(body.size, Image.LANCZOS)
+            else:
+                note = (f"pose '{name}' is {img.size}, canonical is "
+                        f"{body.size} (different aspect) — pose EXCLUDED "
+                        f"from the library; the rest of the rig stays v3. "
+                        f"Re-export the art on the canonical canvas.")
+                print(f"  [RigV3] {rig.character}: ⚠ {note}")
+                report.notes.append(note)
+                continue
         if path:
             # A single unregistrable pose must not destroy the whole v3
             # bake (that demotes the rig to v2, the render path refuses
