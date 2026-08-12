@@ -329,10 +329,18 @@ class VisemeTrack:
         min_dur = (1000.0 / max(1, fps)) / SUBFRAMES
         return cls(coalesce_events(events, min_dur), turn_end_ms)
 
+    # Minimum event duration on the production VTT path (§7.4). Raw
+    # per-phoneme allocation can emit 35ms events — barely one frame at
+    # 30fps — which makes the mouth sprite thrash. Coalescing to ≥70ms
+    # (~2 frames) keeps articulation readable without losing sync.
+    WORD_EVENT_MIN_DUR_MS = 70.0
+
     @classmethod
     def from_words(cls, words: Sequence,
                    turn_end_ms: Optional[float] = None) -> "VisemeTrack":
-        """Build a viseme track from VTT word events."""
+        """Build a viseme track from VTT word events. Events shorter
+        than WORD_EVENT_MIN_DUR_MS are merged into the articulatorily
+        dominant neighbour, mirroring from_aligned_events."""
         events: List[VisemeEvent] = []
         for w in words:
             phones = g2p(w.text)
@@ -353,7 +361,7 @@ class VisemeTrack:
                     break
         end = turn_end_ms if turn_end_ms is not None else (
             events[-1].end_ms if events else 0.0)
-        return cls(events, end)
+        return cls(coalesce_events(events, cls.WORD_EVENT_MIN_DUR_MS), end)
 
     # ---- query ----
 

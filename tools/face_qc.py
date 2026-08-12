@@ -52,7 +52,11 @@ from PIL import Image
 REG_POS_TOL_FRAC = 0.6 / 100.0     # 0.6 px per 100 px of face height
 REG_SCALE_TOL = 0.01               # head scale within 1%
 REG_ROLL_TOL_DEG = 0.3
-RMS_BUDGET_FRAC = 0.8 / 100.0      # pose RMS ≤ 0.8 px per 100 px face height
+# Pose RMS budget — MUST match engine/registration.DEFAULT_RMS_BUDGET_PX
+# (15 px at a 400 px reference face → 3.75 px per 100 px face height).
+# The bake accepts hand-drawn poses up to that drift; a stricter QC gate
+# here would falsely flag every legitimately baked rig.
+RMS_BUDGET_FRAC = 15.0 / 400.0     # pose RMS ≤ 3.75 px per 100 px face height
 
 # Temporal budgets, in fractions of face height PER SECOND (÷ fps at use)
 MAX_CENTROID_SPEED_FRAC = 1.2      # mouth centroid drift ≤ 1.2 face-heights/s
