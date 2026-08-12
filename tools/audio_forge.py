@@ -38,6 +38,14 @@ def _t(seconds: float) -> np.ndarray:
     return np.arange(int(SR * seconds), dtype=np.float32) / SR
 
 
+def _t_n(n: int) -> np.ndarray:
+    """Time axis with EXACTLY n samples. Use whenever the buffer length is
+    already known in samples — round-tripping through seconds
+    (`_t(n / SR)`) can lose a sample to float rounding and crash a
+    broadcast (`operands could not be broadcast together`)."""
+    return np.arange(int(n), dtype=np.float32) / SR
+
+
 def _env(n: int, attack: float, release: float, curve: float = 2.0) -> np.ndarray:
     """Attack/release envelope over n samples (fractions of total)."""
     env = np.ones(n, dtype=np.float32)
@@ -223,7 +231,9 @@ def forge_bgm(dna: Optional["VisualDNA"] = None,
     while pos < n_total:
         chord = _chord(root, scale, prog[bar % len(prog)])
         n_bar = min(int(SR * bar_s), n_total - pos)
-        t = _t(n_bar / SR)
+        if n_bar <= 0:
+            break
+        t = _t_n(n_bar)
 
         # Pad: detuned sines per chord tone, slow attack
         pad = np.zeros(n_bar, dtype=np.float32)
@@ -242,7 +252,7 @@ def forge_bgm(dna: Optional["VisualDNA"] = None,
                 dur = min(eighth * 2, n_bar - k * eighth)
                 if dur <= 0:
                     continue
-                tt = _t(dur / SR)
+                tt = _t_n(dur)
                 tone = np.sin(2 * np.pi * _midi_hz(m) * tt) * np.exp(-tt * 5)
                 pluck[k * eighth:k * eighth + dur] += tone * 0.16
 
