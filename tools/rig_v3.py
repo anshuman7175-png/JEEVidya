@@ -559,15 +559,31 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
                 f"Poses must share the canonical canvas or every "
                 f"registration is meaningless.")
         if path:
+            # A single unregistrable pose must not destroy the whole v3
+            # bake (that demotes the rig to v2, the render path refuses
+            # it, and the compositor falls back to whole-image expression
+            # swaps — the exact D1 chaos v3 exists to prevent). The
+            # anchoring guarantee is per-pose: a pose that cannot be
+            # registered within budget is EXCLUDED from the library, so
+            # only verified poses ever render.
             lms = detect(img)
             if lms is None or len(lms) < N_LANDMARKS:
-                raise BakeError(
-                    f"pose '{name}': face detection failed. Rig v3 "
-                    f"landmarks every pose (§3.1) — a pose that inherits "
-                    f"body.png's boxes is defect D1.")
+                note = (f"pose '{name}': face detection failed — pose "
+                        f"EXCLUDED from the library (§3.1: no heuristic "
+                        f"boxes). Re-export the art to restore it.")
+                print(f"  [RigV3] {rig.character}: ⚠ {note}")
+                report.notes.append(note)
+                continue
             pose_lms = np.asarray(lms, dtype=np.float64)
-            xform = register_pose(canon_lms, pose_lms, pose_name=name,
-                                  face_height_px=fh)
+            try:
+                xform = register_pose(canon_lms, pose_lms, pose_name=name,
+                                      face_height_px=fh)
+            except RegistrationError as e:
+                note = (f"{e} — pose EXCLUDED from the library; the rest "
+                        f"of the rig stays v3.")
+                print(f"  [RigV3] {rig.character}: ⚠ {note}")
+                report.notes.append(note)
+                continue
         else:
             pose_lms = canon_lms
             xform = SimilarityTransform.identity()
