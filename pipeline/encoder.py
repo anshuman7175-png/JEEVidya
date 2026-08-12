@@ -166,8 +166,24 @@ def concat_and_mux(segment_paths: list, audio_path: Optional[str],
             escaped = os.path.abspath(p).replace("'", "'\\''")
             f.write(f"file '{escaped}'\n")
 
+    # HARD GUARANTEE (§XVII): a caller that passes an audio path expects
+    # voice in the final video. If the mix file vanished (temp cleanup,
+    # failed upstream node, haunted cache), fail LOUDLY here instead of
+    # silently shipping a voiceless mp4 — that is the exact class of bug
+    # that produced "the video has no voice".
+    has_audio = audio_path is not None
+    if has_audio and not os.path.exists(audio_path):
+        raise FileNotFoundError(
+            f"concat_and_mux: audio mix expected at '{audio_path}' but the "
+            "file does not exist — refusing to render a silent video. "
+            "Re-run the voice/mix stage (the upstream node likely failed "
+            "or its temp output was cleaned up).")
+    if has_audio and os.path.getsize(audio_path) == 0:
+        raise ValueError(
+            f"concat_and_mux: audio mix at '{audio_path}' is empty (0 bytes) "
+            "— refusing to render a silent video.")
+
     cmd = [_ffmpeg_exe(), "-y", "-f", "concat", "-safe", "0", "-i", list_path]
-    has_audio = bool(audio_path) and os.path.exists(audio_path)
     if has_audio:
         cmd += ["-i", audio_path]
     cmd += ["-c:v", "copy"]
