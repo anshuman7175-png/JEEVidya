@@ -56,6 +56,10 @@ _Q_ANGLE = 0.6       # final head rotation, degrees
 _Q_LAG = 1.5         # hair-lag shear, px
 _Q_VBLEND = 0.2      # coarticulation cross-fade levels
 
+# Affect's lid_openness (0.3..1) → standing lid closure. Deliberately
+# small: tonic droop should read as mood, never as a half-blink.
+LID_DROOP_GAIN = 0.45
+
 
 # ═══════════════════════════════════════════
 # POSE
@@ -80,6 +84,11 @@ class PuppetPose:
     energy: float = 1.0
     eye_dx: float = 0.0      # micro-saccade x offset (px, head-local)
     eye_dy: float = 0.0      # micro-saccade y offset (px, head-local)
+    # Affect channels (engine/affect.py) — a continuous emotional colour
+    # ON TOP of the articulatory targets, never a replacement for them.
+    mouth_pull: float = 0.0  # lip-corner bias (+ smile / − frown)
+    mouth_press: float = 0.0 # lip-press bias (tension)
+    lid: float = 1.0         # eyelid openness 0.3..1 (1 = fully alert)
     body_pose: str = ""      # active pose name (for alt torso selection)
     body_pose_to: str = ""   # target pose name during cross-fade
     body_pose_blend: float = 0.0 # 0..1 blend progress between pose and pose_to
@@ -94,6 +103,9 @@ class PuppetPose:
         self.viseme_blend = max(0.0, min(1.0, self.viseme_blend))
         self.blink = max(0.0, min(1.0, self.blink))
         self.brow = max(-1.0, min(1.0, self.brow))
+        self.mouth_pull = max(-1.0, min(1.0, self.mouth_pull))
+        self.mouth_press = max(0.0, min(1.0, self.mouth_press))
+        self.lid = max(0.3, min(1.0, self.lid))
         return self
 
 
@@ -723,6 +735,10 @@ class BoneEngine:
         envelope gates the jaw: rendered jaw = min(articulatory target,
         envelope). Sound can CLOSE a mouth the aligner left open; it can
         never force it wider than the phoneme's own shape.
+
+        Affect adds to `pull`/`press` only — the emotional colour rides
+        ON the phoneme instead of overwriting it, so a happy character
+        still closes their lips on /m/.
         """
         def target(name: str) -> MouthParams:
             try:
@@ -732,7 +748,8 @@ class BoneEngine:
         p = MouthParams.lerp(target(pose.viseme), target(pose.viseme_to),
                              pose.viseme_blend)
         return MouthParams(min(p.jaw, pose.mouth_open), p.width,
-                           p.round, p.press, p.pull).clamped()
+                           p.round, p.press + pose.mouth_press,
+                           p.pull + pose.mouth_pull).clamped()
 
     def _eye_state(self, pose: PuppetPose) -> EyeState:
         """PuppetPose eye channels → EyeState (gaze in iris radii).
@@ -743,10 +760,16 @@ class BoneEngine:
         drawn at different scales. `couple()` then applies the physio
         couplings (brow↔lid, squint↔aperture) exactly as the assembly's
         own scheduler would.
+
+        `pose.lid` is affect's tonic eyelid openness: anything below 1
+        becomes a standing partial closure ADDED to the blink channel, so
+        a calm character's lids sit lower without ever blocking a blink.
         """
         r = max(1.0, self.assembly.eyes.left.geo.iris_r)
+        droop = (1.0 - pose.lid) * LID_DROOP_GAIN
         return couple(EyeState(
-            blink_l=pose.blink, blink_r=pose.blink,
+            blink_l=min(1.0, pose.blink + droop),
+            blink_r=min(1.0, pose.blink + droop),
             eye_dx=max(-1.0, min(1.0, pose.eye_dx / r)),
             eye_dy=max(-1.0, min(1.0, pose.eye_dy / r)),
             brow=pose.brow,
