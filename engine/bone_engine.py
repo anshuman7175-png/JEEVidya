@@ -28,8 +28,14 @@ from typing import Dict, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter
 
+from config import settings
+from engine import head_transform as ht
+from engine.eye_model import EyeState, couple
+from engine.head_assembly import FaceChannels, HeadAssembly
+from engine.mouth_model import DEFAULT_TARGETS, MouthParams
 from engine.rig import (Rig, rig_dir, LEGACY_VISEME_ALIAS, VISEME_FALLBACK,
                         VISEME_NAMES)
+from engine.visemes import V
 
 # Working resolution cap: puppet layers are downscaled so the canvas is at
 # most this tall. Keeps the pose caches small enough to live in RAM.
@@ -366,6 +372,33 @@ class BoneEngine:
         self._hand_overlays: Dict[str, Image.Image] = {}
         self._active_torso_name: str = ""
 
+        # ─── Rig v3: THE unified head path ────────────────
+        # engine/head_assembly.py is the single head-compose path the
+        # Terminal plan mandates, and it names this module as its
+        # caller. When the rig carries the full v3 geometry (inpainted
+        # head plate, per-pose similarity transforms, headless bakes),
+        # render() delegates to the assembly; the sprite path below is
+        # never entered. Pre-v3 rigs keep the sprite path byte-identical
+        # — the upgrade is opt-in by what the rig IS, not by a flag.
+        # A v3 rig with a missing plate fails LOUDLY inside HeadAssembly
+        # (Law: a wrong face is worse than a loud failure).
+        self.assembly: Optional[HeadAssembly] = None
+        self._mouth_targets: Dict[V, MouthParams] = dict(DEFAULT_TARGETS)
+        if rig.is_v3():
+            self.assembly = HeadAssembly(rig, scale=self.scale,
+                                         fps=settings.FPS,
+                                         seed=rig.character)
+            # Art-fitted 5-D mouth targets override the anatomical
+            # defaults wherever the bake produced them.
+            for vname, tv in (rig.mouth_targets or {}).items():
+                try:
+                    self._mouth_targets[V(vname)] = MouthParams(
+                        tv.get("jaw", 0.0), tv.get("width", 0.5),
+                        tv.get("round", 0.0), tv.get("press", 0.0),
+                        tv.get("pull", 0.0)).clamped()
+                except ValueError:
+                    pass    # unknown viseme name in an old bake: skip
+
     def set_alt_torsos(self, torsos: Dict[str, Image.Image]) -> None:
         """Register alternative torso images and pre-compute hand overlays."""
         self._alt_torsos = torsos
@@ -571,6 +604,10 @@ class BoneEngine:
         """Render the puppet in `pose` to an RGBA canvas."""
         pose = pose.clamped()
 
+        # Rig v3 → the ONE head-compose path (engine/head_assembly.py)
+        if self.assembly is not None:
+            return self._render_v3(pose, physics)
+
         # 1 · Base Body Canvas (Pristine 3D Pose Artwork with smooth S-curve cross-fade)
         if hasattr(self, "pose_lib") and self.pose_lib and self.pose_lib.has_poses:
             body_from = pose.body_pose or "neutral"
@@ -657,15 +694,88 @@ class BoneEngine:
                         canvas.alpha_composite(faded, dest=(int(mcx - mw_inc / 2), int(mcy - mh_inc * 0.42)))
 
         # 3 · Whole-body squash & stretch (volume-preserving)
-        if abs(pose.squash) > 0.01:
-            sy = 1.0 + pose.squash
-            sx = 1.0 - pose.squash * 0.6
-            new_w = max(2, int(self.width * sx))
-            new_h = max(2, int(self.height * sy))
-            squashed = canvas.resize((new_w, new_h), Image.Resampling.BILINEAR)
-            canvas = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
-            canvas.alpha_composite(
-                squashed.crop((0, max(0, new_h - self.height), new_w, new_h)),
-                dest=(max(0, (self.width - new_w) // 2), max(0, self.height - new_h)))
+        return self._apply_squash(canvas, pose.squash)
 
-        return canvas
+    def _apply_squash(self, canvas: Image.Image, squash: float) -> Image.Image:
+        """Volume-preserving whole-body squash & stretch, anchored at the
+        feet. Shared by the sprite path and the v3 assembly path so the
+        body language reads identically whichever head engine is live."""
+        if abs(squash) <= 0.01:
+            return canvas
+        sy = 1.0 + squash
+        sx = 1.0 - squash * 0.6
+        new_w = max(2, int(self.width * sx))
+        new_h = max(2, int(self.height * sy))
+        squashed = canvas.resize((new_w, new_h), Image.Resampling.BILINEAR)
+        out = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
+        out.alpha_composite(
+            squashed.crop((0, max(0, new_h - self.height), new_w, new_h)),
+            dest=(max(0, (self.width - new_w) // 2), max(0, self.height - new_h)))
+        return out
+
+    # ─── Rig v3 render path (delegates to HeadAssembly) ───
+
+    def _mouth_params(self, pose: PuppetPose) -> MouthParams:
+        """PuppetPose viseme channels → one 5-D MouthParams sample.
+
+        The outgoing/incoming viseme pair the actor computed is lerped in
+        PARAMETER space (the coarticulation glide), then the amplitude
+        envelope gates the jaw: rendered jaw = min(articulatory target,
+        envelope). Sound can CLOSE a mouth the aligner left open; it can
+        never force it wider than the phoneme's own shape.
+        """
+        def target(name: str) -> MouthParams:
+            try:
+                return self._mouth_targets[V(name)]
+            except (ValueError, KeyError):
+                return self._mouth_targets[V.REST]
+        p = MouthParams.lerp(target(pose.viseme), target(pose.viseme_to),
+                             pose.viseme_blend)
+        return MouthParams(min(p.jaw, pose.mouth_open), p.width,
+                           p.round, p.press, p.pull).clamped()
+
+    def _eye_state(self, pose: PuppetPose) -> EyeState:
+        """PuppetPose eye channels → EyeState (gaze in iris radii).
+
+        The actor emits saccades in head-local PIXELS; EyeState speaks
+        iris radii, so the offsets are normalized by the rig's own iris
+        — the same saccade amplitude reads identically on characters
+        drawn at different scales. `couple()` then applies the physio
+        couplings (brow↔lid, squint↔aperture) exactly as the assembly's
+        own scheduler would.
+        """
+        r = max(1.0, self.assembly.eyes.left.geo.iris_r)
+        return couple(EyeState(
+            blink_l=pose.blink, blink_r=pose.blink,
+            eye_dx=max(-1.0, min(1.0, pose.eye_dx / r)),
+            eye_dy=max(-1.0, min(1.0, pose.eye_dy / r)),
+            brow=pose.brow,
+            squint=max(0.0, -pose.brow) * 0.5))
+
+    def _render_v3(self, pose: PuppetPose,
+                   physics: Optional[Tuple[float, float]]) -> Image.Image:
+        """One frame through the unified head path.
+
+        sway/bounce deliberately stay OUT of HeadPose: the compositor
+        applies them as whole-frame camera offsets (PuppetActor.render
+        returns them), and folding them in here would move the head
+        twice relative to its own body.
+        """
+        overshoot_deg, lag_px = physics or (0.0, 0.0)
+        ch = FaceChannels(mouth=self._mouth_params(pose),
+                          viseme_class=pose.viseme,
+                          eyes=self._eye_state(pose),
+                          brow=pose.brow)
+        head = ht.HeadPose(
+            yaw=pose.head_yaw, nod=pose.head_nod,
+            tilt=math.radians(pose.head_tilt),
+            overshoot=math.radians(overshoot_deg),
+            # Spring-lag px → shear coefficient over the plate's height:
+            # the same deflection bends tall and short hair equally.
+            hair_shear=lag_px / max(1.0, float(self.assembly.plate_size[1])))
+        from_pose = pose.body_pose or self.rig.canonical_pose
+        to_pose = pose.body_pose_to or from_pose
+        canvas = self.assembly.render(ch, head, from_pose, to_pose,
+                                      pose.body_pose_blend,
+                                      (self.width, self.height))
+        return self._apply_squash(canvas, pose.squash)
