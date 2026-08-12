@@ -1,0 +1,14 @@
+# JEEVidya — developer/CI tooling (Terminal Plan Phase −1 & 0.2)
+# Deliberately separate from requirements.txt: the runtime pipeline must
+# never depend on the test stack, and the pure-logic CI gate must install
+# in seconds — not minutes — so it can run on every push.
+#
+#     pip install -r requirements-dev.txt
+#
+# The pure-logic suite (phonology, timing, cache keys, coalescing) needs
+# NOTHING below beyond pytest + hypothesis: tests/conftest.py derives each
+# test module's dependency closure from its imports and skips — loudly,
+# never silently — any module whose render stack is absent.
+pytest>=8.0
+hypothesis>=6.100          # property-based fuzzing of the G2P/viseme laws
+ruff>=0.6                  # code-health floor (lint; Phase −1)

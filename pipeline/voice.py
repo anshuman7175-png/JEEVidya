@@ -128,7 +128,6 @@ def _get_audio_duration_ms(audio_path: str) -> int:
     corrupting the whole timeline).
     """
     import re
-    import subprocess
     try:
         import imageio_ffmpeg
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()

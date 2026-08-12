@@ -1,0 +1,39 @@
+# JEEVidya — lint floor (Terminal Plan Phase −1: "code health floor").
+#
+# Philosophy: the lint gate exists to make BUG CLASSES unrepresentable,
+# not to bikeshed style. Every rule enabled here catches something that
+# has actually broken (or silently lied in) this pipeline:
+#
+#   F821  undefined name            — a string annotation hid one for months
+#   F811  shadowed redefinition     — a function-local `import subprocess`
+#                                     shadowed the module import
+#   F63x/F7xx  comparison/syntax    — always genuine defects
+#   B     bugbear                   — mutable defaults, loop-var capture
+#   PLE   pylint errors             — genuine error class only
+#
+# Style-only rule families are deliberately OUT. Adding them would bury
+# the signal (1600+ findings) under noise nobody will fix, and a lint
+# gate people ignore is worse than none. Widen this file rule-by-rule,
+# each with a reason, never wholesale.
+
+target-version = "py310"
+line-length = 100
+
+[lint]
+select = [
+    "E9",     # syntax / io errors
+    "F",      # pyflakes: undefined names, unused/shadowed imports, f-strings
+    "B",      # bugbear: mutable defaults, loop-variable capture, etc.
+    "PLE",    # pylint Errors only (not conventions/refactors)
+]
+ignore = [
+    "F401",   # unused import — several modules re-export deliberately
+    "E731",   # lambda assignment — used intentionally in DSL-ish spots
+    "B008",   # function call in default — settings lookups are intentional
+    "B023",   # loop-var binding warnings have false positives on closures
+              # that are consumed inside the same iteration
+]
+
+[lint.per-file-ignores]
+# Tests exercise private internals and shadow fixtures on purpose.
+"tests/*" = ["B011", "F841"]
