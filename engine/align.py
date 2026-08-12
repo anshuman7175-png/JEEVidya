@@ -501,7 +501,13 @@ def _align_even_split(wav_path: str, text: str) -> AlignedTurn:
     for tok in tokens:
         cl = phonemize(tok)
         if not cl:
-            cl = [(tok, v) for v in g2p(tok)][:1] or [(tok, V.REST)]
+            # Class-level G2P: one cluster per viseme. This previously
+            # kept only `[:1]`, which collapsed the whole word to a
+            # single mouth shape held for its entire duration. Since
+            # `romanize()` returns Devanagari unchanged when uroman is
+            # absent — and `phonemize()` then matches nothing — this is
+            # the *live* path for Hindi, not a rare corner.
+            cl = [(tok, v) for v in g2p(tok)] or [(tok, V.REST)]
         all_clusters.append((tok, cl))
         total_units += sum(1.6 if v in
                            (V.OPEN_A, V.MID_E, V.CLOSED_I,

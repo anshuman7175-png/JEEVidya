@@ -10,6 +10,8 @@ registered poses with headless bakes).
 """
 from __future__ import annotations
 
+import ast
+import importlib.util
 import math
 import os
 
@@ -22,6 +24,111 @@ import pytest
 # supposed to run in milliseconds anywhere) down with it.
 
 CHAR = "testchar_v3"
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_FIRST_PARTY = frozenset({"engine", "pipeline", "config", "factory",
+                          "agents", "tools", "tests"})
+_STDLIB_OK = frozenset({"__future__"})
+_spec_cache: dict = {}
+_heavy_cache: dict = {}
+
+
+def _installed(root: str) -> bool:
+    if root not in _spec_cache:
+        try:
+            _spec_cache[root] = importlib.util.find_spec(root) is not None
+        except (ImportError, ValueError):
+            _spec_cache[root] = False
+    return _spec_cache[root]
+
+
+def _imported_roots(path: str):
+    """Third-party roots and first-party modules a file imports."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+    except (OSError, SyntaxError):
+        return set(), set()
+    third, first = set(), set()
+    for node in ast.walk(tree):
+        names = []
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names = [node.module]
+        for name in names:
+            root = name.split(".")[0]
+            if root in _FIRST_PARTY:
+                first.add(name)
+            elif root not in _STDLIB_OK:
+                third.add(root)
+    return third, first
+
+
+def _missing_deps(module: str, seen=None) -> set:
+    """Uninstalled third-party packages a module needs, transitively
+    through first-party imports.
+
+    Derived from the source itself rather than a hand-maintained list, so
+    a test that grows a numpy dependency is classified correctly without
+    anyone remembering to update this file.
+    """
+    if module in _heavy_cache:
+        return _heavy_cache[module]
+    _heavy_cache[module] = set()          # cycle guard
+    seen = seen if seen is not None else set()
+    if module in seen:
+        return set()
+    seen.add(module)
+
+    path = os.path.join(_REPO_ROOT, module.replace(".", os.sep) + ".py")
+    if not os.path.exists(path):
+        pkg_init = os.path.join(_REPO_ROOT, module.replace(".", os.sep),
+                                "__init__.py")
+        if not os.path.exists(pkg_init):
+            return set()
+        path = pkg_init
+
+    third, first = _imported_roots(path)
+    missing = {r for r in third if not _installed(r)}
+    for dep in first:
+        missing |= _missing_deps(dep, seen)
+    _heavy_cache[module] = missing
+    return missing
+
+
+def pytest_ignore_collect(collection_path, config):
+    """Skip test modules whose render-stack dependencies are absent.
+
+    Without this the pure-logic gates cannot run at all on a machine that
+    lacks numpy/PIL/ffmpeg — pytest fails at *collection*, before a
+    single assertion executes, so a green-or-red signal is unavailable
+    exactly when it is cheapest to get.
+    """
+    path = str(collection_path)
+    if not (os.path.basename(path).startswith("test_") and path.endswith(".py")):
+        return None
+    third, first = _imported_roots(path)
+    missing = {r for r in third if r != "pytest" and not _installed(r)}
+    for dep in first:
+        missing |= _missing_deps(dep)
+    if missing:
+        _SKIPPED_MODULES[os.path.basename(path)] = sorted(missing)
+        return True
+    return None
+
+
+_SKIPPED_MODULES: dict = {}
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Never let a dependency-skipped module masquerade as a pass."""
+    if not _SKIPPED_MODULES:
+        return
+    terminalreporter.write_sep(
+        "=", "not collected — missing optional render stack")
+    for name, deps in sorted(_SKIPPED_MODULES.items()):
+        terminalreporter.write_line(f"  {name}: needs {', '.join(deps)}")
 BODY_SIZE = (220, 440)
 PLATE_SIZE = (100, 130)
 PLATE_OFFSET = (60.0, 30.0)
