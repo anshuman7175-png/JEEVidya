@@ -48,6 +48,7 @@ from pipeline.compositor import CinematicCompositor
 from pipeline.lipsync import (analyze_audio, compute_body_animation,
                               select_expression)
 from pipeline.timeline import Timeline, TurnSpan
+from tools.face_qc import GateResult
 
 _SILENT_FRAME = {"db": -80, "mouth_state": 0, "is_speaking": False}
 
@@ -593,6 +594,16 @@ class StreamingCompositor(CinematicCompositor):
                 actor.begin_span(span, is_my_turn=(key == speaker),
                                  emotion=emotion)
 
+        # Listener coupling (§XVII): every non-speaking actor tracks the
+        # speaker's affect with ~400 ms lag at 0.4 gain. This runs BEFORE
+        # any pose is built, so the reactive listening is part of the same
+        # frame it reacts to — and it is what kills the dead-eyed listener.
+        talker = self.actors.get(speaker)
+        if talker is not None:
+            for key, actor in self.actors.items():
+                if key != speaker:
+                    actor.track_speaker(t_ms, talker.affect)
+
         g_raw, c_raw = self.camera.get_both_characters(speaker)
         # Spring-smoothed camera + global drift/push-in (pro path)
         cx, cy = self.width / 2, self.height / 2
@@ -668,6 +679,28 @@ class StreamingCompositor(CinematicCompositor):
             ax, ay = self._safe_anchor(px, py, target_w, target_h)
             frame = paste_subpixel(frame, scaled_puppet, ax, ay)
         return frame
+
+    # ═══════════════════════════════════════
+    # AFFECT QC (§XVII) — performance-level gates
+    # ═══════════════════════════════════════
+
+    def affect_gates(self) -> List[GateResult]:
+        """One gate per rigged actor, from the performance just rendered.
+
+        These are the gates decoded pixels CANNOT catch: a nervous system
+        that snapped, or a face whose expression contradicts the state
+        driving it. They ride in the same QCReport the publisher checks,
+        so an incoherent performance cannot be uploaded.
+        """
+        gates: List[GateResult] = []
+        for key in sorted(self.actors):
+            violations = self.actors[key].affect_violations()
+            gates.append(GateResult(
+                name=f"affect_{key}", passed=not violations,
+                value=float(len(violations)), threshold=0.0,
+                detail="; ".join(violations) if violations
+                else "state continuous, channels coherent"))
+        return gates
 
     # ═══════════════════════════════════════
     # EXPLANATION SCENES (real LaTeX)

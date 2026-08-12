@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Dict, Optional, Tuple
+import zlib
+from typing import Dict, List, Optional, Tuple
 
 from PIL import Image
 
 from config import settings
-from engine.affect import AffectState, map_channels
+from engine.affect import (AffectState, ListenerCoupling, coherence_audit,
+                           map_channels, schedule_micro_expressions,
+                           verify_state_continuity)
 from engine.bone_engine import BoneEngine, PuppetPose
 from engine.gestures import GestureTrack
 from engine.pose_library import PoseLibrary, PoseState, DEFAULT_POSE
@@ -57,7 +60,10 @@ AFFECT_OF_EMOTION: Dict[str, str] = {
 # each scaled so affect COLOURS the performance instead of driving it.
 _AFFECT_BROW_GAIN = 0.55       # brow_height bias → pose.brow
 _AFFECT_TILT_GAIN = 14.0       # head_tilt_bias (±0.12) → degrees
-_AFFECT_LID_FLOOR = 0.35       # lid_openness below this adds a squint
+_AFFECT_PULL_GAIN = 0.60       # mouth_pull bias → pose.mouth_pull
+_AFFECT_PRESS_GAIN = 0.50      # mouth_press bias → pose.mouth_press
+# Listeners get affect at a fraction of the speaker's authority (visual
+# hierarchy: the speaker owns the frame), reusing the `soft` factor.
 
 # Emotion → pose baseline (all additive, gently applied)
 EMOTION_BASELINE: Dict[str, Dict[str, float]] = {
@@ -82,6 +88,13 @@ EMOTION_ENTRY_GESTURE: Dict[str, str] = {
 
 _BLINK_FRAMES = 6         # close(2) hold(1) open(3)
 _SILENT = {"db": -80.0, "mouth_state": 0, "is_speaking": False}
+
+
+def _stable_seed(*parts) -> int:
+    """A seed that is identical in every process (Law 4: bit-identical
+    re-renders). `hash()` of a str is salted per interpreter, so it can
+    never be used where determinism is a contract."""
+    return zlib.crc32("|".join(str(p) for p in parts).encode()) & 0xFFFF
 
 
 class PuppetActor:
@@ -121,7 +134,7 @@ class PuppetActor:
         # ONE nervous system per character (§XVII): a continuous
         # valence/arousal state every channel below reads from, so the
         # whole body agrees about how the character feels.
-        self.affect = AffectState(character, seed=hash(character) & 0xFFFF)
+        self.affect = AffectState(character, seed=_stable_seed(character))
         # Neutral channel biases until the first step() — never None, so
         # no read path needs a fallback branch.
         self.channels: Dict[str, float] = map_channels(
@@ -131,6 +144,18 @@ class PuppetActor:
         self.channel_tracks: Dict[str, list] = {"brow_height": [],
                                                 "gesture_gain": [],
                                                 "lid_openness": []}
+        # This actor's link to whoever is currently speaking. Owned per
+        # listener (not per pair) so its lag buffer follows the character
+        # even when the shot changes who is on screen.
+        self.listen_link = ListenerCoupling()
+        # The turn's own emotional target, re-asserted every frame before
+        # the lagged speaker state is blended in — otherwise the coupling
+        # would compound frame after frame and the listener would end up
+        # simply BEING the speaker.
+        self._affect_emotion = "neutral"
+        # Breath phase accumulator (radians): affect scales the RATE, and a
+        # rate change must bend the cycle, not jump it.
+        self._breath_phase = 0.0
 
         # Attack/release amplitude follower: the jaw moves like muscle,
         # not like a VU meter (kills mouth flutter on sustained vowels)
@@ -179,7 +204,15 @@ class PuppetActor:
         # Affect target for the turn. Emotions TRANSITION through the
         # second-order filters inside AffectState — a cut never snaps the
         # nervous system, which is why the head keeps its momentum.
-        self.affect.set_emotion(AFFECT_OF_EMOTION.get(emotion, "neutral"))
+        prev_affect = self._affect_emotion
+        self._affect_emotion = AFFECT_OF_EMOTION.get(emotion, "neutral")
+        self.affect.set_emotion(self._affect_emotion)
+        # Micro-expression grammar: the surprise onset BEFORE the smile.
+        # Scheduled from the transition itself, so it is deterministic per
+        # (character, turn) and survives a re-render bit-identically.
+        self.affect.micro = schedule_micro_expressions(
+            [(float(span.start_ms), prev_affect, self._affect_emotion)],
+            seed=_stable_seed(self.character, self._current_turn_id))
         text = span.turn.get("text", "")
         is_question = text.rstrip().endswith(("?", "?!"))
         if is_my_turn:
@@ -225,13 +258,52 @@ class PuppetActor:
                                   span.start_ms + self._rng.uniform(120, 300))
         self._was_active = is_my_turn
 
+    # ─── listener coupling (§XVII) ────────────────────────
+
+    def track_speaker(self, t_ms: float, speaker: AffectState) -> None:
+        """Blend the LAGGED speaker state into this (listening) actor.
+
+        Call once per frame, before `pose_at`, for every actor that is not
+        speaking. The turn's own emotional target is re-asserted first so
+        the coupling stays a 0.4-gain blend forever instead of compounding
+        into "the listener simply becomes the speaker" after ten frames.
+        """
+        if speaker is self.affect:
+            return
+        self.listen_link.observe(t_ms, speaker)
+        self.affect.set_emotion(self._affect_emotion)
+        self.listen_link.drive(t_ms, self.affect)
+
+    # ─── affect QC (§XVII) ────────────────────────────────
+
+    def affect_violations(self) -> List[str]:
+        """State continuity + affect coherence over the whole performance.
+
+        Three failures are representable and all three are caught here: a
+        snapping nervous system, a face that contradicts its own state,
+        and — the silent one — a channel that never moved at all because
+        its wiring was refactored away.
+        """
+        out = list(verify_state_continuity(self.affect.trajectory))
+        out += coherence_audit(self.affect.trajectory, self.channel_tracks)
+        for name, track in self.channel_tracks.items():
+            if len(track) >= 8 and (max(track) - min(track)) < 1e-6:
+                out.append(f"affect: channel '{name}' never moved — its "
+                           f"wiring into the pose is dead")
+        return [f"{self.character}: {v}" for v in out]
+
     # ─── blink scheduler (log-normal + double-blink) ──────
 
     def _next_blink_interval(self) -> float:
         """Log-normal distribution: median ~3s, range 1.5–7s.
-        Real human blink statistics, not uniform random."""
-        return max(1400.0, min(7500.0,
-                               math.exp(self._rng.gauss(8.0, 0.4))))
+        Real human blink statistics, not uniform random.
+
+        Divided by affect's `blink_rate_mult`: an aroused character blinks
+        up to 2.2× as often, a calm one barely more than half as often —
+        one of the strongest unconscious arousal cues there is."""
+        base = max(1400.0, min(7500.0, math.exp(self._rng.gauss(8.0, 0.4))))
+        rate = max(0.1, self.channels["blink_rate_mult"])
+        return max(650.0, min(9000.0, base / rate))
 
     def _blink_amount(self, t_ms: float, fps: int) -> float:
         if t_ms >= self._next_blink_ms:
@@ -256,12 +328,17 @@ class PuppetActor:
 
     def _update_saccades(self, t_ms: float) -> Tuple[float, float]:
         """Generate small random eye position jitter every 0.3–1.5s.
-        The brain reads motionless eyes as 'doll' — this breaks that."""
+        The brain reads motionless eyes as 'doll' — this breaks that.
+
+        Fixation length scales with affect's `gaze_hold_mult`: a calm,
+        positive character holds its gaze; an activated one checks away
+        more often."""
         if t_ms >= self._next_saccade_ms:
             # New fixation point: small random offset (max ±3px head-local)
             self._saccade_dx = self._rng.uniform(-2.5, 2.5)
             self._saccade_dy = self._rng.uniform(-1.5, 1.5)
-            self._next_saccade_ms = t_ms + self._rng.uniform(300, 1500)
+            hold = max(0.2, self.channels["gaze_hold_mult"])
+            self._next_saccade_ms = t_ms + self._rng.uniform(300, 1500) * hold
         return self._saccade_dx, self._saccade_dy
 
     # ─── speaking pose rotation ──────────────────────────
@@ -293,6 +370,19 @@ class PuppetActor:
         energy = base.get("energy", 1.0)
         pose = PuppetPose(energy=energy)
 
+        # 0 · Affect FIRST: the nervous system advances before any channel
+        #     reads it, so every channel in this frame sees ONE consistent
+        #     emotional state (that agreement is the whole point of §XVII).
+        #     Loudness pushes arousal; the listener contributes none of its
+        #     own (it is coupled to the speaker in track_speaker instead).
+        rms_norm = 0.0
+        if is_speaking and fa.get("is_speaking", False):
+            rms_norm = max(0.0, min(1.0, (fa.get("db", -80.0) + 50.0) / 35.0))
+        snap = self.affect.step(rms_norm, float(fa.get("f0_excursion", 0.0)),
+                                dt=1.0 / max(1, fps))
+        ch = self.affect.channels_with_micro(snap, t_ms)
+        self.channels = ch
+
         # 1 · Emotion baseline (listeners get a MUCH softened version)
         soft = 1.0 if is_speaking else 0.35   # was 0.55 → quieter listener
         pose.lean += base.get("lean", 0.0) * soft
@@ -304,13 +394,30 @@ class PuppetActor:
         # 1b · Question brow hold: sustained raise for question turns
         pose.brow += self._question_brow
 
+        # 1c · Affect biases. Brow, head-tilt and the mouth's expressive
+        #      axes are the face's own emotional colour; the listener gets
+        #      them at the same reduced authority as everything else.
+        pose.brow += ch["brow_height"] * _AFFECT_BROW_GAIN * soft
+        pose.head_tilt += ch["head_tilt_bias"] * _AFFECT_TILT_GAIN * soft
+        pose.mouth_pull = ch["mouth_pull"] * _AFFECT_PULL_GAIN
+        pose.mouth_press = ch["mouth_press"] * _AFFECT_PRESS_GAIN
+        pose.lid = ch["lid_openness"]
+
         # 2 · Breathing (always) + speech motion (reuses V2 tuning constants)
         #     Breathing amplitude modulated by a slow swell so it's never
-        #     metronomically regular (AI tell #1).
+        #     metronomically regular (AI tell #1). Rate and depth are
+        #     affect-driven: activation breathes FASTER and SHALLOWER, which
+        #     is the body tell an audience reads before the face.
         f = global_frame
         breath_mod = 0.7 + 0.3 * math.sin(f * 0.007)  # slow amplitude swell
-        pose.bounce += math.sin(f * settings.BODY_BREATHE_SPEED) \
-            * settings.BODY_BREATHE_AMPLITUDE * breath_mod
+        # The rate multiplier advances a PHASE accumulator, never scales
+        # `f` directly: scaling the argument of sin() would teleport the
+        # breath mid-cycle every time arousal moved.
+        self._breath_phase += settings.BODY_BREATHE_SPEED \
+            * ch["breath_rate_mult"]
+        pose.bounce += math.sin(self._breath_phase) \
+            * settings.BODY_BREATHE_AMPLITUDE * breath_mod \
+            * ch["breath_depth_mult"]
         if is_speaking and fa.get("is_speaking", False):
             pose.bounce += math.sin(f * settings.BODY_SPEAK_SPEED) \
                 * settings.BODY_SPEAK_BOUNCE * energy
@@ -329,19 +436,23 @@ class PuppetActor:
                 self.gestures.schedule("micro_nod", t_ms, scale=0.30)
                 self._last_listener_nod_ms = t_ms
 
-        # 3 · Gesture track (keyword triggers, entry gestures, reactions)
+        # 3 · Gesture track (keyword triggers, entry gestures, reactions),
+        #     scaled by affect's gesture_gain: the SAME gesture library
+        #     reads as reserved or animated depending on how the character
+        #     feels, instead of needing a second set of "excited" gestures.
         g = self.gestures.sample(t_ms)
-        pose.lean += g["lean"]
-        pose.head_nod += g["head_nod"]
-        pose.bounce += g["bounce"]
-        pose.sway += g["sway"]
-        pose.squash += g["squash"]
-        pose.brow += g["brow"]
-        yaw_target += g["head_yaw"]
+        gain = ch["gesture_gain"]
+        pose.lean += g["lean"] * gain
+        pose.head_nod += g["head_nod"] * gain
+        pose.bounce += g["bounce"] * gain
+        pose.sway += g["sway"] * gain
+        pose.squash += g["squash"] * gain
+        pose.brow += g["brow"] * gain
+        yaw_target += g["head_yaw"] * gain
 
         # 3a · Head tilt: alternate direction on emphasis beats so the
         #      head traces ARCS instead of bouncing on one axis
-        gesture_tilt = g["head_tilt"]
+        gesture_tilt = g["head_tilt"] * gain
         if abs(gesture_tilt) > 1.0:
             gesture_tilt *= self._tilt_sign
             self._tilt_sign *= -1.0   # flip for next emphasis
@@ -412,6 +523,13 @@ class PuppetActor:
         pose.lean = self._chase("lean", pose.lean, 0.22)
         pose.head_tilt = self._chase("head_tilt", pose.head_tilt, 0.18)  # was 0.25
         pose.brow = self._chase("brow", pose.brow, 0.20)  # was 0.3
+
+        # 7 · Record what was actually RENDERED (not what the matrix said)
+        #     so the coherence audit can catch a face whose expression
+        #     disagrees with its own emotional state.
+        self.channel_tracks["brow_height"].append(pose.brow)
+        self.channel_tracks["gesture_gain"].append(gain)
+        self.channel_tracks["lid_openness"].append(pose.lid)
         return pose
 
     def _chase(self, name: str, target: float, rate: float) -> float:

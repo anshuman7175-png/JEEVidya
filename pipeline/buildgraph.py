@@ -387,6 +387,25 @@ class VideoBuild:
                 say("QC", 98, f"temporal gauntlet FAILED: {ge}")
                 if strict:
                     raise
+            # 2c · affect coherence (Part XVII): decoded pixels can prove a
+            #      frame is sharp and a cut is smooth, but only the
+            #      performance layer knows whether the face agreed with the
+            #      nervous system driving it. Same manifest, same publisher.
+            try:
+                comp = getattr(self, "_comp_holder", {}).get("c")
+                if comp is not None:
+                    a_gates = comp.affect_gates()
+                    for gate in a_gates:
+                        qc.add(gate)
+                    if a_gates:
+                        say("QC", 98, f"affect: "
+                                      f"{sum(g.passed for g in a_gates)}"
+                                      f"/{len(a_gates)} actors coherent")
+            except Exception as ae:              # noqa: BLE001
+                result["affect_error"] = str(ae)
+                say("QC", 98, f"affect audit FAILED: {ae}")
+                if strict:
+                    raise
             extra: Dict[str, Any] = {"fps": self.fps, "title": self.title}
             ledger_path = result.get("beats")
             if ledger_path and os.path.exists(ledger_path):
@@ -482,7 +501,10 @@ class VideoBuild:
                 dna=self.dna))
 
         # ── one segment node per turn ──
+        # Kept on `self` as well: the delivery stage asks the very
+        # compositor that rendered the frames for its affect gates.
         holder: Dict[str, Any] = {}
+        self._comp_holder = holder
 
         def compositor():
             # Lazy, shared: character art / rigs load once for all segments
