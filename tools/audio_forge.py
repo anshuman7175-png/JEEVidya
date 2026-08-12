@@ -123,7 +123,6 @@ def sfx_whoosh(seconds: float = 0.55, seed: int = 11) -> np.ndarray:
     noise = _noise(n, seed)
     sweep = np.linspace(300, 4200, n)
     # Ring-modulate noise into the sweep band, then band-shape
-    t = _t(seconds)
     carrier = np.sin(2 * np.pi * np.cumsum(sweep) / SR).astype(np.float32)
     x = _lowpass_fft(noise * carrier, 5000.0)
     return x * _env(n, 0.25, 0.45) * 0.9
@@ -132,7 +131,6 @@ def sfx_whoosh(seconds: float = 0.55, seed: int = 11) -> np.ndarray:
 def sfx_pop(seconds: float = 0.16, seed: int = 12) -> np.ndarray:
     """Sine blip with a pitch drop + click transient — UI/text pops."""
     n = int(SR * seconds)
-    t = _t(seconds)
     freq = np.linspace(900, 420, n)
     x = np.sin(2 * np.pi * np.cumsum(freq) / SR).astype(np.float32)
     x[:64] += _noise(64, seed) * 0.5                       # click
@@ -142,7 +140,6 @@ def sfx_pop(seconds: float = 0.16, seed: int = 12) -> np.ndarray:
 def sfx_riser(seconds: float = 1.6, seed: int = 13) -> np.ndarray:
     """Tension riser into reveals: detuned saws sweeping up + noise swell."""
     n = int(SR * seconds)
-    t = _t(seconds)
     x = np.zeros(n, dtype=np.float32)
     for det in (0.0, 0.7, -0.7):
         freq = np.linspace(70, 460 + det * 8, n) * (1 + det * 0.004)

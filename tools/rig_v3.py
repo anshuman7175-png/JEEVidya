@@ -419,7 +419,7 @@ def fit_mouth_target(observed_outer: np.ndarray, observed_inner: np.ndarray,
                     best, best_err, improved = cand, err, True
         if not improved:
             step *= 0.5
-    return {name: float(v) for name, v in zip(PARAM_NAMES, best)}
+    return {name: float(v) for name, v in zip(PARAM_NAMES, best, strict=True)}
 
 
 # ═══════════════════════════════════════════
@@ -698,4 +698,4 @@ def _darken(rgb, f: float) -> Tuple[int, int, int]:
 
 def _mix(a, b, t: float) -> Tuple[int, int, int]:
     a = a or b
-    return tuple(int(av + (bv - av) * t) for av, bv in zip(a, b))
+    return tuple(int(av + (bv - av) * t) for av, bv in zip(a, b, strict=True))

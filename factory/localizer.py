@@ -68,7 +68,7 @@ class Localizer:
                 raise RuntimeError(
                     f"translation returned {len(translated)} lines "
                     f"for {len(lines)} inputs")
-            for turn, text in zip(speaking, translated):
+            for turn, text in zip(speaking, translated, strict=True):
                 turn["text"] = text
             variant["title"] = f"{dialogue.get('title', '')} [{language}]"
         return variant

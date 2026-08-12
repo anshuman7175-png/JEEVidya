@@ -635,8 +635,8 @@ class BoneEngine:
             canvas.alpha_composite(self.body_img, dest=(0, 0))
 
         # 2 · Facial Animation Pass: Eyelids, Brows, and 10-Class Viseme Mouth Overlay
-        # face_dx = 0.0 (facial features locked 100% to character landmark coordinates)
-        face_dx = 0.0
+        # Facial features are locked 100% to character landmark coordinates
+        # (no face_dx drift term).
 
         # 2a. Eyelid Blinks (smooth descending vertical glide).
         # y_closed anchors to the eye-box TOP (matching _compose_head) so a

@@ -19,6 +19,8 @@ on a bare interpreter.
 """
 from __future__ import annotations
 
+from itertools import pairwise
+
 from hypothesis import given, settings, strategies as st
 
 from engine.visemes import (JAW, SUBFRAMES, VOWELS, V, VisemeEvent,
@@ -168,7 +170,7 @@ def test_coalesce_conserves_span_contiguity_and_min_duration(evs, min_dur):
     assert out, "coalescing must never empty a non-empty timeline"
     assert abs(out[0].start_ms - first) < 1e-6
     assert abs(out[-1].end_ms - last) < 1e-6
-    for a, b in zip(out, out[1:]):
+    for a, b in pairwise(out):
         assert abs(b.start_ms - a.end_ms) < 1e-6, "gap opened by merge"
     # every survivor meets the floor — or is the irreducible last event
     assert len(out) == 1 or all(e.dur >= min_dur - 1e-6 for e in out)

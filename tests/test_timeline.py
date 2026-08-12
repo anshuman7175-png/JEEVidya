@@ -1,6 +1,7 @@
 """Tier 0 — Timeline: drift must be structurally zero, words speech-locked."""
 import os
 import random
+from itertools import pairwise
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,7 +40,7 @@ def test_segments_tile_perfectly():
     turns = [_turn(i, random.randrange(100, 5000, 100)) for i in range(50)]
     tl = Timeline(turns, fps=30)
     assert sum(s.end_frame - s.start_frame for s in tl.spans) == tl.total_frames
-    for prev, cur in zip(tl.spans, tl.spans[1:]):
+    for prev, cur in pairwise(tl.spans):
         assert prev.end_frame == cur.start_frame
 
 

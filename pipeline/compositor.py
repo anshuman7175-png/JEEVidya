@@ -190,8 +190,8 @@ class CinematicCompositor:
             )
 
         # Layer 3: Topic banner (top)
-        title = turn.get("text", "")[:40] if speaker != "explanation" else ""
-        # We don't render title on every frame - just the scene indicator
+        # Topic banner text is intentionally not rendered per-frame — only
+        # the scene indicator appears here (see _render_scene_indicator).
 
         # Layer 4: Caption text (bottom)
         if speaker != "explanation" and frame_audio.get("is_speaking", False):

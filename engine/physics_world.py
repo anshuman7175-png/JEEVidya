@@ -147,7 +147,7 @@ class PhysicsWorld:
         """Knowledge-transfer arc: sparks lobbed from speaker to listener.
         Initial velocity solves the ballistic arc under current gravity."""
         g = max(0.05, self.gravity[1] + 0.25)
-        for i in range(count):
+        for _ in range(count):
             t = life * (0.7 + 0.3 * self.rng.random())
             vx = (x2 - x1) / t
             vy = (y2 - y1) / t - 0.5 * g * t

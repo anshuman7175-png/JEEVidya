@@ -230,7 +230,7 @@ class VoiceEngine:
                 profile["pitch"], audio_path, vtt_path)
         except Exception as e:
             print(f"  [Voice] Error on turn {turn_id}: {e}")
-            raise RuntimeError(f"edge-tts failed for turn {turn_id}: {e}")
+            raise RuntimeError(f"edge-tts failed for turn {turn_id}: {e}") from e
 
         # Get actual duration from the generated file
         duration_ms = 0
