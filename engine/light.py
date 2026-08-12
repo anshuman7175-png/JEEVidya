@@ -61,7 +61,7 @@ def rim_light(char_img: Image.Image, side: float = 1.0,
     rim = np.zeros((*alpha.shape, 4), dtype=np.uint8)
     rim[..., 0], rim[..., 1], rim[..., 2] = color
     rim[..., 3] = (edge * 255 * strength).astype(np.uint8)
-    rim_img = Image.fromarray(rim, "RGBA").filter(
+    rim_img = Image.fromarray(rim).filter(
         ImageFilter.GaussianBlur(max(1, shift // 2)))
 
     out = Image.alpha_composite(char_img, rim_img)
@@ -92,7 +92,7 @@ def ambient_wrap(char_img: Image.Image,
         (arr[..., :3].mean(axis=2, keepdims=True) / 255.0 + 0.35)
     result = arr.copy()
     result[..., :3] = np.clip(rgb, 0, 255)
-    out = Image.fromarray(result.astype(np.uint8), "RGBA")
+    out = Image.fromarray(result.astype(np.uint8))
     _cache[key] = out
     return out
 
@@ -141,14 +141,14 @@ def bloom(frame: Image.Image, threshold: int = 190,
     arr = np.asarray(rgb, dtype=np.float32)
 
     bright = np.clip(arr - threshold, 0, 255) * (255.0 / max(1, 255 - threshold))
-    small = Image.fromarray(bright.astype(np.uint8), "RGB").resize(
+    small = Image.fromarray(bright.astype(np.uint8)).resize(
         (rgb.width // downsample, rgb.height // downsample),
         Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(6))
     halo = np.asarray(small.resize(rgb.size, Image.Resampling.BILINEAR),
                       dtype=np.float32)
 
     out = 255.0 - (255.0 - arr) * (255.0 - halo * strength) / 255.0  # screen
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
 
 def halation(frame: Image.Image, threshold: int = 215,
@@ -161,7 +161,7 @@ def halation(frame: Image.Image, threshold: int = 215,
 
     bright = np.clip(arr.max(axis=2) - threshold, 0, 255) \
         * (255.0 / max(1, 255 - threshold))
-    small = Image.fromarray(bright.astype(np.uint8), "L").resize(
+    small = Image.fromarray(bright.astype(np.uint8)).resize(
         (rgb.width // 4, rgb.height // 4),
         Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(9))
     glow = np.asarray(small.resize(rgb.size, Image.Resampling.BILINEAR),
@@ -171,7 +171,7 @@ def halation(frame: Image.Image, threshold: int = 215,
     out[..., 0] += glow            # full red bleed
     out[..., 1] += glow * 0.32     # a little orange
     out[..., 2] += glow * 0.06
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
 
 def chromatic_aberration(frame: Image.Image,
@@ -191,7 +191,7 @@ def chromatic_aberration(frame: Image.Image,
     out[:, :edge, 0] = arr[:, :edge, 0]                      # keep
     out[:, shift:edge, 0] = arr[:, :edge - shift, 0]         # R inward L
     out[:, w - edge:w - shift, 2] = arr[:, w - edge + shift:, 2]  # B inward R
-    return Image.fromarray(out, "RGB")
+    return Image.fromarray(out)
 
 
 def god_rays(size: Tuple[int, int],

@@ -302,7 +302,7 @@ def _slice_layers(rig: Rig, img: Image.Image) -> None:
         ys_nz, xs_nz = np.nonzero(mask)
         x0, x1 = int(xs_nz.min()), int(xs_nz.max()) + 1
         y0, y1 = int(ys_nz.min()), int(ys_nz.max()) + 1
-        crop = Image.fromarray(layer_arr[y0:y1, x0:x1], "RGBA")
+        crop = Image.fromarray(layer_arr[y0:y1, x0:x1])
         fname = f"{name}.png"
         crop.save(os.path.join(d, fname))
         rig.layers[name] = Layer(name=name, file=fname, offset=(x0, y0))
@@ -479,7 +479,7 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             gain = float(np.clip(gain, 0.80, 1.25))
             off = float(np.clip(off, -24.0, 24.0))
             out[..., c] = np.clip(out[..., c] * gain + off, 0, 255)
-        return Image.fromarray(out.astype(np.uint8), "RGBA")
+        return Image.fromarray(out.astype(np.uint8))
 
     # Base frame's own landmarks — used to inpaint the base mouth under
     # tight hybrid bakes. Detected once, reused per viseme.
@@ -668,7 +668,7 @@ def _bake_visemes_from_art(rig: Rig, img: Image.Image) -> bool:
             out = ba_arr.copy()
             out[..., :3] = np.clip(
                 ba_arr[..., :3] * (1.0 - m3) + fill * m3, 0, 255)
-            backing = Image.fromarray(out.astype(np.uint8), "RGBA")
+            backing = Image.fromarray(out.astype(np.uint8))
             # Feather the backing window edge (matches the base below,
             # but guards against sub-pixel drift under head rotation).
             cover_mask = _ellipse_mask(cw, ch, cover_rx, cover_ry, blur,
@@ -848,7 +848,7 @@ def _bake_lid_sprites(rig: Rig, img: Image.Image) -> None:
         out = pa.copy()
         out[..., :3] = np.clip(pa[..., :3] * (1.0 - m3) + fill * m3, 0, 255)
         out[..., 3] = 255
-        lid = Image.fromarray(out.astype(np.uint8), "RGBA")
+        lid = Image.fromarray(out.astype(np.uint8))
 
         # Lash line riding the lower lid edge (descends with the lid).
         ld = ImageDraw.Draw(lid)

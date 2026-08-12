@@ -279,7 +279,7 @@ class DepthHead:
                         borderMode=cv2.BORDER_CONSTANT,
                         borderValue=(0, 0, 0, 0))
         out = self._apply_shading(out, yaw)
-        return Image.fromarray(out, "RGBA")
+        return Image.fromarray(out)
 
     def _apply_shading(self, arr: np.ndarray, yaw_deg: float) -> np.ndarray:
         """Subtle brightness shift with yaw: the side turning away

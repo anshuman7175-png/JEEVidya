@@ -248,7 +248,7 @@ def gate_decoded_face(path: str,
                           "could not decode frames from the muxed file")
     worst = 0
     for arr in frames:
-        img = Image.fromarray(arr, "RGB")
+        img = Image.fromarray(arr)
         mask = color_mask(img, lip_rgb, tol)
         if mask.sum() < 40:      # no visible mouth in this frame is fine
             continue
