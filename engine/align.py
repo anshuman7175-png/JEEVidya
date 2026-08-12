@@ -438,7 +438,9 @@ def _align_mms_fa(wav_path: str, text: str) -> Optional[AlignedTurn]:
         frame_ms = total_ms / n_frames
 
         out_words: List[AlignedWord] = []
-        for word, spans in zip(words_raw, token_spans):
+        # aligner() contracts one span-list per input word; strict=True turns
+        # any drift between the two into a crash instead of dropped words.
+        for word, spans in zip(words_raw, token_spans, strict=True):
             if not spans:
                 continue
             w_start = spans[0].start * frame_ms
@@ -451,7 +453,10 @@ def _align_mms_fa(wav_path: str, text: str) -> Optional[AlignedTurn]:
                 # char-proportional: each cluster takes time ∝ its char count
                 lens = np.array([len(g) for g, _ in clusters], dtype=np.float64)
                 cum = np.concatenate([[0.0], np.cumsum(lens)]) / lens.sum()
-                for (g, vis), a, b in zip(clusters, cum[:-1], cum[1:]):
+                # len(cum) == len(clusters) + 1 by construction, so both
+                # boundary slices match clusters exactly — assert it stays so.
+                for (g, vis), a, b in zip(clusters, cum[:-1], cum[1:],
+                                          strict=True):
                     phones.append((g, vis.value,
                                    w_start + (w_end - w_start) * a,
                                    w_start + (w_end - w_start) * b))

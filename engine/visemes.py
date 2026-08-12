@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 import random
+from itertools import pairwise
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -174,7 +175,9 @@ def _delete_schwas(seq: List[V], inherent: List[bool]) -> List[V]:
         if vowel_count() > 1:
             alive[k] = False
 
-    return [v for v, a in zip(seq, alive) if a]
+    # alive is allocated as a parallel flag array over seq; strict=True
+    # keeps that invariant enforced rather than assumed.
+    return [v for v, a in zip(seq, alive, strict=True) if a]
 
 
 def _g2p_word(token: str) -> List[V]:
@@ -340,7 +343,9 @@ class VisemeTrack:
             total = sum(weights)
             span = max(40.0, w.end_ms - w.start_ms)
             t = w.start_ms
-            for p, wt in zip(phones, weights):
+            # weights is a comprehension over phones — same length by
+            # construction; strict=True pins that down.
+            for p, wt in zip(phones, weights, strict=True):
                 d = max(35.0, span * wt / total)
                 events.append(VisemeEvent(p, t, min(t + d, w.end_ms)))
                 t += d
@@ -495,7 +500,7 @@ class VisemeTrack:
     def breath_pauses(self) -> List[float]:
         """Centers of pauses > 500ms -- puppet plays one slow inhale."""
         out: List[float] = []
-        for a, b in zip(self.events, self.events[1:]):
+        for a, b in pairwise(self.events):
             gap = b.start_ms - a.end_ms
             if gap >= BREATH_PAUSE_MS:
                 out.append(a.end_ms + min(400.0, gap * 0.4))
