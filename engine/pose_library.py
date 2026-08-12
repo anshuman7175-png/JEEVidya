@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import os
+import random
 from typing import Dict, List, Optional, Tuple
 
 from PIL import Image
@@ -149,13 +150,12 @@ class PoseState:
       • Anti-ping-pong: tracks recent poses to prevent A→B→A cycling.
     """
 
-    def __init__(self, rng: Optional["random.Random"] = None):
-        import random as _random
+    def __init__(self, rng: Optional[random.Random] = None):
         self.current: str = DEFAULT_POSE
         self.target: str = DEFAULT_POSE
         self._blend_frame: int = 0
         self._blend_total: int = BLEND_FRAMES
-        self._rng = rng or _random.Random(42)
+        self._rng = rng or random.Random(42)
         self._recent: list = []  # last 3 poses — anti-ping-pong
 
     @property
