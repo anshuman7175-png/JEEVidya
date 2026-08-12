@@ -22,8 +22,16 @@ from PIL import Image
 
 from config import settings
 
-# Cross-fade duration in frames (at 30fps → ~5 frames ≈ 167ms)
-BLEND_FRAMES = 5
+# Cross-fade duration in frames (at 30fps → ~12 frames ≈ 400ms).
+# Sub-200ms full-body cross-fades read as strobing image swaps; real
+# weight shifts take 350–500ms.
+BLEND_FRAMES = 12
+
+# Minimum frames a pose must be HELD (fully committed) before another
+# transition may begin (at 30fps → ~1.3s). This is the single strongest
+# guard against rapid pose thrash: no matter how many gestures fire,
+# the body settles into each stance long enough to be READ.
+MIN_HOLD_FRAMES = 40
 
 # Default pose when nothing is triggered
 DEFAULT_POSE = "neutral"
@@ -157,6 +165,7 @@ class PoseState:
         self._blend_total: int = BLEND_FRAMES
         self._rng = rng or random.Random(42)
         self._recent: list = []  # last 3 poses — anti-ping-pong
+        self._hold_frames: int = MIN_HOLD_FRAMES  # frames since last commit
 
     @property
     def blend_t(self) -> float:
@@ -175,7 +184,13 @@ class PoseState:
 
     def set_target(self, pose: str, displacement: float = 0.5) -> None:
         """Request transition. displacement 0..1 controls speed:
-        high (big pose change) → fast fade; low (subtle) → slow graceful."""
+        high (big pose change) → fast fade; low (subtle) → slow graceful.
+
+        Requests arriving before MIN_HOLD_FRAMES have elapsed since the
+        last transition are DROPPED — the pose must land, be held, and be
+        read before the body is allowed to move again. Gesture triggers
+        re-fire every frame while active, so a dropped request that still
+        matters simply succeeds once the hold expires."""
         if pose == self.target:
             return
         if pose == self.current:
@@ -183,23 +198,26 @@ class PoseState:
             self._blend_frame = self._blend_total
             return
 
-        # Mid-blend interruption: commit the dominant pose
-        if self.is_blending:
-            self.current = self.target if self.blend_t >= 0.5 else self.current
+        # Minimum-hold gate: refuse mid-blend interruptions AND rapid
+        # re-targeting. Without this, keyword + beat + rotation triggers
+        # stack into a pose swap every few hundred milliseconds.
+        if self.is_blending or self._hold_frames < MIN_HOLD_FRAMES:
+            return
 
-        self.current = self.current  # lock commit
         self.target = pose
         self._blend_frame = 0
+        self._hold_frames = 0
 
-        # Displacement-adaptive frame count + jitter
+        # Displacement-adaptive frame count + jitter (all slowed 2.4×:
+        # sub-200ms full-body fades read as a strobing slideshow)
         if displacement > 0.7:
-            base = 3     # big change: fast to hide ghost overlap
+            base = 8     # big change: quicker to hide ghost overlap
         elif displacement > 0.3:
-            base = 5     # medium: smooth default
+            base = 12    # medium: smooth default
         else:
-            base = 7     # subtle: graceful ease
-        # ±1 frame jitter (breaks regularity)
-        self._blend_total = max(2, base + self._rng.choice([-1, 0, 1]))
+            base = 16    # subtle: graceful ease
+        # ±2 frame jitter (breaks regularity)
+        self._blend_total = max(6, base + self._rng.choice([-2, -1, 0, 1, 2]))
 
         # Track for anti-ping-pong
         self._recent.append(pose)
@@ -214,6 +232,7 @@ class PoseState:
 
     def step(self) -> Tuple[str, str, float]:
         """Advance one frame. Returns (from_pose, to_pose, eased_blend_t)."""
+        self._hold_frames += 1
         if self.current != self.target:
             self._blend_frame += 1
             if self._blend_frame >= self._blend_total:
