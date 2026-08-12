@@ -1,6 +1,7 @@
-"""10-class viseme engine: Devanagari + Latin G2P, raised-cosine
-coarticulation with bilabial dominance, anticipatory lip rounding,
-15ms/110ms amplitude envelope, and long-pause REST enforcement (C8)."""
+"""10-class viseme engine: Devanagari + Latin G2P with Ohala schwa
+deletion (C5), raised-cosine coarticulation with bilabial dominance,
+anticipatory lip rounding, 15ms/110ms amplitude envelope, and
+long-pause REST enforcement (C8)."""
 from __future__ import annotations
 
 import math
@@ -73,6 +74,18 @@ _DIGIT_G2P: Dict[int, List[V]] = {
     for d, name in enumerate(_DIGIT_NAMES)
 }
 
+# JEE content is saturated with exponents ("9.8 m/s²", "sin²θ"). These are
+# *spoken words*, not digits — and `"²".isdigit()` is True while
+# `int("²")` raises, so they must be handled before any digit branch.
+_SUPERSCRIPT_WORDS: Dict[str, str] = {
+    "\u00b2": "squared", "\u00b3": "cubed",
+    "\u00b9": "", "\u2070": "", "\u2074": "fourth", "\u207f": "n",
+}
+_SUPERSCRIPT_G2P: Dict[str, List[V]] = {
+    ch: [_LAT_MAP[c] for c in word if c in _LAT_MAP]
+    for ch, word in _SUPERSCRIPT_WORDS.items()
+}
+
 _VIRAMA = "\u094d"
 _NUKTA = "\u093c"
 _SKIP = set(_VIRAMA + _NUKTA + "\u0902\u0901\u0903\u093d\u093c\u0970")
@@ -86,33 +99,131 @@ BREATH_PAUSE_MS = 500.0  # gaps beyond this trigger a visible inhale
 
 # ---- G2P ----
 
-def g2p(text: str) -> List[V]:
-    """Grapheme to viseme, inherent 'a' insertion for bare Devanagari consonants."""
+def _is_dev_consonant(ch: str) -> bool:
+    return "\u0915" <= ch <= "\u0939"
+
+
+def _lookahead(chars: List[str], i: int) -> str:
+    """Next significant character, skipping nukta — which re-articulates
+    the preceding consonant (क → क़) without supplying a vowel. Without
+    the skip, क़ल reads as if क carried an inherent schwa."""
+    j = i + 1
+    while j < len(chars) and chars[j] == _NUKTA:
+        j += 1
+    return chars[j] if j < len(chars) else ""
+
+
+def _delete_schwas(seq: List[V], inherent: List[bool]) -> List[V]:
+    """Ohala's Hindi schwa-deletion rule (Terminal Plan C5).
+
+    Devanagari *writes* the inherent schwa that modern Hindi does not
+    *pronounce*: कमल is "kamal", not "kamala". Because OPEN_A carries the
+    largest jaw drop in the inventory (JAW == 1.0), a retained final
+    schwa is the single most visible lip-sync error available — the
+    character ends nearly every Hindi word with a wide-open mouth.
+
+    Two rules, applied right-to-left as Ohala specifies:
+      1. word-final inherent schwa deletes;
+      2. medial inherent schwa deletes in V C _ C V.
+
+    Only schwas this module *inserted* are eligible (`inherent`), so a
+    written matra can never be deleted — the invariant the plan demands.
+    A word is never left without a vowel, which protects monosyllables
+    like न ("na").
+    """
+    alive = [True] * len(seq)
+
+    def prev_alive(k: int) -> int:
+        j = k - 1
+        while j >= 0 and not alive[j]:
+            j -= 1
+        return j
+
+    def next_alive(k: int) -> int:
+        j = k + 1
+        while j < len(seq) and not alive[j]:
+            j += 1
+        return j if j < len(seq) else -1
+
+    def vowel_count() -> int:
+        return sum(1 for k, v in enumerate(seq) if alive[k] and v in VOWELS)
+
+    # Rule 1 — word-final. Only the last surviving segment qualifies.
+    for k in range(len(seq) - 1, -1, -1):
+        if not alive[k]:
+            continue
+        if inherent[k] and vowel_count() > 1:
+            alive[k] = False
+        break
+
+    # Rule 2 — medial, in V C _ C V (right-to-left, so already-deleted
+    # schwas correctly stop further deletion: कमल keeps its first 'a').
+    for k in range(len(seq) - 1, -1, -1):
+        if not alive[k] or not inherent[k]:
+            continue
+        c1 = prev_alive(k)
+        if c1 < 0 or seq[c1] in VOWELS:
+            continue
+        v0 = prev_alive(c1)
+        c2 = next_alive(k)
+        if v0 < 0 or seq[v0] not in VOWELS or c2 < 0 or seq[c2] in VOWELS:
+            continue
+        v2 = next_alive(c2)
+        if v2 < 0 or seq[v2] not in VOWELS:
+            continue
+        if vowel_count() > 1:
+            alive[k] = False
+
+    return [v for v, a in zip(seq, alive) if a]
+
+
+def _g2p_word(token: str) -> List[V]:
+    """One whitespace-delimited token → viseme run, with the inherent
+    schwa inserted and then deleted where Hindi drops it."""
     out: List[V] = []
-    chars = list(text)
+    inherent: List[bool] = []          # parallel flags: unwritten schwa
+    chars = list(token)
     for i, ch in enumerate(chars):
         if ch in _SKIP or ch.isspace():
             continue
         cls = _DEV_MAP.get(ch)
         if cls is not None:
             out.append(cls)
-            # Inherent schwa: bare consonant gets an 'a' unless followed by
-            # a vowel sign or virama
-            if "\u0915" <= ch <= "\u0939" and cls not in VOWELS:
-                nxt = chars[i + 1] if i + 1 < len(chars) else ""
-                if nxt not in _DEV_MAP or _DEV_MAP.get(nxt) not in VOWELS:
-                    if nxt != _VIRAMA:
-                        out.append(V.OPEN_A)   # schwa
+            inherent.append(False)
+            # Inherent schwa: a bare consonant gets an 'a' unless followed
+            # by a vowel sign or a virama.
+            if _is_dev_consonant(ch) and cls not in VOWELS:
+                nxt = _lookahead(chars, i)
+                if _DEV_MAP.get(nxt) not in VOWELS and nxt != _VIRAMA:
+                    out.append(V.OPEN_A)
+                    inherent.append(True)
             continue
         cls = _LAT_MAP.get(ch.lower())
         if cls is not None:
             out.append(cls)
+            inherent.append(False)
             continue
-        if ch.isdigit():
-            try:
-                out.extend(_DIGIT_G2P[int(ch)])   # spoken digit name
-            except (ValueError, KeyError):
-                pass
+        sup = _SUPERSCRIPT_G2P.get(ch)
+        if sup is not None:                          # exponent, spoken
+            for v in sup:
+                out.append(v)
+                inherent.append(False)
+            continue
+        if "0" <= ch <= "9":                         # ASCII digits only:
+            # `str.isdigit()` also accepts superscripts and other numeric
+            # forms that `int()` rejects outright.
+            for v in _DIGIT_G2P.get(int(ch), ()):    # spoken digit name
+                out.append(v)
+                inherent.append(False)
+    return _delete_schwas(out, inherent)
+
+
+def g2p(text: str) -> List[V]:
+    """Grapheme to viseme. Tokenized per word so that Ohala's word-final
+    schwa rule has a word boundary to anchor on."""
+    out: List[V] = []
+    for token in text.split():
+        out.extend(_g2p_word(token))
     # Collapse immediate repeats
     dedup: List[V] = []
     for v in out:

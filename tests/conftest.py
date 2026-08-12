@@ -14,11 +14,12 @@ import math
 import os
 
 import pytest
-from PIL import Image, ImageDraw
 
-from config import settings
-from engine.registration import SimilarityTransform
-from engine.rig import HeadGeometry, Layer, PoseEntry, Rig
+# PIL / engine.rig are imported lazily inside the builders below. A
+# module-level import here would make the whole tests/ directory
+# uncollectable without the render stack installed, which would take the
+# pure-logic suite (phonology, timing, cache keys — the tests that are
+# supposed to run in milliseconds anywhere) down with it.
 
 CHAR = "testchar_v3"
 BODY_SIZE = (220, 440)
@@ -30,7 +31,8 @@ PLATE_OFFSET = (60.0, 30.0)
 # synthetic art
 # ═══════════════════════════════════════════
 
-def _body_png() -> Image.Image:
+def _body_png():
+    from PIL import Image, ImageDraw
     img = Image.new("RGBA", BODY_SIZE, (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rectangle([70, 160, 150, 400], fill=(80, 60, 140, 255))    # torso
@@ -38,16 +40,18 @@ def _body_png() -> Image.Image:
     return img
 
 
-def _headless_png(tint: int = 0) -> Image.Image:
+def _headless_png(tint: int = 0):
     """Body with the head cut out (the D2 contract)."""
+    from PIL import Image, ImageDraw
     img = Image.new("RGBA", BODY_SIZE, (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rectangle([70, 160, 150, 400], fill=(80 + tint, 60, 140, 255))
     return img
 
 
-def _plate_png() -> Image.Image:
+def _plate_png():
     """Inpainted head plate: clean skin, no painted mouth or eyes."""
+    from PIL import Image, ImageDraw
     img = Image.new("RGBA", PLATE_SIZE, (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.ellipse([5, 5, PLATE_SIZE[0] - 5, PLATE_SIZE[1] - 5],
@@ -75,8 +79,9 @@ def _lid(cx: float, cy: float, half_w: float, bow: float) -> list:
 # rig builders
 # ═══════════════════════════════════════════
 
-def _base_rig() -> Rig:
+def _base_rig():
     """The shared v1 skeleton every variant builds on."""
+    from engine.rig import Layer, Rig
     rig = Rig(character=CHAR, size=BODY_SIZE, generated_by="manual")
     rig.joints = {"hips": (110.0, 400.0), "neck": (110.0, 160.0),
                   "head_center": (110.0, 100.0)}
@@ -91,7 +96,8 @@ def _base_rig() -> Rig:
     return rig
 
 
-def _head_geometry() -> HeadGeometry:
+def _head_geometry():
+    from engine.rig import HeadGeometry
     lm = [(float(8 + (i % 20) * 4.4), float(8 + (i // 20) * 4.8))
           for i in range(478)]
     return HeadGeometry(
@@ -129,6 +135,7 @@ def char_name() -> str:
 
 @pytest.fixture()
 def characters_dir(tmp_path, monkeypatch):
+    from config import settings
     root = tmp_path / "characters"
     root.mkdir()
     monkeypatch.setattr(settings, "CHARACTERS_DIR", str(root))
@@ -136,7 +143,8 @@ def characters_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def v1_rig(characters_dir) -> Rig:
+def v1_rig(characters_dir):
+    from engine.rig import Rig
     rig = _base_rig()
     rig_d = os.path.join(characters_dir, CHAR, "rig")
     os.makedirs(rig_d)
@@ -146,7 +154,9 @@ def v1_rig(characters_dir) -> Rig:
 
 
 @pytest.fixture()
-def v3_rig(characters_dir) -> Rig:
+def v3_rig(characters_dir):
+    from engine.registration import SimilarityTransform
+    from engine.rig import PoseEntry, Rig
     rig = _base_rig()
     rig_d = os.path.join(characters_dir, CHAR, "rig")
     os.makedirs(rig_d)
