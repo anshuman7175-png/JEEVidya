@@ -25,6 +25,7 @@ from typing import Dict, Optional, Tuple
 from PIL import Image
 
 from config import settings
+from engine.affect import AffectState, map_channels
 from engine.bone_engine import BoneEngine, PuppetPose
 from engine.gestures import GestureTrack
 from engine.pose_library import PoseLibrary, PoseState, DEFAULT_POSE
@@ -34,6 +35,29 @@ from engine.visemes import (AmplitudeEnvelope, VisemeTrack,
 
 # Character name → dialogue speaker key
 SPEAKER_OF = {"gudiya": "girl", "chintu": "boy"}
+
+# Script emotion tags (EMOTION_BASELINE below) → the affect engine's
+# vocabulary (engine.affect.EMOTION_TARGETS). The show's tags are a
+# performance dialect; affect speaks valence/arousal, so the two
+# vocabularies are reconciled ONCE, here, instead of at every read.
+AFFECT_OF_EMOTION: Dict[str, str] = {
+    "neutral": "neutral",
+    "curious": "curious",
+    "enthusiastic": "excited",
+    "confident": "proud",
+    "amazed": "surprised",
+    "thinking": "thinking",
+    "happy": "happy",
+    "explaining": "serious",
+    "dramatic": "excited",
+}
+
+# The affect matrix returns multipliers around 1.0 and biases around 0.0.
+# These are the only places the puppet lets that state touch a channel,
+# each scaled so affect COLOURS the performance instead of driving it.
+_AFFECT_BROW_GAIN = 0.55       # brow_height bias → pose.brow
+_AFFECT_TILT_GAIN = 14.0       # head_tilt_bias (±0.12) → degrees
+_AFFECT_LID_FLOOR = 0.35       # lid_openness below this adds a squint
 
 # Emotion → pose baseline (all additive, gently applied)
 EMOTION_BASELINE: Dict[str, Dict[str, float]] = {
@@ -94,6 +118,20 @@ class PuppetActor:
         self._current_turn_id: Optional[int] = None
         self._was_active = False
 
+        # ONE nervous system per character (§XVII): a continuous
+        # valence/arousal state every channel below reads from, so the
+        # whole body agrees about how the character feels.
+        self.affect = AffectState(character, seed=hash(character) & 0xFFFF)
+        # Neutral channel biases until the first step() — never None, so
+        # no read path needs a fallback branch.
+        self.channels: Dict[str, float] = map_channels(
+            self.affect.valence, self.affect.arousal)
+        # Per-channel rendered tracks + the state trajectory, for the
+        # affect-coherence audit (engine.affect.coherence_audit).
+        self.channel_tracks: Dict[str, list] = {"brow_height": [],
+                                                "gesture_gain": [],
+                                                "lid_openness": []}
+
         # Attack/release amplitude follower: the jaw moves like muscle,
         # not like a VU meter (kills mouth flutter on sustained vowels)
         self._env = AmplitudeEnvelope(settings.FPS)
@@ -137,6 +175,19 @@ class PuppetActor:
         """Called once when the timeline enters a new turn."""
         self._current_turn_id = span.turn.get("turn_id")
         energy = EMOTION_BASELINE.get(emotion, {}).get("energy", 1.0)
+
+        # Affect target for the turn. Emotions TRANSITION through the
+        # second-order filters inside AffectState — a cut never snaps the
+        # nervous system, which is why the head keeps its momentum.
+        self.affect.set_emotion(AFFECT_OF_EMOTION.get(emotion, "neutral"))
+        text = span.turn.get("text", "")
+        is_question = text.rstrip().endswith(("?", "?!"))
+        if is_my_turn:
+            self.affect.push_event("question" if is_question else "reveal")
+        else:
+            # The listener is being addressed, which is its own arousal
+            # bump — this is what stops the dead-eyed listener.
+            self.affect.push_event("addressed")
 
         if is_my_turn:
             self._viseme_track = VisemeTrack.from_words(span.words,
