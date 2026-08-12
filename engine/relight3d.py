@@ -46,7 +46,7 @@ def relight_character_3d(char_img: Image.Image,
 
     # 1. Analytical 3D Depth Map Z(x, y) from Alpha Silhouette Distance Transform
     # Distance from nearest edge gives organic cylindrical/spherical volume depth
-    alpha_img = Image.fromarray((alpha * 255).astype(np.uint8), mode="L")
+    alpha_img = Image.fromarray((alpha * 255).astype(np.uint8))
     # Multi-scale blur to generate smooth head/torso volume
     d1 = np.asarray(alpha_img.filter(ImageFilter.GaussianBlur(radius=max(2, w // 20))), dtype=np.float32) / 255.0
     d2 = np.asarray(alpha_img.filter(ImageFilter.GaussianBlur(radius=max(4, w // 8))), dtype=np.float32) / 255.0
@@ -92,7 +92,7 @@ def relight_character_3d(char_img: Image.Image,
 
     out_arr = arr.copy()
     out_arr[..., :3] = lit_rgb
-    out_img = Image.fromarray(out_arr.astype(np.uint8), mode="RGBA")
+    out_img = Image.fromarray(out_arr.astype(np.uint8))
 
     _relight_cache[key] = out_img
     return out_img

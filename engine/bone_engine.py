@@ -224,7 +224,7 @@ def _feather_crop_lid(lid: Image.Image, cut: int, eye_h: int) -> Image.Image:
     ramp = (np.arange(feather, dtype=np.float32) + 1.0) / float(feather)
     alpha[:feather, :] *= ramp[:, None]
     out = cropped.copy()
-    out.putalpha(Image.fromarray(alpha.astype(np.uint8), mode="L"))
+    out.putalpha(Image.fromarray(alpha.astype(np.uint8)))
     return out
 
 
@@ -435,7 +435,7 @@ class BoneEngine:
                 if fg_mask.any():
                     out_arr = np.zeros_like(arr_pose, dtype=np.uint8)
                     out_arr[fg_mask] = arr_pose[fg_mask].astype(np.uint8)
-                    self._hand_overlays[name] = Image.fromarray(out_arr, "RGBA")
+                    self._hand_overlays[name] = Image.fromarray(out_arr)
         except Exception:
             pass
 

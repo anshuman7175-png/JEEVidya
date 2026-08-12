@@ -262,7 +262,7 @@ class HeadAssembly:
             ramp = np.minimum(np.linspace(0, 1, h, dtype=np.float32) * 3.0,
                               np.linspace(1, 0, h, dtype=np.float32) * 3.0)
             a *= np.clip(ramp, 0.0, 1.0)[:, None]
-            shifted.putalpha(Image.fromarray(a.astype(np.uint8), "L"))
+            shifted.putalpha(Image.fromarray(a.astype(np.uint8)))
             plate.alpha_composite(shifted, (box[0], box[1]))
 
     # ─── step 3: THE affine ───────────────────────────────

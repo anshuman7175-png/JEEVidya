@@ -148,7 +148,7 @@ class GradientBackdrop:
         arr = np.ascontiguousarray(
             np.broadcast_to(rows[:, None, :], (self.height, self.width, 3))
         )
-        return Image.fromarray(arr, "RGB").convert("RGBA")
+        return Image.fromarray(arr).convert("RGBA")
 
 
 # ═══════════════════════════════════════════

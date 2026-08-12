@@ -226,7 +226,7 @@ class MouthRasterizer:
         h = arr.shape[0]
         ramp = np.linspace(top, bottom, h, dtype=np.float32)[:, None]
         arr[..., :3] *= ramp[..., None]
-        return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGBA")
+        return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
 
     def _draw_teeth(self, img: Image.Image,
                     inner: Sequence[Tuple[float, float]],
@@ -278,7 +278,7 @@ class MouthRasterizer:
         opaque = arr[..., 3:4] > 0
         arr[..., :3] = np.where(opaque, arr[..., :3] * shade[..., None],
                                 arr[..., :3])
-        out = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGBA")
+        out = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
         # A whisker of blur only on the alpha: the supersample already
         # anti-aliases geometry, this softens the vermilion border the way
         # painted art does.
@@ -324,7 +324,7 @@ class MouthRasterizer:
         gain = np.asarray(crop, dtype=np.float32)[..., None] / 128.0
         gain = np.clip(gain, 0.75, 1.25)
         arr[..., :3] = np.clip(arr[..., :3] * gain, 0, 255)
-        return Image.fromarray(arr.astype(np.uint8), "RGBA")
+        return Image.fromarray(arr.astype(np.uint8))
 
     # ─── composite ────────────────────────────────────────
 

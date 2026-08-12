@@ -277,7 +277,7 @@ def apply_directional_smear(img, dx: float, dy: float, taps: int):
         shifted = np.roll(np.roll(base, sy, axis=0), sx, axis=1)
         acc += shifted
     acc /= (taps + 1)
-    return Image.fromarray(np.clip(acc, 0, 255).astype(np.uint8), "RGBA")
+    return Image.fromarray(np.clip(acc, 0, 255).astype(np.uint8))
 
 
 # ═══════════════════════════════════════════

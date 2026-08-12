@@ -267,16 +267,16 @@ def inpaint(rgba: Image.Image, mask: np.ndarray) -> Image.Image:
     """
     arr = np.asarray(rgba.convert("RGBA")).copy()
     if mask.sum() == 0:
-        return Image.fromarray(arr, "RGBA")
+        return Image.fromarray(arr)
     try:
         import cv2
         rgb = np.ascontiguousarray(arr[..., :3])
         radius = max(3, int(0.02 * max(arr.shape[:2])))
         filled = cv2.inpaint(rgb, mask, radius, cv2.INPAINT_NS)
         arr[..., :3] = filled
-        return Image.fromarray(arr, "RGBA")
+        return Image.fromarray(arr)
     except Exception:
-        return Image.fromarray(_normalized_convolution(arr, mask), "RGBA")
+        return Image.fromarray(_normalized_convolution(arr, mask))
 
 
 def _normalized_convolution(arr: np.ndarray, mask: np.ndarray,
@@ -330,7 +330,7 @@ def shading_map(plate: Image.Image, lms_plate: np.ndarray,
     mean = float(region.mean()) or 1.0
     norm = np.clip(128.0 * region / mean, 0, 255).astype(np.uint8)
     out = Image.new("L", plate.size, 128)
-    out.paste(Image.fromarray(norm, "L"), (x0, y0))
+    out.paste(Image.fromarray(norm), (x0, y0))
     return out
 
 
@@ -490,7 +490,7 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     head_full = body_arr.copy().astype(np.float32)
     head_full[..., 3] = head_full[..., 3] * head_ramp
     head_crop = Image.fromarray(
-        np.clip(head_full[y0:y1, x0:x1], 0, 255).astype(np.uint8), "RGBA")
+        np.clip(head_full[y0:y1, x0:x1], 0, 255).astype(np.uint8))
     head_crop.save(os.path.join(d, "head_canonical.png"))
 
     # landmarks in plate space
@@ -601,11 +601,11 @@ def _bake_pose(rig: Rig, name: str, img: Image.Image, pose_lms: np.ndarray,
     headless = arr.copy().astype(np.float32)
     headless[..., 3] = headless[..., 3] * body_ramp
     hl_rel = os.path.join("headless", f"{name}.png")
-    Image.fromarray(np.clip(headless, 0, 255).astype(np.uint8), "RGBA") \
+    Image.fromarray(np.clip(headless, 0, 255).astype(np.uint8)) \
         .save(os.path.join(d, hl_rel))
 
     hm_rel = os.path.join("headmask", f"{name}.png")
-    Image.fromarray((np.clip(head_ramp, 0, 1) * 255).astype(np.uint8), "L") \
+    Image.fromarray((np.clip(head_ramp, 0, 1) * 255).astype(np.uint8)) \
         .save(os.path.join(d, hm_rel))
 
     # Occluder: head-region pixels whose ART differs from canonical —
@@ -622,7 +622,7 @@ def _bake_pose(rig: Rig, name: str, img: Image.Image, pose_lms: np.ndarray,
             out = np.zeros_like(arr)
             out[occ] = arr[occ]
             occ_rel = os.path.join("occluder", f"{name}.png")
-            Image.fromarray(out, "RGBA").save(os.path.join(d, occ_rel))
+            Image.fromarray(out).save(os.path.join(d, occ_rel))
             occluded = True
 
     return PoseEntry(name=name,

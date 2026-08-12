@@ -208,7 +208,7 @@ def whip_blur(frame: Image.Image, amount: float,
     acc += np.roll(arr, s // 2, axis=1)
     acc += np.roll(arr, s, axis=1)
     acc += np.roll(arr, -s // 3, axis=1)
-    return Image.fromarray((acc / 4.0).astype(np.uint8), "RGB")
+    return Image.fromarray((acc / 4.0).astype(np.uint8))
 
 
 def apply_frame_transform(pos_x: float, pos_y: float, scale: float,
