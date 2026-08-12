@@ -104,7 +104,9 @@ def interpolate_color(
     """Interpolate between two RGB(A) color tuples."""
     t = clamp(t)
     eased_t = easing(t)
+    # strict=True: silently zipping RGB against RGBA would drop the alpha
+    # channel mid-fade — make the shape mismatch a crash at the call site.
     return tuple(
         int(s + (e - s) * eased_t)
-        for s, e in zip(color_start, color_end)
+        for s, e in zip(color_start, color_end, strict=True)
     )

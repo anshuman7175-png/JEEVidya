@@ -55,7 +55,10 @@ class MouthParams:
         return (self.jaw, self.width, self.round, self.press, self.pull)
 
     def quantized_key(self) -> Tuple[float, ...]:
-        return tuple(round(v / q) * q for v, q in zip(self.as_tuple(), _Q))
+        # _Q must track as_tuple()'s arity; strict=True makes adding a sixth
+        # articulatory parameter without a quantum an immediate failure.
+        return tuple(round(v / q) * q
+                     for v, q in zip(self.as_tuple(), _Q, strict=True))
 
     def clamped(self) -> "MouthParams":
         c = lambda v: max(0.0, min(1.0, v))
@@ -65,11 +68,12 @@ class MouthParams:
     @staticmethod
     def lerp(a: "MouthParams", b: "MouthParams", t: float) -> "MouthParams":
         return MouthParams(*(av + (bv - av) * t for av, bv
-                             in zip(a.as_tuple(), b.as_tuple())))
+                             in zip(a.as_tuple(), b.as_tuple(), strict=True)))
 
     def distance(self, other: "MouthParams") -> float:
-        return math.sqrt(sum((a - b) ** 2 for a, b
-                             in zip(self.as_tuple(), other.as_tuple())))
+        return math.sqrt(sum((a - b) ** 2
+                             for a, b in zip(self.as_tuple(),
+                                             other.as_tuple(), strict=True)))
 
 
 # ═══════════════════════════════════════════
@@ -266,7 +270,7 @@ class MouthTrack:
             return p
         max_d = MAX_SLEW_PER_MS * dt
         vals = []
-        for a, b in zip(prev.as_tuple(), p.as_tuple()):
+        for a, b in zip(prev.as_tuple(), p.as_tuple(), strict=True):
             d = b - a
             vals.append(a + max(-max_d, min(max_d, d)))
         out = MouthParams(*vals)
@@ -321,7 +325,9 @@ def contour_distance(a: MouthParams, b: MouthParams, n: int = 48) -> float:
     ao, ai = lip_contour(a, n)
     bo, bi = lip_contour(b, n)
     d = 0.0
-    for (ax, ay), (bx, by) in zip(ao + ai, bo + bi):
+    # Both contours are generated at the same n; strict=True guards the
+    # metric against ever comparing partial point sets.
+    for (ax, ay), (bx, by) in zip(ao + ai, bo + bi, strict=True):
         d += math.hypot(ax - bx, ay - by)
     return d / (2 * n)
 

@@ -83,7 +83,7 @@ def main():
         sys.exit(1)
 
     print(f"\n{'=' * 60}")
-    print(f"  GUDIYA & CHINTU — Animated Shorts Factory")
+    print("  GUDIYA & CHINTU — Animated Shorts Factory")
     print(f"  Topic: {dialogue.get('title', 'Unknown')}")
     print(f"  Turns: {len(dialogue.get('turns', []))}")
     print(f"{'=' * 60}\n")
@@ -91,7 +91,7 @@ def main():
     output = run_dialogue_pipeline(dialogue, preview=args.preview)
 
     print(f"\n{'=' * 60}")
-    print(f"  ✓ SUCCESS!")
+    print("  ✓ SUCCESS!")
     print(f"  Output: {output}")
     print(f"{'=' * 60}\n")
 

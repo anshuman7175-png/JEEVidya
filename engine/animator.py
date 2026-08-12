@@ -70,9 +70,12 @@ class AnimatedProperty:
             return start + (end - start) * t
 
         if isinstance(start, tuple) and isinstance(end, tuple):
+            # Keyframes of one property must share shape; strict=True makes a
+            # (x, y) → (x, y, z) authoring mistake fail loudly instead of
+            # silently freezing the truncated components.
             return tuple(
                 s + (e - s) * t if isinstance(s, (int, float)) else s
-                for s, e in zip(start, end)
+                for s, e in zip(start, end, strict=True)
             )
 
         # For non-numeric types, snap at 50%

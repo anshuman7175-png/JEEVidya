@@ -75,7 +75,7 @@ class MathRenderer:
             fig.savefig(buf, format='png', transparent=True,
                         bbox_inches='tight', pad_inches=0.1, dpi=dpi)
             plt.close(fig)
-        except Exception as e:
+        except Exception:
             plt.close('all')
             # Fallback: render as plain text image
             return cls._render_plain_text(latex.strip('$'), color, font_size)
