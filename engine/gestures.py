@@ -284,7 +284,7 @@ class GestureTrack:
 
     def schedule_beats(self, words: Sequence, rng,
                        energy: float = 1.0,
-                       min_gap_ms: float = 2600.0) -> int:
+                       min_gap_ms: float = 4500.0) -> int:
         """Fill keyword-less stretches with small deterministic beat
         gestures (soft scale) so the speaker's hands stay ALIVE for the
         whole turn. Numbers get an automatic point — teachers count on
@@ -308,6 +308,17 @@ class GestureTrack:
                 n += 1
         return n
 
+    # Hard per-channel limits: overlapping gestures blend ADDITIVELY, and
+    # an entry gesture + keyword trigger + beat landing together used to
+    # sum to 2×–3× a single gesture's amplitude — the head/eyes/brows
+    # visibly "flew off" the face. Clamping the SUM (not each gesture)
+    # keeps overlaps natural while making the extremes physically sane.
+    _CHANNEL_LIMITS: Dict[str, float] = {
+        "lean": 10.0, "head_tilt": 12.0, "head_yaw": 0.85,
+        "head_nod": 1.0, "bounce": 60.0, "sway": 30.0,
+        "squash": 0.12, "brow": 1.2,
+    }
+
     def sample(self, t_ms: float) -> Dict[str, float]:
         out = {ch: 0.0 for ch in CHANNELS}
         # Only gestures whose window can contain t (max duration 1.5 s)
@@ -318,6 +329,11 @@ class GestureTrack:
             if 0.0 <= t_norm <= 1.0:
                 for ch, v in it.gesture.sample(t_norm).items():
                     out[ch] += v * it.scale
+        for ch, lim in self._CHANNEL_LIMITS.items():
+            if out[ch] > lim:
+                out[ch] = lim
+            elif out[ch] < -lim:
+                out[ch] = -lim
         return out
 
     def clear_before(self, t_ms: float) -> None:
@@ -327,17 +343,24 @@ class GestureTrack:
             del self._items[:cut]
             del self._starts[:cut]
 
+    # A full-body pose swap is the most violent thing a gesture can do to
+    # the silhouette. Soft beat gestures (scale ~0.35–0.55) should only
+    # move the bones — reserving image swaps for deliberate, full-strength
+    # gestures is what stops the "characters switching poses so fast" chaos.
+    _POSE_SWAP_MIN_SCALE = 0.60
+
     def active_pose(self, t_ms: float) -> str:
-        """Return the body_pose of the most recently triggered gesture
-        that has a pose mapping. Returns '' if no pose-bearing gesture
-        is active (caller should keep the current pose)."""
+        """Return the body_pose of the most recently triggered STRONG
+        gesture that has a pose mapping. Returns '' if no pose-bearing
+        gesture is active (caller should keep the current pose)."""
         lo = bisect.bisect_left(self._starts, t_ms - 2000)
         hi = bisect.bisect_right(self._starts, t_ms)
         best_pose = ""
         best_start = -1e9
         for it in self._items[lo:hi]:
             t_norm = (t_ms - it.start_ms) / it.gesture.duration_ms
-            if 0.0 <= t_norm <= 1.0 and it.gesture.body_pose:
+            if 0.0 <= t_norm <= 1.0 and it.gesture.body_pose \
+                    and it.scale >= self._POSE_SWAP_MIN_SCALE:
                 if it.start_ms > best_start:
                     best_start = it.start_ms
                     best_pose = it.gesture.body_pose

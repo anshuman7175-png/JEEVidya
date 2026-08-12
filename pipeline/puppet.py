@@ -178,6 +178,10 @@ class PuppetActor:
         # for more natural, less reactive feel
         self._smooth = {"head_yaw": 0.0, "lean": 0.0, "head_tilt": 0.0,
                         "brow": 0.0}
+        # Asymmetric mouth smoothing state: the jaw OPENS fast (muscle
+        # snap) and CLOSES slow (relaxation). Without this filter the
+        # per-frame viseme jaw target strobes at frame rate.
+        self._mouth_smooth = 0.0
 
     def _init_alt_torsos(self) -> None:
         """Crop torso regions from each pose image and register with BoneEngine."""
@@ -347,16 +351,18 @@ class PuppetActor:
                             "hand_on_heart", "counting")
 
     def _speaking_pose(self, t_ms: float) -> str:
-        """Deterministically cycle natural talking poses every 2.4–4.2 s
+        """Deterministically cycle natural talking poses every 4.5–7.5 s
         so the hands gesticulate through the whole turn (only poses the
-        character actually has are eligible)."""
+        character actually has are eligible). Rotation is slow on purpose:
+        combined with keyword/beat gestures it used to produce a pose swap
+        every 1–2 s, which reads as frantic channel-surfing."""
         if t_ms >= self._next_speak_pose_ms:
             options = [p for p in self._SPEAK_POSE_ROTATION
                        if p in self.pose_lib.pose_names
                        and p != self._speak_pose]
             if options:
                 self._speak_pose = options[self._rng.randrange(len(options))]
-            self._next_speak_pose_ms = t_ms + self._rng.uniform(2400, 4200)
+            self._next_speak_pose_ms = t_ms + self._rng.uniform(4500, 7500)
         return self._speak_pose
 
     # --- pose synthesis ---
@@ -491,8 +497,14 @@ class PuppetActor:
             pose.viseme = primary
             pose.viseme_to = secondary
             pose.viseme_blend = blend
-            # Jaw controls mouth openness, gated by amplitude envelope
-            pose.mouth_open = jaw * (0.22 + 0.78 * max(0.0, min(1.0, amp_level)))
+            # Jaw controls mouth openness, gated by amplitude envelope,
+            # then run through an asymmetric attack/release filter so the
+            # mouth moves at MUSCLE rate (open ~50ms, close ~130ms) instead
+            # of strobing to a new target every single frame.
+            raw_open = jaw * (0.22 + 0.78 * max(0.0, min(1.0, amp_level)))
+            k = 0.55 if raw_open > self._mouth_smooth else 0.28
+            self._mouth_smooth += (raw_open - self._mouth_smooth) * k
+            pose.mouth_open = self._mouth_smooth
             # Speech-beat nod: only on amplitude peaks (> 0.6)
             if self._viseme_track.word_started_within(t_ms) \
                     and fa.get("is_speaking", False) \
@@ -500,7 +512,11 @@ class PuppetActor:
                 pose.head_nod += 0.12 * energy
         else:
             pose.viseme, pose.viseme_to = "REST", "REST"
-            pose.viseme_blend, pose.mouth_open = 0.0, 0.0
+            # Release toward closed instead of snapping shut mid-frame
+            self._mouth_smooth *= 0.72
+            if self._mouth_smooth < 0.01:
+                self._mouth_smooth = 0.0
+            pose.viseme_blend, pose.mouth_open = 0.0, self._mouth_smooth
 
         # 5 · Blink (log-normal intervals + double-blink)
         pose.blink = self._blink_amount(t_ms, fps)
