@@ -890,6 +890,47 @@ def _load_body(character: str) -> Image.Image:
     raise FileNotFoundError(f"No source image for character '{character}'")
 
 
+def bake_v3(rig: Rig, img: Optional[Image.Image] = None) -> bool:
+    """Rig v3 bake (Part III) layered on top of the v1 slices: head plate
+    with the painted features inpainted out, per-pose Umeyama+IRLS
+    registration with headless/occluder bakes, and 5-D mouth targets
+    fitted from the character's own viseme art.
+
+    The MediaPipe detector is injected so `tools/rig_v3` stays free of it.
+
+    A failed bake is not fatal to rig *building* — the rig is marked v2
+    and its v3 blocks are cleared, so `Rig.require_v3()` refuses it at
+    render time instead of placing the face with body.png's boxes (D1).
+    Returns True when the rig is renderable v3 afterwards.
+    """
+    from engine.registration import RegistrationError
+    from tools import rig_v3
+
+    img = img if img is not None else _load_body(rig.character)
+    try:
+        report = rig_v3.bake(rig, img, _detect_landmarks)
+    except (rig_v3.BakeError, RegistrationError) as e:
+        rig.version = 2
+        rig.head = None
+        rig.poses = {}
+        rig.mouth_targets = {}
+        print(f"  [RigV3] {rig.character}: v3 bake FAILED — {e}")
+        print(f"  [RigV3] {rig.character}: saved as v2 — the render path "
+              f"will refuse it (no heuristic face placement).")
+        return False
+
+    rig.version = 3
+    print(f"  [RigV3] {rig.character}: ✓ head plate + "
+          f"{report.poses} registered pose(s), "
+          f"{report.occluders} occluder(s), "
+          f"{report.targets} mouth target(s) fitted")
+    print(f"  [RigV3] {rig.character}: worst pose RMS "
+          f"{report.worst_rms:.3f}px, seam error {report.seam_err:.2e}")
+    for note in report.notes:
+        print(f"  [RigV3] {note}")
+    return rig.is_v3()
+
+
 def rebake(rig: Rig) -> Rig:
     """Re-slice layers + re-bake sprites from the CURRENT rig geometry.
     Used by /studio after joints or face boxes are nudged."""
@@ -899,15 +940,19 @@ def rebake(rig: Rig) -> Rig:
     if not _bake_visemes_from_art(rig, img):
         _bake_synth_visemes(rig, img)
     _bake_lid_sprites(rig, img)
+    # A nudged neck moves the seam, so a v3 rig must re-bake its plate
+    # and headless bodies from the new geometry or the two disagree.
+    if rig.head is not None:
+        bake_v3(rig, img)
     rig.save()
     return rig
 
 
-def build_rig(character: str, force: bool = False) -> Rig:
-    """Full auto-rig: detect → skeleton → slice → bake → save."""
+def build_rig(character: str, force: bool = False, v3: bool = True) -> Rig:
+    """Full auto-rig: detect → skeleton → slice → bake → v3 bake → save."""
     if not force and os.path.exists(rig_path(character)):
         rig = Rig.load(character)
-        if rig.is_complete():
+        if rig.is_complete() and (rig.is_v3() or not v3):
             print(f"  [Rig] {character}: rig exists (use --force to rebuild)")
             return rig
 
@@ -930,25 +975,31 @@ def build_rig(character: str, force: bool = False) -> Rig:
     if not _bake_visemes_from_art(rig, img):
         _bake_synth_visemes(rig, img)
     _bake_lid_sprites(rig, img)
+    if v3:
+        bake_v3(rig, img)
+    else:
+        # An explicitly skipped bake must not claim v3 in the JSON.
+        rig.version = 2
     rig.save()
 
     mode = "face landmarks" if geo["generated_by"] == "mediapipe" else \
            "HEURISTIC (nudge joints in /studio!)"
-    print(f"  [Rig] {character}: ✓ rig built via {mode}")
+    print(f"  [Rig] {character}: ✓ rig built via {mode}, "
+          f"version {rig.version}{' (renderable)' if rig.is_v3() else ''}")
     print(f"        neck=({rig.joint('neck')[0]:.0f},{rig.joint('neck')[1]:.0f}) "
           f"hips=({rig.joint('hips')[0]:.0f},{rig.joint('hips')[1]:.0f}) "
           f"visemes={len([v for v in rig.visemes if not v.startswith('LID')])}")
     return rig
 
 
-def build_all(force: bool = False) -> List[Rig]:
+def build_all(force: bool = False, v3: bool = True) -> List[Rig]:
     rigs = []
     for name in sorted(os.listdir(settings.CHARACTERS_DIR)):
         char_dir = os.path.join(settings.CHARACTERS_DIR, name)
         if not os.path.isdir(char_dir):
             continue
         try:
-            rigs.append(build_rig(name, force=force))
+            rigs.append(build_rig(name, force=force, v3=v3))
         except FileNotFoundError as e:
             print(f"  [Rig] {name}: skipped ({e})")
     return rigs
@@ -959,8 +1010,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="JEEVidya puppet rig builder")
     ap.add_argument("character", nargs="?", default=None)
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--no-v3", dest="v3", action="store_false",
+                    help="skip the v3 bake (rig stays v2 = not renderable)")
     args = ap.parse_args()
     if args.character:
-        build_rig(args.character, force=args.force)
+        build_rig(args.character, force=args.force, v3=args.v3)
     else:
-        build_all(force=args.force)
+        build_all(force=args.force, v3=args.v3)

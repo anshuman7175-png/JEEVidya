@@ -370,6 +370,23 @@ class VideoBuild:
         try:
             from pipeline.delivery_qc import audit, write_manifest
             qc = audit(video_path)
+            # 2b · the adversarial gauntlet (Part XXI): flicker, freeze,
+            #      teleport, jitter, letterbox, chroma drift. Delivery QC
+            #      asks "is this frame shippable?"; the gauntlet asks the
+            #      harder question, "given the frame before it?" — and its
+            #      gates land in the SAME manifest the publisher checks.
+            try:
+                from tools.gauntlet import run as gauntlet_run
+                temporal = gauntlet_run(video_path)
+                for gate in temporal.gates:
+                    qc.add(gate)
+                say("QC", 98, f"gauntlet: "
+                              f"{'PASS' if temporal.passed else 'FAIL'}")
+            except Exception as ge:              # noqa: BLE001
+                result["gauntlet_error"] = str(ge)
+                say("QC", 98, f"temporal gauntlet FAILED: {ge}")
+                if strict:
+                    raise
             extra: Dict[str, Any] = {"fps": self.fps, "title": self.title}
             ledger_path = result.get("beats")
             if ledger_path and os.path.exists(ledger_path):

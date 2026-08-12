@@ -6,7 +6,7 @@ One command surface for the whole studio.
 
   jvmake setup [--force]           Fresh-clone bootstrap: stage+rig+font+forge+doctor
   jvmake doctor                    Full environment + asset health report
-  jvmake rig [character] [--force] Tier 1: build skeletal puppet rig(s)
+  jvmake rig [character] [--force] Tier 1: build skeletal puppet rig(s) + v3 bake
   jvmake render script.json        Incremental DAG render to MP4 (--force to rebuild)
   jvmake preview script.json       6s half-res preview (~seconds, not minutes)
   jvmake graph script.json         Show the build DAG + cache status (no build)
@@ -14,6 +14,7 @@ One command surface for the whole studio.
   jvmake forge [--force|--motifs]  Tier 2: synthesize the SFX/BGM library
   jvmake script "topic here"       Tier 3: Director Agent (draft→critique→revise)
   jvmake critic video.mp4          Tier 3: vision QC review → defect report
+  jvmake gauntlet video.mp4        Tier 3: adversarial TEMPORAL QC gates
   jvmake batch [topics.txt]        Tier 4: overnight factory (resumable)
   jvmake publish [bundle_dir]      Tier 4: upload / export ready-to-post bundles
   jvmake flywheel [--pull]         Tier 4: bandit report + gene recommendation
@@ -120,6 +121,17 @@ def cmd_doctor(_args) -> int:
                       detail + " — verify joints in /studio", warn=True)
             else:
                 check(f"character: {name} puppet rig", True, detail)
+            # Rig v3 is the render gate (Part III): a pre-v3 rig is
+            # refused by require_v3() rather than rendered wrong.
+            if rig.is_v3():
+                check(f"character: {name} rig v3", True,
+                      f"{len(rig.poses)} registered pose(s), "
+                      f"worst RMS {rig.worst_pose_rms():.2f}px, "
+                      f"{len(rig.mouth_targets)} fitted mouth target(s)")
+            else:
+                check(f"character: {name} rig v3", False,
+                      f"version {rig.version} — rendering is REFUSED. "
+                      f"Run: python3 jvmake.py rig {name} --force")
         else:
             check(f"character: {name} puppet rig", False,
                   "run: python3 jvmake.py rig — characters stay static "
@@ -369,9 +381,9 @@ def cmd_setup(args) -> int:
     return doctor_rc
 
 
-# ─────────────────────────────────────────────
+# ───────────────────���─────────────────────────
 # stage (Tier 1 — pose asset staging)
-# ─────────────────────────────────────────────
+# ───────────────────────────────────��─────────
 
 def cmd_stage(_args) -> int:
     from tools.pose_stager import stage_all
@@ -389,16 +401,24 @@ def cmd_stage(_args) -> int:
 def cmd_rig(args) -> int:
     from tools.rig_builder import build_rig, build_all
     print("\n═══ Tier 1 · Puppet Rig Builder ═══\n")
+    v3 = getattr(args, "v3", True)
     if args.character:
-        build_rig(args.character, force=args.force)
+        rigs = [build_rig(args.character, force=args.force, v3=v3)]
     else:
-        rigs = build_all(force=args.force)
+        rigs = build_all(force=args.force, v3=v3)
         if not rigs:
             print("  No characters found — add images under "
                   f"{settings.CHARACTERS_DIR}/<name>/body.png")
             return 1
+    stale = [r.character for r in rigs if not r.is_v3()]
+    if stale:
+        print(f"\n  NOT RENDERABLE (pre-v3): {', '.join(stale)}")
+        print("  The render path refuses a pre-v3 rig rather than placing "
+              "the face with body.png's boxes. Install mediapipe, confirm "
+              "each body.png shows a detectable face, then re-run "
+              "`python3 jvmake.py rig --force`.")
     print("\n  Nudge joints visually:  python3 app.py → /studio\n")
-    return 0
+    return 1 if stale else 0
 
 
 # ─────────────────────────────────────────────
@@ -437,6 +457,23 @@ def cmd_forge(args) -> int:
 # ─────────────────────────────────────────────
 # Tier 3 — critic
 # ─────────────────────────────────────────────
+
+def cmd_gauntlet(args) -> int:
+    """Adversarial temporal QC (Part XXI) — the gates that only exist
+    between adjacent frames: flicker, freeze, teleport, jitter,
+    letterbox, chroma drift."""
+    from tools.gauntlet import BURST_FRAMES, BURSTS, run
+    print("\n═══ Tier 3 · Adversarial Gauntlet ═══\n")
+    report = run(args.video,
+                 bursts=args.bursts if args.bursts is not None else BURSTS,
+                 burst_frames=(args.burst_frames if args.burst_frames
+                               is not None else BURST_FRAMES))
+    print(report.summary() + "\n")
+    if args.report:
+        report.save(args.report)
+        print(f"  → {args.report}\n")
+    return 0 if report.passed else 1
+
 
 def cmd_critic(args) -> int:
     from agents.critic import Critic
@@ -573,6 +610,9 @@ def main() -> int:
     p = sub.add_parser("rig", help="build skeletal puppet rig(s) (Tier 1)")
     p.add_argument("character", nargs="?", default=None)
     p.add_argument("--force", action="store_true", help="rebuild existing rigs")
+    p.add_argument("--no-v3", dest="v3", action="store_false",
+                   help="skip the v3 bake (head plate, pose registration, "
+                        "mouth targets) — the result is NOT renderable")
 
     p = sub.add_parser("dna", help="show a title's Visual DNA genome (Tier 2)")
     p.add_argument("title")
@@ -584,6 +624,15 @@ def main() -> int:
 
     p = sub.add_parser("critic", help="vision QC review of a video (Tier 3)")
     p.add_argument("video")
+
+    p = sub.add_parser("gauntlet",
+                       help="adversarial temporal QC of a video (Tier 3)")
+    p.add_argument("video")
+    p.add_argument("--bursts", type=int, default=None,
+                   help="contiguous-frame bursts sampled across the runtime")
+    p.add_argument("--burst-frames", type=int, default=None,
+                   help="frames decoded per burst")
+    p.add_argument("--report", default=None, help="write the report JSON here")
 
     p = sub.add_parser("batch", help="overnight factory over topics.txt (Tier 4)")
     p.add_argument("topics", nargs="?", default=None)
@@ -622,6 +671,7 @@ def main() -> int:
         "dna": cmd_dna,
         "forge": cmd_forge,
         "critic": cmd_critic,
+        "gauntlet": cmd_gauntlet,
         "batch": cmd_batch,
         "publish": cmd_publish,
         "flywheel": cmd_flywheel,
