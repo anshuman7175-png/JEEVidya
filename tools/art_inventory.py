@@ -150,7 +150,7 @@ def run_inventory() -> InventoryReport:
 
 
 def print_report(report: InventoryReport) -> None:
-    print(f"\n═══ Art Inventory ═══\n")
+    print("\n═══ Art Inventory ═══\n")
     print(f"  SOURCE ART ({len(report.source_ok)} verified, "
           f"{len(report.source_bad)} bad)")
     for rel in report.source_ok:

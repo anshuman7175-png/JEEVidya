@@ -83,18 +83,56 @@ def _detect_landmarks(img: Image.Image) -> Optional[List[Tuple[float, float]]]:
 
     rgb = Image.new("RGB", img.size, (255, 255, 255))
     rgb.paste(img, mask=img.split()[3])
-    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.asarray(rgb))
 
-    opts = vision.FaceLandmarkerOptions(
-        base_options=tp.BaseOptions(model_asset_path=model),
-        running_mode=vision.RunningMode.IMAGE, num_faces=1,
-        min_face_detection_confidence=0.2, min_face_presence_confidence=0.2)
-    with vision.FaceLandmarker.create_from_options(opts) as lm:
-        res = lm.detect(mp_img)
-    if not res.face_landmarks:
-        return None
+    def _run(frame: Image.Image, conf: float):
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
+                          data=np.asarray(frame))
+        opts = vision.FaceLandmarkerOptions(
+            base_options=tp.BaseOptions(model_asset_path=model),
+            running_mode=vision.RunningMode.IMAGE, num_faces=1,
+            min_face_detection_confidence=conf,
+            min_face_presence_confidence=conf)
+        with vision.FaceLandmarker.create_from_options(opts) as lm:
+            res = lm.detect(mp_img)
+        return res.face_landmarks[0] if res.face_landmarks else None
+
+    # Attempt 1 — full frame at the standard confidence floor.
     w, h = img.size
-    return [(p.x * w, p.y * h) for p in res.face_landmarks[0]]
+    pts = _run(rgb, 0.2)
+    if pts:
+        return [(p.x * w, p.y * h) for p in pts]
+
+    # Retry ladder — stylized cartoon faces sometimes slip past the
+    # detector when the head is small relative to the frame. Cropping to
+    # the head region (top of the alpha silhouette) makes the face
+    # dominate the frame, which is dramatically more reliable than
+    # whole-frame rescaling. Landmarks are always mapped back to the
+    # ORIGINAL image's pixel space regardless of which rung matched.
+    alpha = np.asarray(img.split()[3])
+    nz = np.nonzero(alpha > 40)
+    if nz[0].size:
+        ys, xs = nz
+        x0, x1 = int(xs.min()), int(xs.max())
+        y0, y1 = int(ys.min()), int(ys.max())
+        cy1 = y0 + max(1, int((y1 - y0) * 0.55))   # head ≈ top 55%
+        for scale in (1.0, 1.5, 2.0):
+            crop = rgb.crop((x0, y0, x1, cy1))
+            cw, ch_ = crop.size
+            if scale != 1.0:
+                crop = crop.resize((max(1, int(cw * scale)),
+                                    max(1, int(ch_ * scale))), Image.LANCZOS)
+            pts = _run(crop, 0.2)
+            if pts:
+                print(f"  [Rig] face found via head-crop retry "
+                      f"(scale {scale:g}x)")
+                return [(x0 + p.x * cw, y0 + p.y * ch_) for p in pts]
+
+    # Last resort — full frame with a minimal confidence floor.
+    pts = _run(rgb, 0.05)
+    if pts:
+        print("  [Rig] face found on low-confidence retry")
+        return [(p.x * w, p.y * h) for p in pts]
+    return None
 
 
 def _silhouette(alpha: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
