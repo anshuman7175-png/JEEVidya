@@ -1,233 +1,264 @@
 {
-  "_comment": "Persistent registry of the uploaded viseme/mouth reference art. Files land in assets/mouths/ (gitignored); re-fetch any time with: python -m tools.fetch_mouth_art",
-  "version": 1,
-  "dest_dir": "assets/mouths",
+  "_comment": "Single authoritative record of the committed mouth/viseme source art. Files live in assets/mouth_art/ and ARE committed to git (see .gitignore negation). jvmake art verifies every entry byte-for-byte via sha256 and can re-fetch from source_url if needed. Derived files (assets/mouths/, assets/poses/, assets/characters/, rigs) stay ignored and rebuildable.",
+  "version": 2,
+  "art_dir": "assets/mouth_art",
   "characters": {
     "chintu": {
-      "prefix": "m1",
-      "style": "3D chibi boy, black round glasses, orange shirt over white tee, khaki pants, orange sneakers, grey studio backdrop"
+      "style": "3D chibi boy, black round glasses, orange shirt over white tee, khaki pants, orange sneakers, grey studio backdrop",
+      "background": "opaque flat grey"
     },
-    "mitthu": {
-      "prefix": "m2",
-      "style": "2D chibi girl, brown high ponytail, red hoodie, black rolled jeans, red sneakers, holding a pencil, white backdrop"
+    "gudiya": {
+      "style": "2D chibi girl, brown high ponytail, red hoodie, black rolled jeans, red sneakers, holding a pencil, white backdrop",
+      "background": "opaque flat white"
     }
   },
+  "viseme_mapping": {
+    "chintu": {
+      "a": "REST",
+      "b": "BILABIAL",
+      "c": "DENTAL",
+      "d": "SPARE",
+      "e": "OPEN_A",
+      "f": "MID_E",
+      "g": "CLOSED_I",
+      "h": "ROUNDED_TENSE",
+      "i": "ROUNDED_LAX",
+      "j": "LABIODENTAL"
+    },
+    "gudiya": {
+      "a": "REST",
+      "b": "BILABIAL",
+      "c": "DENTAL",
+      "d": "MID_E",
+      "e": "OPEN_A",
+      "f": "SPARE",
+      "g": "CLOSED_I",
+      "h": "ROUNDED_TENSE",
+      "i": "ROUNDED_LAX",
+      "j": "LABIODENTAL"
+    }
+  },
+  "pose_source_letter": "a",
   "assets": [
     {
-      "id": "m1b",
       "character": "chintu",
-      "file": "assets/mouths/m1b.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1b-KVwiuIq3DtBOzjlNEvcm7LYadxsImA.png",
+      "letter": "a",
+      "file": "assets/mouth_art/chintu/a.png",
+      "viseme": "REST",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1a-TPBt7D7PUXGz4sQ5YP65rjO4d335SG.png",
+      "sha256": "03adf082fd997c168b8786c826513633c47629bcb3cade6f53a19c189fcfe31e",
+      "bytes": 1762467,
+      "width": 941,
+      "height": 1672
+    },
+    {
+      "character": "chintu",
+      "letter": "b",
+      "file": "assets/mouth_art/chintu/b.png",
+      "viseme": "BILABIAL",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1b-UySX2fa2AMh7Y2Gj2uILJHycSgd74w.png",
       "sha256": "59900cb0a1032ea82e0d1bb4678fe57076895a61cc200a988bc43f71754674b2",
       "bytes": 1729115,
       "width": 941,
-      "height": 1672,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1672
     },
     {
-      "id": "m1c",
       "character": "chintu",
-      "file": "assets/mouths/m1c.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1c-VzNjRAArzXfPDQmI5Qy2q8rvxbbwaF.png",
+      "letter": "c",
+      "file": "assets/mouth_art/chintu/c.png",
+      "viseme": "DENTAL",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1c-lRM2QKJtzFSl3tqElgXayS31fyJebO.png",
       "sha256": "b7b24f525a13d4d698470aadcd99ebdfedaa23230c1d1e2f34b6df45a2bba3c8",
       "bytes": 1770129,
       "width": 941,
-      "height": 1672,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1672
     },
     {
-      "id": "m1d",
       "character": "chintu",
-      "file": "assets/mouths/m1d.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1d-eNwd3BQJ6Tvu2CcMVgMPRqZS4KuZvW.png",
+      "letter": "d",
+      "file": "assets/mouth_art/chintu/d.png",
+      "viseme": "SPARE",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1d-E6Hfwgw74LNQv2k8TG1rmcbvm7eg23.png",
       "sha256": "12ef55727fde981860d7bdfd14916ce647a25e280277913eb5f4f2ef2d5758c4",
       "bytes": 1769889,
       "width": 941,
-      "height": 1672,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1672
     },
     {
-      "id": "m1e",
       "character": "chintu",
-      "file": "assets/mouths/m1e.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1e-FwEjdFyh9uDs8GtnxuwhW7F3GjKaz4.png",
+      "letter": "e",
+      "file": "assets/mouth_art/chintu/e.png",
+      "viseme": "OPEN_A",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1e-GMueobkT3POSBAoZJQQnMaAqUj6AXw.png",
       "sha256": "ba368a3d36757f2475f6f6103013086afc4272a0981320798229e14695ef4aaa",
       "bytes": 1734356,
       "width": 941,
-      "height": 1672,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1672
     },
     {
-      "id": "m1f",
       "character": "chintu",
-      "file": "assets/mouths/m1f.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1f-O4WS7rCkqmfsJu2l4juwUUvA2n15Cw.png",
+      "letter": "f",
+      "file": "assets/mouth_art/chintu/f.png",
+      "viseme": "MID_E",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1f-hGwOb2tzIZlaAaXOxcR8SntEKh7Thn.png",
       "sha256": "f16624988d5b1e8d5b265ee2dc313026d5e17347bd78b39fae673fdf6702cb42",
       "bytes": 1736957,
       "width": 941,
-      "height": 1672,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1672
     },
     {
-      "id": "m1g",
       "character": "chintu",
-      "file": "assets/mouths/m1g.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1g-LoaDRnGXtiCZr81XOXaPqpSa18kyW9.png",
+      "letter": "g",
+      "file": "assets/mouth_art/chintu/g.png",
+      "viseme": "CLOSED_I",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1g-HOGpKPYzHEVhwv197wFavutdzZdlWX.png",
       "sha256": "7aca5ed6a4b7db2b6e416e26fe13aa0de6c308eef5bede615025b9ce0e328603",
       "bytes": 1693033,
       "width": 941,
-      "height": 1672,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1672
     },
     {
-      "id": "m1h",
       "character": "chintu",
-      "file": "assets/mouths/m1h.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1h-yVubsGNgbrZJDnsqr383ZvIx6oD4BW.png",
+      "letter": "h",
+      "file": "assets/mouth_art/chintu/h.png",
+      "viseme": "ROUNDED_TENSE",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1h-Grbopx0IaHOX4esULxRSi6quwy8Jvi.png",
       "sha256": "f976475d8b65e918d64a29f0597b6cf719a2137edebbf1b003d6656567a5c5e8",
       "bytes": 1720649,
       "width": 941,
-      "height": 1672,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1672
     },
     {
-      "id": "m1i",
       "character": "chintu",
-      "file": "assets/mouths/m1i.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1i-OFVufEq794QY9UG30n6ezJVmyMdWO7.png",
+      "letter": "i",
+      "file": "assets/mouth_art/chintu/i.png",
+      "viseme": "ROUNDED_LAX",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1i-u3smE6gkFObBgiGqsKAPE0U8bGeVqK.png",
       "sha256": "8bc3c85c45434196996b4758f58b9bab1955c04b2cf8c0fa2d7284e5c5667b78",
       "bytes": 1698719,
       "width": 941,
-      "height": 1672,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1672
     },
     {
-      "id": "m1j",
       "character": "chintu",
-      "file": "assets/mouths/m1j.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1j-8RPoKYBtuV8z0lFK7jSxtpjjBti5Jk.png",
+      "letter": "j",
+      "file": "assets/mouth_art/chintu/j.png",
+      "viseme": "LABIODENTAL",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m1j-Z9m5XFIGjmP1KbWGS5IqOA1jSi8zo5.png",
       "sha256": "6a25078274ddf767f7f3066edfc505d2747b2c52157393289c08d5256692cbff",
       "bytes": 1746340,
       "width": 941,
-      "height": 1672,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1672
     },
     {
-      "id": "m2b",
-      "character": "mitthu",
-      "file": "assets/mouths/m2b.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2b-9SrWVPxAbwoR1lnoLkBlqXgpHXExau.png",
+      "character": "gudiya",
+      "letter": "a",
+      "file": "assets/mouth_art/gudiya/a.png",
+      "viseme": "REST",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2a-PYak1QZYIokuKHhbn2x6UJCRyWkElL.png",
+      "sha256": "a6c4f098cfb3791b78f3ca66cfdd37a1a835319a042b9807f5c34b82608abf2d",
+      "bytes": 1574365,
+      "width": 1254,
+      "height": 1254
+    },
+    {
+      "character": "gudiya",
+      "letter": "b",
+      "file": "assets/mouth_art/gudiya/b.png",
+      "viseme": "BILABIAL",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2b-iiUDSjQoy6PRNuTiAcJnaMSzaJAcCU.png",
       "sha256": "9eb6d79340333be90fc007bcce0d3f87518dff482be2f4305383a55591a578b4",
       "bytes": 1517588,
       "width": 1254,
-      "height": 1254,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1254
     },
     {
-      "id": "m2c",
-      "character": "mitthu",
-      "file": "assets/mouths/m2c.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2c-7B12jaaQlsrml37frOOuHgNGCYlGtM.png",
+      "character": "gudiya",
+      "letter": "c",
+      "file": "assets/mouth_art/gudiya/c.png",
+      "viseme": "DENTAL",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2c-wiA5yIcUw8cpzdftrMKHGJ9gFAHX9Z.png",
       "sha256": "c62202fb1d5c7097ede5e0a5c6e86f9ed090b493dfb8efa96ddc9dba30b87b06",
       "bytes": 1533757,
       "width": 1254,
-      "height": 1254,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1254
     },
     {
-      "id": "m2d",
-      "character": "mitthu",
-      "file": "assets/mouths/m2d.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2d-aPFNVahtak9MrFe4PBkTFVclohIfXz.png",
+      "character": "gudiya",
+      "letter": "d",
+      "file": "assets/mouth_art/gudiya/d.png",
+      "viseme": "MID_E",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2d-5Um2Zis14ht85DizGrQpbIKw1sGaIe.png",
       "sha256": "e8207159f49afe91c521c3ffb93a28620111df09481d9b00e9aef09f40f6b4c5",
       "bytes": 1281703,
       "width": 1254,
-      "height": 1254,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1254
     },
     {
-      "id": "m2e",
-      "character": "mitthu",
-      "file": "assets/mouths/m2e.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2e-LHQqm3F8TzTYNRmHxMF2N9enOaHKTw.png",
+      "character": "gudiya",
+      "letter": "e",
+      "file": "assets/mouth_art/gudiya/e.png",
+      "viseme": "OPEN_A",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2e-oFt4KWpyauHtJ3Xsr5uDtLQIVyNNRQ.png",
       "sha256": "7cdf09ed5b8a27373f0800b79b2e16e086b8c755a44ef72765232f02eeef0542",
       "bytes": 1307370,
       "width": 1254,
-      "height": 1254,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1254
     },
     {
-      "id": "m2f",
-      "character": "mitthu",
-      "file": "assets/mouths/m2f.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2f-zfurFMlqaiTIaoYtNYiTMTdejytg2f.png",
+      "character": "gudiya",
+      "letter": "f",
+      "file": "assets/mouth_art/gudiya/f.png",
+      "viseme": "SPARE",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2f-Z2iRBG1QRwTqE52OyhsJaWcvsRx39r.png",
       "sha256": "f8587bb80babbecbcba8a6bbe51a1280a829436425951168414ff884bb8ddb6d",
       "bytes": 1192874,
       "width": 1254,
-      "height": 1254,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1254
     },
     {
-      "id": "m2g",
-      "character": "mitthu",
-      "file": "assets/mouths/m2g.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2g-QIPVvPm4xBJbbt5MC8NTPmOdIpTxti.png",
+      "character": "gudiya",
+      "letter": "g",
+      "file": "assets/mouth_art/gudiya/g.png",
+      "viseme": "CLOSED_I",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2g-H75n4A5fvAZReEeaKDA3Myl3YSINEu.png",
       "sha256": "c9111ea50cecd7848841a25d7a424a0583350e4d8bf4a77dd3fb2bbade5468ff",
       "bytes": 1136387,
       "width": 1254,
-      "height": 1254,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1254
     },
     {
-      "id": "m2h",
-      "character": "mitthu",
-      "file": "assets/mouths/m2h.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2h-tCP98eAEPWWpeSiJIxElc5armFAe1i.png",
+      "character": "gudiya",
+      "letter": "h",
+      "file": "assets/mouth_art/gudiya/h.png",
+      "viseme": "ROUNDED_TENSE",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2h-wOETAD8eGWECOfePqOtkWaNMkbVT2j.png",
       "sha256": "c38c8e5feeb9d02172a18db936ed9a61d524e576797224fb795571dd66dffce8",
       "bytes": 1187896,
       "width": 1254,
-      "height": 1254,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1254
     },
     {
-      "id": "m2i",
-      "character": "mitthu",
-      "file": "assets/mouths/m2i.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2i-Ytyujco6QCQtpZkjbuEpuNaNjyIAuA.png",
+      "character": "gudiya",
+      "letter": "i",
+      "file": "assets/mouth_art/gudiya/i.png",
+      "viseme": "ROUNDED_LAX",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2i-Rfo4uXAqiHPUsmOQUhqpD0namw5haH.png",
       "sha256": "4b363fdea1f9f5cfd620d9a0fef044f6d027fb59b04fa90f98ebbdc9dc3bceb7",
       "bytes": 1179356,
       "width": 1254,
-      "height": 1254,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1254
     },
     {
-      "id": "m2j",
-      "character": "mitthu",
-      "file": "assets/mouths/m2j.png",
-      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2j-dTg3vxtDqivoTPsN9Mmtr0IutxHzrQ.png",
+      "character": "gudiya",
+      "letter": "j",
+      "file": "assets/mouth_art/gudiya/j.png",
+      "viseme": "LABIODENTAL",
+      "source_url": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/m2j-KNaAL2HQAcBu7toDmhpSReIoVQhmb8.png",
       "sha256": "e91d8070f18493ebdf10881e6f328f4287a66cfa7c7fe2cd8e2af6a6fb1999de",
       "bytes": 1160197,
       "width": 1254,
-      "height": 1254,
-      "bit_depth": 8,
-      "color_type": 2
+      "height": 1254
     }
   ]
 }
