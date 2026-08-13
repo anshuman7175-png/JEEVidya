@@ -55,44 +55,46 @@ def sync(verify_only: bool = False, force: bool = False) -> int:
     failures: list[str] = []
 
     for asset in manifest["assets"]:
+        asset_id = f"{asset['character']}/{asset['letter']}"
         dest = os.path.join(REPO_ROOT, asset["file"])
         expected = asset["sha256"]
 
         have = os.path.exists(dest) and not force
         if have and sha256_file(dest) == expected:
-            print(f"ok       {asset['id']}  {asset['file']}")
+            print(f"ok       {asset_id}  {asset['file']}")
             continue
 
         if verify_only:
             state = "corrupt" if os.path.exists(dest) else "missing"
-            print(f"{state:<8} {asset['id']}  {asset['file']}")
-            failures.append(asset["id"])
+            print(f"{state:<8} {asset_id}  {asset['file']}")
+            failures.append(asset_id)
             continue
 
-        print(f"fetch    {asset['id']}  {asset['file']}")
+        print(f"fetch    {asset_id}  {asset['file']}")
         try:
             _download(asset["source_url"], dest)
         except Exception as exc:  # noqa: BLE001 - report and keep going
-            print(f"ERROR    {asset['id']}  {exc}", file=sys.stderr)
-            failures.append(asset["id"])
+            print(f"ERROR    {asset_id}  {exc}", file=sys.stderr)
+            failures.append(asset_id)
             continue
 
         actual = sha256_file(dest)
         if actual != expected:
             print(
-                f"ERROR    {asset['id']}  sha256 mismatch\n"
+                f"ERROR    {asset_id}  sha256 mismatch\n"
                 f"         expected {expected}\n"
                 f"         actual   {actual}",
                 file=sys.stderr,
             )
-            failures.append(asset["id"])
+            failures.append(asset_id)
 
     total = len(manifest["assets"])
     if failures:
         print(f"\n{len(failures)}/{total} asset(s) unresolved: {', '.join(failures)}", file=sys.stderr)
         return 1
 
-    print(f"\nall {total} mouth assets present and verified -> {manifest['dest_dir']}")
+    print(f"\nall {total} mouth assets present and verified -> "
+          f"{manifest.get('art_dir', 'assets/mouth_art')}")
     return 0
 
 

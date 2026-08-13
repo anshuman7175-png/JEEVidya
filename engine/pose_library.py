@@ -22,16 +22,33 @@ from PIL import Image
 
 from config import settings
 
-# Cross-fade duration in frames (at 30fps → ~12 frames ≈ 400ms).
-# Sub-200ms full-body cross-fades read as strobing image swaps; real
-# weight shifts take 350–500ms.
-BLEND_FRAMES = 12
+# Timing is derived from the ACTUAL frame rate, read lazily because
+# settings.FPS is reassigned after module import (see settings.py).
+# Hardcoded frame counts calibrated for 30 fps halve every duration at
+# FPS=60 — sub-200ms full-body cross-fades read as strobing image
+# swaps; real weight shifts take 350–500ms.
 
-# Minimum frames a pose must be HELD (fully committed) before another
-# transition may begin (at 30fps → ~1.3s). This is the single strongest
-# guard against rapid pose thrash: no matter how many gestures fire,
-# the body settles into each stance long enough to be READ.
-MIN_HOLD_FRAMES = 40
+def _fps() -> float:
+    """Current frame rate, read lazily from settings (never cached)."""
+    try:
+        fps = float(getattr(settings, "FPS", 30.0))
+    except (TypeError, ValueError):
+        fps = 30.0
+    return fps if fps > 0 else 30.0
+
+
+def blend_frames() -> int:
+    """Cross-fade duration in frames: 400 ms at the current FPS."""
+    return max(2, round(_fps() * 0.40))
+
+
+def min_hold_frames() -> int:
+    """Minimum frames a pose must be HELD (fully committed) before
+    another transition may begin: ~1.33 s at the current FPS. This is
+    the single strongest guard against rapid pose thrash: no matter how
+    many gestures fire, the body settles into each stance long enough
+    to be READ."""
+    return max(4, round(_fps() * 1.33))
 
 # Default pose when nothing is triggered
 DEFAULT_POSE = "neutral"
@@ -162,10 +179,10 @@ class PoseState:
         self.current: str = DEFAULT_POSE
         self.target: str = DEFAULT_POSE
         self._blend_frame: int = 0
-        self._blend_total: int = BLEND_FRAMES
+        self._blend_total: int = blend_frames()
         self._rng = rng or random.Random(42)
         self._recent: list = []  # last 3 poses — anti-ping-pong
-        self._hold_frames: int = MIN_HOLD_FRAMES  # frames since last commit
+        self._hold_frames: int = min_hold_frames()  # frames since last commit
 
     @property
     def blend_t(self) -> float:
@@ -186,7 +203,7 @@ class PoseState:
         """Request transition. displacement 0..1 controls speed:
         high (big pose change) → fast fade; low (subtle) → slow graceful.
 
-        Requests arriving before MIN_HOLD_FRAMES have elapsed since the
+        Requests arriving before min_hold_frames() have elapsed since the
         last transition are DROPPED — the pose must land, be held, and be
         read before the body is allowed to move again. Gesture triggers
         re-fire every frame while active, so a dropped request that still
@@ -201,23 +218,25 @@ class PoseState:
         # Minimum-hold gate: refuse mid-blend interruptions AND rapid
         # re-targeting. Without this, keyword + beat + rotation triggers
         # stack into a pose swap every few hundred milliseconds.
-        if self.is_blending or self._hold_frames < MIN_HOLD_FRAMES:
+        if self.is_blending or self._hold_frames < min_hold_frames():
             return
 
         self.target = pose
         self._blend_frame = 0
         self._hold_frames = 0
 
-        # Displacement-adaptive frame count + jitter (all slowed 2.4×:
-        # sub-200ms full-body fades read as a strobing slideshow)
+        # Displacement-adaptive DURATION (seconds, FPS-independent) +
+        # jitter. Sub-200ms full-body fades read as a strobing slideshow.
         if displacement > 0.7:
-            base = 8     # big change: quicker to hide ghost overlap
+            base_s = 0.27    # big change: quicker to hide ghost overlap
         elif displacement > 0.3:
-            base = 12    # medium: smooth default
+            base_s = 0.40    # medium: smooth default
         else:
-            base = 16    # subtle: graceful ease
+            base_s = 0.53    # subtle: graceful ease
+        base = round(_fps() * base_s)
         # ±2 frame jitter (breaks regularity)
-        self._blend_total = max(6, base + self._rng.choice([-2, -1, 0, 1, 2]))
+        self._blend_total = max(2, round(_fps() * 0.20),
+                                base + self._rng.choice([-2, -1, 0, 1, 2]))
 
         # Track for anti-ping-pong
         self._recent.append(pose)

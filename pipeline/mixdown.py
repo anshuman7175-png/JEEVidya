@@ -249,14 +249,30 @@ def mixdown(turn_data: List[Dict[str, Any]], out_path: str,
     n = int(total_ms * SR / 1000)
 
     # ── VOICE: placed at exact offsets (zero structural drift) ──
+    # A turn whose audio path is SET but missing on disk is a broken
+    # build, not a silent turn — silently skipping it desynchronises
+    # the mix from the viseme timeline. Fail loudly, naming the turn.
     voice = np.zeros(n, dtype=np.float32)
-    for span in timeline.spans:
+    placed_samples = 0
+    for idx, span in enumerate(timeline.spans):
         audio = span.turn.get("audio")
-        if audio and os.path.exists(audio):
-            x = _decode(audio)
-            start = int(span.start_ms * SR / 1000)
-            end = min(n, start + len(x))
+        if not audio:
+            continue
+        if not os.path.exists(audio):
+            speaker = span.turn.get("speaker", "?")
+            raise FileNotFoundError(
+                f"mixdown: turn {idx} (speaker={speaker!r}) references "
+                f"audio file that does not exist on disk: {audio!r}")
+        x = _decode(audio)
+        start = int(span.start_ms * SR / 1000)
+        end = min(n, start + len(x))
+        if end > start:
             voice[start:end] += x[:end - start]
+            placed_samples += end - start
+    if placed_samples <= 0:
+        raise RuntimeError(
+            "mixdown: zero voice samples placed on the timeline — every "
+            "turn is missing audio. Refusing to master a silent mix.")
     voice = master_voice_bus(voice)
 
     # ── SOUND DESIGN ──

@@ -181,7 +181,7 @@ def cmd_doctor(_args) -> int:
     return 0 if ok else 1
 
 
-# ─────────────────────────────────────────────
+# ───────────────────────��─────────────────────
 # render / preview / test
 # ─────────────────────────────────────────────
 
@@ -392,6 +392,19 @@ def cmd_stage(_args) -> int:
     if ok:
         print("\n  Next:  python3 jvmake.py rig --force\n")
     return 0 if ok else 1
+
+
+# ─────────────────────────────────────────────
+# art (source-art integrity + derived completeness)
+# ─────────────────────────────────────────────
+
+def cmd_art(args) -> int:
+    """sha256-verify every committed source-art file against the
+    manifest and report derived body/pose/viseme completeness per
+    character. Exits non-zero with exact filenames — never guesses."""
+    from tools.art_inventory import main as art_main
+    argv = ["--strict"] if getattr(args, "strict", False) else []
+    return art_main(argv)
 
 
 # ─────────────────────────────────────────────
@@ -607,6 +620,11 @@ def main() -> int:
 
     sub.add_parser("stage", help="stage assets/poses into character dirs (Tier 1)")
 
+    p = sub.add_parser("art", help="verify source mouth art (sha256) + "
+                                   "derived asset completeness")
+    p.add_argument("--strict", action="store_true",
+                   help="also fail on missing derived files")
+
     p = sub.add_parser("rig", help="build skeletal puppet rig(s) (Tier 1)")
     p.add_argument("character", nargs="?", default=None)
     p.add_argument("--force", action="store_true", help="rebuild existing rigs")
@@ -667,6 +685,7 @@ def main() -> int:
         "test": cmd_test,
         "script": cmd_script,
         "stage": cmd_stage,
+        "art": cmd_art,
         "rig": cmd_rig,
         "dna": cmd_dna,
         "forge": cmd_forge,
