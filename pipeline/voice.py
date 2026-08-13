@@ -119,13 +119,92 @@ def synthesize_with_word_boundaries(text: str, voice: str, rate: str,
     asyncio.run(_run())
 
 
+class AudioDurationError(RuntimeError):
+    """Every duration probe failed for a real audio file. A WRONG
+    duration is worse than a failed build: a fake fallback silently
+    desynchronises the entire viseme timeline from the audio."""
+
+
+def _mp3_duration_ms(audio_path: str) -> Optional[int]:
+    """Stdlib MP3 duration probe: walk every MPEG audio frame header and
+    sum samples/sample-rate. No ffmpeg, no moviepy — pure byte parsing,
+    so it works on a bare install and is immune to lying VBR container
+    headers (each frame is measured individually).
+
+    Returns None when the file is not parseable MPEG audio.
+    """
+    BITRATES = {  # kbps, indexed [version_key][layer_key][bitrate_index]
+        # MPEG1 Layer III
+        (1, 3): (0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192,
+                 224, 256, 320),
+        # MPEG2/2.5 Layer III
+        (2, 3): (0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112,
+                 128, 144, 160),
+    }
+    SAMPLE_RATES = {3: (44100, 48000, 32000),    # MPEG1
+                    2: (22050, 24000, 16000),    # MPEG2
+                    0: (11025, 12000, 8000)}     # MPEG2.5
+    try:
+        with open(audio_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    if len(data) < 4:
+        return None
+    pos = 0
+    # Skip a leading ID3v2 tag (synchsafe 28-bit size).
+    if data[:3] == b"ID3" and len(data) >= 10:
+        size = ((data[6] & 0x7F) << 21) | ((data[7] & 0x7F) << 14) | \
+               ((data[8] & 0x7F) << 7) | (data[9] & 0x7F)
+        pos = 10 + size
+    total_seconds = 0.0
+    frames = 0
+    n = len(data)
+    while pos + 4 <= n:
+        if data[pos] != 0xFF or (data[pos + 1] & 0xE0) != 0xE0:
+            pos += 1
+            continue
+        b1, b2 = data[pos + 1], data[pos + 2]
+        version_id = (b1 >> 3) & 0x03      # 3=MPEG1, 2=MPEG2, 0=MPEG2.5
+        layer_id = (b1 >> 1) & 0x03        # 1=III, 2=II, 3=I
+        bitrate_idx = (b2 >> 4) & 0x0F
+        sr_idx = (b2 >> 2) & 0x03
+        padding = (b2 >> 1) & 0x01
+        if (version_id == 1 or layer_id == 0 or bitrate_idx in (0, 15)
+                or sr_idx == 3):
+            pos += 1
+            continue
+        sample_rate = SAMPLE_RATES[version_id][sr_idx]
+        vkey = 1 if version_id == 3 else 2
+        layer = {3: 1, 2: 2, 1: 3}[layer_id]
+        if layer != 3:
+            return None  # only Layer III (mp3) is supported here
+        bitrate = BITRATES[(vkey, 3)][bitrate_idx] * 1000
+        if bitrate == 0:
+            pos += 1
+            continue
+        samples = 1152 if vkey == 1 else 576
+        frame_len = samples * bitrate // (8 * sample_rate) + padding
+        if frame_len <= 0:
+            pos += 1
+            continue
+        total_seconds += samples / sample_rate
+        frames += 1
+        pos += frame_len
+    if frames < 2:
+        return None
+    return int(total_seconds * 1000)
+
+
 def _get_audio_duration_ms(audio_path: str) -> int:
     """Get audio file duration in milliseconds.
 
     Decodes via ffmpeg subprocess (imageio_ffmpeg bundles ffmpeg but NOT
     ffprobe, and moviepy 2.x removed the `moviepy.editor` module, so both
     of the old probes silently failed and every turn fell back to 2000ms,
-    corrupting the whole timeline).
+    corrupting the whole timeline). Falls back to a stdlib MP3
+    frame-header walk; if EVERY probe fails, raises AudioDurationError
+    naming the file — there is no fake-duration fallback.
     """
     import re
     try:
@@ -161,9 +240,21 @@ def _get_audio_duration_ms(audio_path: str) -> int:
         clip = AudioFileClip(audio_path)
         dur = int(clip.duration * 1000)
         clip.close()
-        return dur
+        if dur > 0:
+            return dur
     except Exception:
-        return 2000  # Default 2 seconds if all probes fail
+        pass
+
+    # Fallback: stdlib MP3 frame-header walk (no dependencies at all).
+    dur = _mp3_duration_ms(audio_path)
+    if dur is not None and dur > 0:
+        return dur
+
+    raise AudioDurationError(
+        f"could not determine the duration of '{audio_path}': ffmpeg, "
+        f"moviepy and the stdlib MP3 frame probe all failed. Refusing to "
+        f"guess — a wrong duration desynchronises every viseme in the "
+        f"timeline from the audio, which is worse than a failed build.")
 
 
 # Voice profiles per character
