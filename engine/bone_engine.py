@@ -775,14 +775,14 @@ class BoneEngine:
             brow=pose.brow,
             squint=max(0.0, -pose.brow) * 0.5))
 
-    def _render_v3(self, pose: PuppetPose,
-                   physics: Optional[Tuple[float, float]]) -> Image.Image:
-        """One frame through the unified head path.
+    def _channels(self, pose: PuppetPose,
+                  physics: Optional[Tuple[float, float]]):
+        """PuppetPose → (FaceChannels, HeadPose, from_pose, to_pose, t).
 
-        sway/bounce deliberately stay OUT of HeadPose: the compositor
-        applies them as whole-frame camera offsets (PuppetActor.render
-        returns them), and folding them in here would move the head
-        twice relative to its own body.
+        THE single mapping from actor channels to head-assembly inputs.
+        `_render_v3` renders through it and `predict` predicts through
+        it, so the analytic QC prediction and the rendered pixels can
+        never be built from two different interpretations of a pose.
         """
         overshoot_deg, lag_px = physics or (0.0, 0.0)
         ch = FaceChannels(mouth=self._mouth_params(pose),
@@ -798,7 +798,34 @@ class BoneEngine:
             hair_shear=lag_px / max(1.0, float(self.assembly.plate_size[1])))
         from_pose = pose.body_pose or self.rig.canonical_pose
         to_pose = pose.body_pose_to or from_pose
-        canvas = self.assembly.render(ch, head, from_pose, to_pose,
-                                      pose.body_pose_blend,
+        return ch, head, from_pose, to_pose, pose.body_pose_blend
+
+    def predict(self, pose: PuppetPose,
+                physics: Optional[Tuple[float, float]] = None
+                ) -> Dict[str, Tuple[float, float]]:
+        """Canvas coordinates where the mouth centroid and both iris
+        centres MUST land for this pose — computed from the SAME affine
+        the renderer uses (via HeadAssembly.predict). Only valid for a
+        v3 rig; QC (tools/verify_face.py) compares re-detected rendered
+        pixels against this."""
+        if self.assembly is None:
+            raise RuntimeError("predict() requires a v3 rig with a "
+                               "HeadAssembly — v1 sprite rigs have no "
+                               "analytic feature prediction")
+        pose = pose.clamped()
+        ch, head, from_pose, to_pose, t = self._channels(pose, physics)
+        return self.assembly.predict(ch, head, from_pose, to_pose, t)
+
+    def _render_v3(self, pose: PuppetPose,
+                   physics: Optional[Tuple[float, float]]) -> Image.Image:
+        """One frame through the unified head path.
+
+        sway/bounce deliberately stay OUT of HeadPose: the compositor
+        applies them as whole-frame camera offsets (PuppetActor.render
+        returns them), and folding them in here would move the head
+        twice relative to its own body.
+        """
+        ch, head, from_pose, to_pose, t = self._channels(pose, physics)
+        canvas = self.assembly.render(ch, head, from_pose, to_pose, t,
                                       (self.width, self.height))
         return self._apply_squash(canvas, pose.squash)
