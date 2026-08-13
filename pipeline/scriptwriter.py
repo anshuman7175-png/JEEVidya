@@ -9,14 +9,25 @@ dead storyboard schema — it crashed on import use. V5 targets DIALOGUE_SCHEMA
 flash model with structured output, and self-heals invalid responses instead
 of rejecting them.
 """
+import importlib
 import json
 import os
-from typing import Dict, Any, List, Optional
-
-from google import genai
-from google.genai import types
+import re
+from typing import Dict, Any, List, Optional, Tuple
 
 from config import prompts
+
+
+def _load_genai():
+    """Lazy-load the Gemini SDK.
+
+    The raw-script formatter path (parse_raw_script) is pure Python and
+    must import cleanly on machines without google-genai installed —
+    only the Director Agent (ScriptWriter) actually needs the SDK.
+    """
+    genai = importlib.import_module("google.genai")
+    types = importlib.import_module("google.genai.types")
+    return genai, types
 
 VALID_SPEAKERS = {"girl", "boy", "explanation"}
 VALID_EMOTIONS = {"curious", "enthusiastic", "confident", "amazed",
