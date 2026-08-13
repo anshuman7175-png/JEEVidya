@@ -20,6 +20,7 @@ One command surface for the whole studio.
   jvmake flywheel [--pull]         Tier 4: bandit report + gene recommendation
   jvmake localize script.json      Tier 4: language variants (en/ta/te)
   jvmake bundle script.json        Tier 5: freeze a .jvproj project bundle
+  jvmake verify-face [character]   Rendered-pixel face QC sweep (hard gate)
   jvmake test                      Render the built-in example dialogue
   jvmake clean [--cache]           Wipe .tmp (and optionally the build cache)
 
@@ -181,11 +182,50 @@ def cmd_doctor(_args) -> int:
     return 0 if ok else 1
 
 
-# ───────────────────────��─────────────────────
+# ───────────────────────���─────────────────────
 # render / preview / test
 # ─────────────────────────────────────────────
 
-def _render(dialogue: dict, preview: bool, force: bool = False) -> int:
+def _face_gate(skip: bool) -> int:
+    """Run the rendered-pixel face verification sweep before any encode.
+
+    'Perfect' is not a claim — it is the only state that can produce an
+    MP4. Every core element (mouth, eyes, head, pose movement) is
+    re-detected on rendered pixels and compared against the renderer's
+    own math; any gate failure refuses the encode. `--skip-face-qc` is
+    the explicit, logged escape hatch for iteration."""
+    if skip:
+        print("  ⚠ face QC SKIPPED (--skip-face-qc) — output is unverified")
+        return 0
+    from engine.rig import has_rig
+    chars = [c for c in ("gudiya", "chintu") if has_rig(c)]
+    if not chars:
+        print("  ⚠ face QC: no rigs found — nothing to verify "
+              "(run `python3 jvmake.py rig`)")
+        return 0
+    from tools.verify_face import run_all
+    out_dir = os.path.join(settings.OUTPUT_DIR, "face_qc")
+    print("  face QC: rendering verification sweep "
+          f"({', '.join(chars)}) …")
+    passed, reports = run_all(chars, out_dir)
+    for name, rep in reports.items():
+        print(f"\n  ─ {name} ─")
+        print("  " + rep.summary().replace("\n", "\n  "))
+    print(f"\n  → report: {os.path.join(out_dir, 'face_qc_report.json')}")
+    if not passed:
+        print("\n  ✗ FACE QC FAILED — encode refused. Inspect the failure "
+              "strips under output/face_qc/<character>/failures/ and fix "
+              "the rig/art, or re-run with --skip-face-qc to iterate.\n")
+        return 1
+    print("  ✓ ALL FACE GATES PASS\n")
+    return 0
+
+
+def _render(dialogue: dict, preview: bool, force: bool = False,
+            skip_face_qc: bool = False) -> int:
+    rc = _face_gate(skip_face_qc)
+    if rc != 0:
+        return rc
     from generate import run_dialogue_pipeline
     output = run_dialogue_pipeline(dialogue, preview=preview, force=force)
     print(f"\n✓ Output: {output}\n")
@@ -196,7 +236,8 @@ def cmd_render(args) -> int:
     with open(args.script, "r", encoding="utf-8") as f:
         dialogue = json.load(f)
     return _render(dialogue, preview=args.preview,
-                   force=getattr(args, "force", False))
+                   force=getattr(args, "force", False),
+                   skip_face_qc=getattr(args, "skip_face_qc", False))
 
 
 def cmd_preview(args) -> int:
@@ -207,7 +248,38 @@ def cmd_preview(args) -> int:
 def cmd_test(args) -> int:
     from config.prompts import EXAMPLE_DIALOGUE
     return _render(EXAMPLE_DIALOGUE, preview=args.preview,
-                   force=getattr(args, "force", False))
+                   force=getattr(args, "force", False),
+                   skip_face_qc=getattr(args, "skip_face_qc", False))
+
+
+def cmd_verify_face(args) -> int:
+    """Deterministic verification sweep on the real rig(s): every baked
+    viseme class held, a full blink, one pose transition with per-frame
+    mouth lock, and a synthetic speech line — with the FULL face_qc gate
+    suite run on the rendered frames. Non-zero exit on any failure."""
+    from engine.rig import has_rig
+    if args.character:
+        chars = [args.character]
+    else:
+        chars = [c for c in ("gudiya", "chintu") if has_rig(c)]
+    if not chars:
+        print("\n  No rigs found — run `python3 jvmake.py rig` first.\n")
+        return 1
+    from tools.verify_face import run_all
+    out_dir = args.out or os.path.join(settings.OUTPUT_DIR, "face_qc")
+    print("\n═══ Face Verification Sweep (rendered-pixel gates) ═══")
+    passed, reports = run_all(chars, out_dir, speech_s=args.speech_s)
+    for name, rep in reports.items():
+        print(f"\n─ {name} ─")
+        print(rep.summary())
+    print(f"\n→ report: {os.path.join(out_dir, 'face_qc_report.json')}")
+    if not passed:
+        print("✗ FACE QC FAILED — failure strips under "
+              f"{out_dir}/<character>/failures/\n")
+        return 1
+    print("✓ ALL FACE GATES PASS — every core element measured on "
+          "rendered pixels.\n")
+    return 0
 
 
 # ─────────────────────────────────────────────
@@ -598,11 +670,24 @@ def main() -> int:
     p.add_argument("--preview", action="store_true")
     p.add_argument("--force", action="store_true",
                    help="rebuild every node, ignoring cache hits")
+    p.add_argument("--skip-face-qc", action="store_true",
+                   help="skip the rendered-pixel face gate (unverified output)")
 
     p = sub.add_parser("preview", help="6s half-res preview render")
     p.add_argument("script")
     p.add_argument("--force", action="store_true",
                    help="rebuild every node, ignoring cache hits")
+    p.add_argument("--skip-face-qc", action="store_true",
+                   help="skip the rendered-pixel face gate (unverified output)")
+
+    p = sub.add_parser("verify-face",
+                       help="rendered-pixel face QC sweep: every gate in "
+                            "tools/face_qc.py run on real rendered frames")
+    p.add_argument("character", nargs="?", default=None)
+    p.add_argument("--out", default=None,
+                   help="report directory (default: output/face_qc)")
+    p.add_argument("--speech-s", type=float, default=6.0,
+                   help="synthetic speech line length in seconds")
 
     p = sub.add_parser("graph", help="show the build DAG + cache status (no build)")
     p.add_argument("script")
@@ -613,6 +698,8 @@ def main() -> int:
     p.add_argument("--preview", action="store_true")
     p.add_argument("--force", action="store_true",
                    help="rebuild every node, ignoring cache hits")
+    p.add_argument("--skip-face-qc", action="store_true",
+                   help="skip the rendered-pixel face gate (unverified output)")
 
     p = sub.add_parser("script", help="Director Agent: topic → script JSON")
     p.add_argument("topic")
@@ -683,6 +770,7 @@ def main() -> int:
         "preview": cmd_preview,
         "graph": cmd_graph,
         "test": cmd_test,
+        "verify-face": cmd_verify_face,
         "script": cmd_script,
         "stage": cmd_stage,
         "art": cmd_art,
