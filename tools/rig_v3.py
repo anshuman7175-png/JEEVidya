@@ -431,6 +431,7 @@ class BakeReport:
     poses: int = 0
     occluders: int = 0
     targets: int = 0
+    plates: int = 0
     worst_rms: float = 0.0
     seam_err: float = 0.0
     notes: List[str] = None
@@ -615,8 +616,12 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
             report.occluders += 1
         report.worst_rms = max(report.worst_rms, xform.rms)
 
-    # ─── §3.6 mouth targets from the art ──────────────────
-    report.targets = _bake_mouth_targets(rig, detect, fh)
+    # ─── §3.6 viseme plates + mouth targets from the art ──
+    # ONE landmark measurement per source frame feeds BOTH the sprite
+    # cut and the 5-D parameter fit, so geometry and pixels can never
+    # disagree (independent coordinate passes are exactly what made the
+    # mouth "fly" historically).
+    report.plates, report.targets = _bake_viseme_plates(rig, detect, fh, d)
 
     rig.version = 3
     return report
@@ -667,44 +672,118 @@ def _bake_pose(rig: Rig, name: str, img: Image.Image, pose_lms: np.ndarray,
                      seam_y=float(seam_y), occluded=occluded)
 
 
-def _bake_mouth_targets(rig: Rig, detect, fh: float) -> int:
-    """§3.6 — fit 5-D targets from `visemes_src/<VISEME>.png`.
+# Plate-cut tuning. The feather is at CANONICAL scale (the plate is
+# emitted after normalisation), so every character's sprite edge is
+# equally soft regardless of source resolution.
+PLATE_FEATHER_PX = 1.2
+PLATE_MARGIN = 0.05          # ×face_h, crop margin around the lip bbox
+PLATE_DILATE = 0.012         # ×face_h, mask growth past the outer ring so
+                             # the artwork's vermilion border is not clipped
 
-    Shapes the artist did not draw keep the built-in articulatory
-    defaults (engine/mouth_model.DEFAULT_TARGETS), so a character with
-    two hand-drawn visemes is strictly better off than one with none —
-    partial art is never worse than no art.
+
+def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
+                        d: str) -> Tuple[int, int]:
+    """§3.6 — bake art viseme PLATES and fit 5-D mouth targets from
+    `visemes_src/<VISEME>.png`, using ONE landmark measurement per frame.
+
+    Per source frame: detect landmarks (fail LOUDLY on a miss — a
+    heuristic fallback box is exactly what historically put the mouth on
+    the eyes), take the outer-lip ring, normalise by the face-height
+    ratio to canonical scale, alpha-cut the lip polygon with a
+    ~1.2 px Gaussian feather, write `rig/visemes/<VISEME>.png` and
+    register it in `rig.visemes`. The SAME measured contours drive the
+    `fit_mouth_target` fit, so sprite and geometry cannot disagree.
+
+    Returns (plates_written, targets_fitted). Shapes the artist did not
+    draw keep the built-in articulatory defaults
+    (engine/mouth_model.DEFAULT_TARGETS) — partial art is never worse
+    than no art. LID_* sprite entries are preserved untouched.
     """
-    from engine.mouth_model import DEFAULT_TARGETS, MouthParams
+    from PIL import ImageFilter
+    from engine.mouth_model import DEFAULT_TARGETS
+    from engine.rig import VISEME_NAMES
+
     src = _visemes_src_dir(rig.character)
+    # The v3 plate bake OWNS the mouth-class sprite registry: clear any
+    # legacy v1/v2 bakes so two coordinate systems cannot fight. Lid
+    # sprites are a different subsystem and survive.
+    rig.visemes = {k: v for k, v in rig.visemes.items()
+                   if k.startswith("LID_")}
     rig.mouth_targets = {}
     if not os.path.isdir(src):
-        return 0
+        return 0, 0
 
-    fitted = 0
+    os.makedirs(os.path.join(d, "visemes"), exist_ok=True)
+    plates = 0
+    targets = 0
     for fname in sorted(os.listdir(src)):
         if not fname.lower().endswith(".png"):
             continue
         vis = os.path.splitext(fname)[0].upper()
-        try:
-            img = Image.open(os.path.join(src, fname)).convert("RGBA")
-            lms = detect(img)
-            if lms is None or len(lms) < N_LANDMARKS:
-                continue
-            lm = np.asarray(lms, dtype=np.float64)
-            local_fh = face_height(lm)
-            outer = normalize_contour(_pick(lm, LIP_OUTER), local_fh)
-            inner = normalize_contour(_pick(lm, LIP_INNER), local_fh)
-            seed = None
-            for v, p in DEFAULT_TARGETS.items():
-                if getattr(v, "value", str(v)) == vis:
-                    seed = p.as_tuple()
-                    break
-            rig.mouth_targets[vis] = fit_mouth_target(outer, inner, seed)
-            fitted += 1
-        except Exception as e:
-            print(f"  [RigV3] viseme '{vis}' fit skipped: {e}")
-    return fitted
+        if vis not in VISEME_NAMES:
+            print(f"  [RigV3] {rig.character}: visemes_src/{fname} is not "
+                  f"a viseme class — skipped")
+            continue
+        path = os.path.join(src, fname)
+        img = Image.open(path).convert("RGBA")
+        lms = detect(img)
+        if lms is None or len(lms) < N_LANDMARKS:
+            raise BakeError(
+                f"character '{rig.character}': face detection FAILED on "
+                f"viseme source '{path}' "
+                f"({0 if lms is None else len(lms)}/{N_LANDMARKS} "
+                f"landmarks). Rig v3 has NO heuristic fallback box — fix "
+                f"or remove the file.")
+        lm = np.asarray(lms, dtype=np.float64)
+        local_fh = face_height(lm)
+        outer_px = _pick(lm, LIP_OUTER)
+        inner_px = _pick(lm, LIP_INNER)
+
+        # ── the 5-D fit, from the SAME measurement ────────
+        outer_n = normalize_contour(outer_px, local_fh)
+        inner_n = normalize_contour(inner_px, local_fh)
+        seed = None
+        for v, p in DEFAULT_TARGETS.items():
+            if getattr(v, "value", str(v)) == vis:
+                seed = p.as_tuple()
+                break
+        rig.mouth_targets[vis] = fit_mouth_target(outer_n, inner_n, seed)
+        targets += 1
+
+        # ── the plate cut, from the SAME measurement ──────
+        ratio = canon_fh / local_fh          # source px → canonical px
+        margin = PLATE_MARGIN * local_fh
+        x0 = max(0.0, outer_px[:, 0].min() - margin)
+        y0 = max(0.0, outer_px[:, 1].min() - margin)
+        x1 = min(float(img.size[0]), outer_px[:, 0].max() + margin)
+        y1 = min(float(img.size[1]), outer_px[:, 1].max() + margin)
+        crop = img.crop((int(x0), int(y0),
+                         int(math.ceil(x1)), int(math.ceil(y1))))
+        out_w = max(2, int(round(crop.size[0] * ratio)))
+        out_h = max(2, int(round(crop.size[1] * ratio)))
+        plate = crop.resize((out_w, out_h), Image.LANCZOS)
+
+        # Lip polygon in the resized plate's own space, grown slightly so
+        # the artwork's ink outline survives, then feathered ~1.2 px.
+        sx = out_w / max(1e-6, (x1 - x0))
+        sy = out_h / max(1e-6, (y1 - y0))
+        poly = np.stack([(outer_px[:, 0] - x0) * sx,
+                         (outer_px[:, 1] - y0) * sy], axis=1)
+        mask = polygon_mask(poly, (out_w, out_h))
+        mask = _distance_blur(mask, PLATE_DILATE * canon_fh)
+        mask_img = Image.fromarray(
+            (np.clip(mask, 0.0, 1.0) * 255).astype(np.uint8))
+        mask_img = mask_img.filter(ImageFilter.GaussianBlur(PLATE_FEATHER_PX))
+
+        arr = np.asarray(plate).copy()
+        arr[..., 3] = (arr[..., 3].astype(np.float32) *
+                       (np.asarray(mask_img, dtype=np.float32) / 255.0)
+                       ).astype(np.uint8)
+        rel = os.path.join("visemes", f"{vis}.png")
+        Image.fromarray(arr).save(os.path.join(d, rel))
+        rig.visemes[vis] = rel
+        plates += 1
+    return plates, targets
 
 
 # ═══════════════════════════════════════════

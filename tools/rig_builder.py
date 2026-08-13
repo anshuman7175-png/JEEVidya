@@ -923,6 +923,7 @@ def bake_v3(rig: Rig, img: Optional[Image.Image] = None) -> bool:
     print(f"  [RigV3] {rig.character}: ✓ head plate + "
           f"{report.poses} registered pose(s), "
           f"{report.occluders} occluder(s), "
+          f"{report.plates} viseme plate(s), "
           f"{report.targets} mouth target(s) fitted")
     print(f"  [RigV3] {rig.character}: worst pose RMS "
           f"{report.worst_rms:.3f}px, seam error {report.seam_err:.2e}")
@@ -937,13 +938,15 @@ def rebake(rig: Rig) -> Rig:
     img = _load_body(rig.character)
     rig.size = img.size
     _slice_layers(rig, img)
-    if not _bake_visemes_from_art(rig, img):
-        _bake_synth_visemes(rig, img)
     _bake_lid_sprites(rig, img)
     # A nudged neck moves the seam, so a v3 rig must re-bake its plate
     # and headless bodies from the new geometry or the two disagree.
-    if rig.head is not None:
-        bake_v3(rig, img)
+    # v3 owns the mouth-class sprites; the legacy bake runs only when
+    # the rig is not (or no longer) v3.
+    v3_ok = bake_v3(rig, img) if rig.head is not None else False
+    if not v3_ok:
+        if not _bake_visemes_from_art(rig, img):
+            _bake_synth_visemes(rig, img)
     rig.save()
     return rig
 
@@ -972,14 +975,18 @@ def build_rig(character: str, force: bool = False, v3: bool = True) -> Rig:
                   "hair_line_y": geo["hair_line_y"]}
 
     _slice_layers(rig, img)
-    if not _bake_visemes_from_art(rig, img):
-        _bake_synth_visemes(rig, img)
     _bake_lid_sprites(rig, img)
-    if v3:
-        bake_v3(rig, img)
-    else:
-        # An explicitly skipped bake must not claim v3 in the JSON.
-        rig.version = 2
+    # The v3 bake OWNS the mouth-class viseme sprites (plates cut from
+    # the same landmark measurement as the mouth targets). The legacy
+    # v1/v2 art bake runs ONLY when the rig is not v3, so two coordinate
+    # systems can never fight over rig.visemes.
+    v3_ok = bake_v3(rig, img) if v3 else False
+    if not v3_ok:
+        if not v3:
+            # An explicitly skipped bake must not claim v3 in the JSON.
+            rig.version = 2
+        if not _bake_visemes_from_art(rig, img):
+            _bake_synth_visemes(rig, img)
     rig.save()
 
     mode = "face landmarks" if geo["generated_by"] == "mediapipe" else \
