@@ -79,11 +79,16 @@ class GateResult:
     value: float
     threshold: float
     detail: str = ""
+    skipped: bool = False
+    # A skipped gate DID NOT RUN — it is neither a pass nor a fail.
+    # It never satisfies "all gates passed": verify_manifest refuses to
+    # claim a clean pass while any gate is unrun. Constructors should
+    # pass passed=False alongside skipped=True.
 
     def to_dict(self) -> dict:
         return {"name": self.name, "passed": bool(self.passed),
                 "value": float(self.value), "threshold": float(self.threshold),
-                "detail": self.detail}
+                "detail": self.detail, "skipped": bool(self.skipped)}
 
 
 @dataclass
@@ -92,13 +97,24 @@ class QCReport:
 
     @property
     def passed(self) -> bool:
-        return all(g.passed for g in self.gates)
+        """True only when every gate RAN and passed. A skipped gate is
+        an unverified claim, not a pass."""
+        return all(g.passed and not g.skipped for g in self.gates)
+
+    @property
+    def skipped_gates(self) -> List[str]:
+        return [g.name for g in self.gates if g.skipped]
+
+    @property
+    def failed_gates(self) -> List[str]:
+        return [g.name for g in self.gates if not g.passed and not g.skipped]
 
     def add(self, g: GateResult) -> None:
         self.gates.append(g)
 
     def to_dict(self) -> dict:
         return {"passed": self.passed,
+                "skipped": self.skipped_gates,
                 "gates": [g.to_dict() for g in self.gates]}
 
     def save(self, path: str) -> None:
@@ -110,7 +126,7 @@ class QCReport:
     def summary(self) -> str:
         lines = []
         for g in self.gates:
-            mark = "PASS" if g.passed else "FAIL"
+            mark = "SKIP" if g.skipped else ("PASS" if g.passed else "FAIL")
             lines.append(f"[{mark}] {g.name:<18} value={g.value:.4f} "
                          f"thresh={g.threshold:.4f} {g.detail}")
         lines.append(f"→ {'ALL GATES PASS' if self.passed else 'GATE FAILURE'}")
@@ -359,7 +375,7 @@ def at_phone_scale(frame: Image.Image) -> Image.Image:
 
 # ═══════════════════════════════════════════
 # CLI
-# ═══════════════════════════════════════════
+# ════════════════════════���══════════════════
 
 def _main() -> int:
     import argparse

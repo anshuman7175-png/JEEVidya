@@ -112,8 +112,9 @@ def gate_av_start_offset(path: str) -> GateResult:
     """Audio and video must start at the same instant in the container."""
     ffprobe = _ffprobe_exe()
     if not ffprobe:
-        return GateResult("av_offset", True, 0.0, AV_START_OFFSET_MAX_S,
-                          "ffprobe unavailable — gate skipped (warn)")
+        return GateResult("av_offset", False, 0.0, AV_START_OFFSET_MAX_S,
+                          "ffprobe unavailable — gate did not run",
+                          skipped=True)
     starts: Dict[str, float] = {}
     for s in probe_streams(path):
         st = s.get("start_time")
@@ -123,8 +124,9 @@ def gate_av_start_offset(path: str) -> GateResult:
             except (TypeError, ValueError):
                 pass
     if len(starts) < 2:
-        return GateResult("av_offset", True, 0.0, AV_START_OFFSET_MAX_S,
-                          f"only {list(starts)} streams expose start_time")
+        return GateResult("av_offset", False, 0.0, AV_START_OFFSET_MAX_S,
+                          f"only {list(starts)} streams expose start_time "
+                          "— gate did not run", skipped=True)
     delta = abs(starts["video"] - starts["audio"])
     return GateResult(
         "av_offset", delta <= AV_START_OFFSET_MAX_S,
@@ -176,7 +178,7 @@ def gate_loudness(path: str) -> GateResult:
         f"{meas['true_peak_dbtp']:.1f} dBTP, LRA {meas['lra']:.1f}")
 
 
-# ═══════════════════════════════════════════
+# ═══════════���═══════════════════════════════
 # DECODED-PIXEL QC (codec truth)
 # ═══════════════════════════════════════════
 
@@ -347,6 +349,15 @@ def verify_manifest(video_path: str) -> Tuple[bool, str]:
         manifest = json.load(f)
     if _sha256_file(video_path) != manifest.get("video_sha256"):
         return False, "video checksum mismatch — file changed after QC"
+    # A skipped gate never ran — it cannot count toward a clean pass.
+    # (This includes the A/V sync gate that would catch bad lip-sync.)
+    gates = manifest.get("gates", {})
+    skipped = [g.get("name", "?") for g in gates.get("gates", [])
+               if g.get("skipped")]
+    if skipped:
+        return False, ("QC manifest contains unrun gate(s): "
+                       + ", ".join(skipped)
+                       + " — cannot claim a clean pass")
     if not manifest.get("qc_passed"):
         return False, "QC manifest records a failed gate"
     return True, "QC manifest valid"
