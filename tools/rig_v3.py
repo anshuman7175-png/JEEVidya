@@ -348,34 +348,70 @@ def normalize_contour(pts: np.ndarray, fh: float) -> np.ndarray:
     return (pts - c) / scale
 
 
+FIT_CONTOUR_SAMPLES = 64     # polar samples per ring in the 5-D fit
+
+
+def _resample_polar(poly: np.ndarray, n: int,
+                    center: Optional[np.ndarray] = None) -> np.ndarray:
+    """Resample a closed ring at `n` UNIFORM POLAR ANGLES about `center`,
+    returning points RELATIVE to that centre.
+
+    This is what establishes CORRESPONDENCE between a measured lip ring
+    and a model contour. Arc-length resampling does not: it preserves
+    each ring's own arbitrary starting vertex and winding direction, so
+    point *k* of the observation and point *k* of the model describe
+    different parts of the mouth. MediaPipe's LIP_OUTER ring starts at
+    the left commissure and `mouth_model.lip_contour` starts at the right,
+    a half-ring phase error — which made the least-squares fit minimize
+    a meaningless quantity and collapse every viseme onto the same
+    degenerate corner of the parameter space (jaw=0 ⇒ a mouth that never
+    opens). Sampling both rings by angle about a shared centre is
+    phase- and winding-invariant, so shape is compared against shape.
+
+    Valid because a lip ring is star-convex about its centroid.
+    """
+    p = np.asarray(poly, dtype=np.float64)
+    c = p.mean(axis=0) if center is None else np.asarray(center,
+                                                        dtype=np.float64)
+    d = p - c
+    ang = np.arctan2(d[:, 1], d[:, 0])
+    rad = np.hypot(d[:, 0], d[:, 1])
+    order = np.argsort(ang)
+    ang, rad = ang[order], rad[order]
+    # Tile ±2π so np.interp wraps continuously across the seam at ±π.
+    ang_p = np.concatenate([ang - 2.0 * math.pi, ang, ang + 2.0 * math.pi])
+    rad_p = np.concatenate([rad, rad, rad])
+    t = np.linspace(-math.pi, math.pi, n, endpoint=False)
+    r = np.interp(t, ang_p, rad_p)
+    return np.stack([r * np.cos(t), r * np.sin(t)], axis=1)
+
+
 def _contour_residual(params, observed_outer: np.ndarray,
                       observed_inner: np.ndarray) -> float:
+    """Mean squared distance between the model's lip rings and the
+    measured ones, in correspondence (see `_resample_polar`).
+
+    Both rings of a pair are sampled about their OUTER ring's centre, so
+    the inner ring's offset relative to the outer one — which is what
+    distinguishes an open jaw from a closed one — is preserved rather
+    than normalized away.
+    """
     from engine.mouth_model import MouthParams, lip_contour
     p = MouthParams(*params).clamped()
-    n = max(len(observed_outer), len(observed_inner))
+    n = FIT_CONTOUR_SAMPLES
     outer, inner = lip_contour(p, n=n)
+    m_outer = np.asarray(outer, dtype=np.float64)
+    m_inner = np.asarray(inner, dtype=np.float64)
+    obs_c = np.asarray(observed_outer, dtype=np.float64).mean(axis=0)
+    mod_c = m_outer.mean(axis=0)
     err = 0.0
-    for obs, model in ((observed_outer, outer), (observed_inner, inner)):
+    for obs, model in ((observed_outer, m_outer), (observed_inner, m_inner)):
         if len(obs) == 0:
             continue
-        m = _resample_closed(np.asarray(model, dtype=np.float64), len(obs))
-        err += float(np.mean(np.sum((m - obs) ** 2, axis=1)))
+        a = _resample_polar(obs, n, center=obs_c)
+        b = _resample_polar(model, n, center=mod_c)
+        err += float(np.mean(np.sum((a - b) ** 2, axis=1)))
     return err
-
-
-def _resample_closed(poly: np.ndarray, n: int) -> np.ndarray:
-    """Resample a closed polyline to n points by arc length, so the fit
-    compares shapes rather than accidental vertex counts."""
-    if len(poly) == n:
-        return poly
-    closed = np.vstack([poly, poly[:1]])
-    seg = np.linalg.norm(np.diff(closed, axis=0), axis=1)
-    cum = np.concatenate([[0.0], np.cumsum(seg)])
-    total = cum[-1] or 1.0
-    t = np.linspace(0.0, total, n, endpoint=False)
-    x = np.interp(t, cum, closed[:, 0])
-    y = np.interp(t, cum, closed[:, 1])
-    return np.stack([x, y], axis=1)
 
 
 def fit_mouth_target(observed_outer: np.ndarray, observed_inner: np.ndarray,
@@ -392,33 +428,69 @@ def fit_mouth_target(observed_outer: np.ndarray, observed_inner: np.ndarray,
     bounds = [(0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (-1.0, 1.0)]
     x0 = list(seed) if seed is not None else [0.3, 0.5, 0.2, 0.2, 0.0]
 
-    best = list(x0)
-    best_err = _contour_residual(best, observed_outer, observed_inner)
-    try:
-        from scipy.optimize import minimize
-        res = minimize(_contour_residual, x0,
-                       args=(observed_outer, observed_inner),
-                       method="L-BFGS-B", bounds=bounds)
-        if res.success and res.fun < best_err:
-            best, best_err = list(res.x), float(res.fun)
-    except Exception:
-        pass
+    def err_of(x) -> float:
+        return _contour_residual(x, observed_outer, observed_inner)
 
-    # Deterministic polish (also the sole optimizer without scipy):
-    # shrinking coordinate descent, fixed schedule ⇒ same input, same fit.
-    step = 0.25
-    for _ in range(6):
-        improved = False
-        for k in range(len(best)):
-            for direction in (+1.0, -1.0):
-                cand = list(best)
-                lo, hi = bounds[k]
-                cand[k] = min(hi, max(lo, cand[k] + direction * step))
-                err = _contour_residual(cand, observed_outer, observed_inner)
-                if err < best_err - 1e-12:
-                    best, best_err, improved = cand, err, True
-        if not improved:
-            step *= 0.5
+    # ── Multi-start, because this residual is genuinely multi-modal ──
+    # `pull` (corner raise) and `jaw` (opening) trade off against each
+    # other: raising the corners and dropping the jaw both lengthen the
+    # ring vertically, so a lone descent from one seed slides into a
+    # nearby basin and pins `pull` against its bound. Coarse-scanning the
+    # space first and polishing the most promising starts finds the true
+    # optimum — e.g. chintu REST goes from (jaw .34, pull −1.0) at
+    # residual .117 to a correct closed smile at residual .026.
+    # The grid is fixed, so the bake stays reproducible.
+    grid = (
+        (0.0, 0.25, 0.5, 0.75, 1.0),      # jaw
+        (0.2, 0.5, 0.8),                  # width
+        (0.1, 0.5, 0.9),                  # round
+        (0.0, 0.4, 0.8),                  # press
+        (-0.6, 0.0, 0.6),                 # pull
+    )
+    starts = [(err_of(x0), list(x0))]
+    for jaw in grid[0]:
+        for width in grid[1]:
+            for rnd in grid[2]:
+                for press in grid[3]:
+                    for pull in grid[4]:
+                        c = [jaw, width, rnd, press, pull]
+                        starts.append((err_of(c), c))
+    starts.sort(key=lambda t: t[0])
+    # Always polish the seed (index 0 pre-sort is kept by value) plus the
+    # best few grid points; more than this buys nothing measurable.
+    candidates = [list(x0)] + [c for _, c in starts[:6]]
+
+    best, best_err = list(x0), err_of(x0)
+    for start in candidates:
+        cur, cur_err = list(start), err_of(start)
+        try:
+            from scipy.optimize import minimize
+            res = minimize(_contour_residual, cur,
+                           args=(observed_outer, observed_inner),
+                           method="L-BFGS-B", bounds=bounds)
+            if res.success and float(res.fun) < cur_err:
+                cur, cur_err = list(res.x), float(res.fun)
+        except Exception:
+            pass
+
+        # Deterministic polish (also the sole optimizer without scipy):
+        # shrinking coordinate descent, fixed schedule ⇒ same fit always.
+        step = 0.25
+        for _ in range(8):
+            improved = False
+            for k in range(len(cur)):
+                for direction in (+1.0, -1.0):
+                    cand = list(cur)
+                    lo, hi = bounds[k]
+                    cand[k] = min(hi, max(lo, cand[k] + direction * step))
+                    e = err_of(cand)
+                    if e < cur_err - 1e-12:
+                        cur, cur_err, improved = cand, e, True
+            if not improved:
+                step *= 0.5
+        if cur_err < best_err - 1e-12:
+            best, best_err = cur, cur_err
+
     return {name: float(v) for name, v in zip(PARAM_NAMES, best, strict=True)}
 
 
