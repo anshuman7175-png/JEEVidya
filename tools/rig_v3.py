@@ -428,33 +428,69 @@ def fit_mouth_target(observed_outer: np.ndarray, observed_inner: np.ndarray,
     bounds = [(0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (-1.0, 1.0)]
     x0 = list(seed) if seed is not None else [0.3, 0.5, 0.2, 0.2, 0.0]
 
-    best = list(x0)
-    best_err = _contour_residual(best, observed_outer, observed_inner)
-    try:
-        from scipy.optimize import minimize
-        res = minimize(_contour_residual, x0,
-                       args=(observed_outer, observed_inner),
-                       method="L-BFGS-B", bounds=bounds)
-        if res.success and res.fun < best_err:
-            best, best_err = list(res.x), float(res.fun)
-    except Exception:
-        pass
+    def err_of(x) -> float:
+        return _contour_residual(x, observed_outer, observed_inner)
 
-    # Deterministic polish (also the sole optimizer without scipy):
-    # shrinking coordinate descent, fixed schedule ⇒ same input, same fit.
-    step = 0.25
-    for _ in range(6):
-        improved = False
-        for k in range(len(best)):
-            for direction in (+1.0, -1.0):
-                cand = list(best)
-                lo, hi = bounds[k]
-                cand[k] = min(hi, max(lo, cand[k] + direction * step))
-                err = _contour_residual(cand, observed_outer, observed_inner)
-                if err < best_err - 1e-12:
-                    best, best_err, improved = cand, err, True
-        if not improved:
-            step *= 0.5
+    # ── Multi-start, because this residual is genuinely multi-modal ──
+    # `pull` (corner raise) and `jaw` (opening) trade off against each
+    # other: raising the corners and dropping the jaw both lengthen the
+    # ring vertically, so a lone descent from one seed slides into a
+    # nearby basin and pins `pull` against its bound. Coarse-scanning the
+    # space first and polishing the most promising starts finds the true
+    # optimum — e.g. chintu REST goes from (jaw .34, pull −1.0) at
+    # residual .117 to a correct closed smile at residual .026.
+    # The grid is fixed, so the bake stays reproducible.
+    grid = (
+        (0.0, 0.25, 0.5, 0.75, 1.0),      # jaw
+        (0.2, 0.5, 0.8),                  # width
+        (0.1, 0.5, 0.9),                  # round
+        (0.0, 0.4, 0.8),                  # press
+        (-0.6, 0.0, 0.6),                 # pull
+    )
+    starts = [(err_of(x0), list(x0))]
+    for jaw in grid[0]:
+        for width in grid[1]:
+            for rnd in grid[2]:
+                for press in grid[3]:
+                    for pull in grid[4]:
+                        c = [jaw, width, rnd, press, pull]
+                        starts.append((err_of(c), c))
+    starts.sort(key=lambda t: t[0])
+    # Always polish the seed (index 0 pre-sort is kept by value) plus the
+    # best few grid points; more than this buys nothing measurable.
+    candidates = [list(x0)] + [c for _, c in starts[:6]]
+
+    best, best_err = list(x0), err_of(x0)
+    for start in candidates:
+        cur, cur_err = list(start), err_of(start)
+        try:
+            from scipy.optimize import minimize
+            res = minimize(_contour_residual, cur,
+                           args=(observed_outer, observed_inner),
+                           method="L-BFGS-B", bounds=bounds)
+            if res.success and float(res.fun) < cur_err:
+                cur, cur_err = list(res.x), float(res.fun)
+        except Exception:
+            pass
+
+        # Deterministic polish (also the sole optimizer without scipy):
+        # shrinking coordinate descent, fixed schedule ⇒ same fit always.
+        step = 0.25
+        for _ in range(8):
+            improved = False
+            for k in range(len(cur)):
+                for direction in (+1.0, -1.0):
+                    cand = list(cur)
+                    lo, hi = bounds[k]
+                    cand[k] = min(hi, max(lo, cand[k] + direction * step))
+                    e = err_of(cand)
+                    if e < cur_err - 1e-12:
+                        cur, cur_err, improved = cand, e, True
+            if not improved:
+                step *= 0.5
+        if cur_err < best_err - 1e-12:
+            best, best_err = cur, cur_err
+
     return {name: float(v) for name, v in zip(PARAM_NAMES, best, strict=True)}
 
 
