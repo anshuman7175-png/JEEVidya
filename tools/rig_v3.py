@@ -74,13 +74,6 @@ BROW_R = (70, 63, 105, 66, 107, 46, 53, 52, 65, 55)
 CHIN = 152
 FOREHEAD = 10
 
-# Palette sample sites: (key, landmark index, radius factor)
-_PALETTE_SITES = (
-    ("skin", 50, 0.03),
-    ("lip", 13, 0.012),
-    ("lip_shadow", 17, 0.012),
-)
-
 # Bake tuning — all proportional to face height, never literal pixels.
 HEAD_DILATE = 0.02          # ×face_h, mask growth so hair is not clipped
 SEAM_BAND = 0.06            # ×face_h, complementary feather width
@@ -548,7 +541,7 @@ def extract_palette(arr: np.ndarray, lms: np.ndarray, fh: float,
 
 # ═══════════════════════════════════════════
 # §3.6 — fit the 5-D mouth targets from the art
-# ═══════════════════════════════════════════
+# ═══════════════════════════════���═══════════
 
 def normalize_contour(pts: np.ndarray, fh: float) -> np.ndarray:
     """Map a lip ring into the model's normalized mouth space: centred at
@@ -1067,21 +1060,6 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
 # ═══════════════════════════════════════════
 # colour helpers
 # ═══════════════════════════════════════════
-
-def _sample(arr: np.ndarray, x: float, y: float,
-            radius: float = 3.0) -> Tuple[int, int, int]:
-    h, w = arr.shape[:2]
-    r = max(1, int(radius))
-    x0, x1 = max(0, int(x) - r), min(w, int(x) + r + 1)
-    y0, y1 = max(0, int(y) - r), min(h, int(y) + r + 1)
-    patch = arr[y0:y1, x0:x1]
-    if patch.size == 0:
-        return (200, 170, 150)
-    opaque = patch[..., 3] > 60
-    if not opaque.any():
-        return (200, 170, 150)
-    return tuple(int(v) for v in patch[opaque][:, :3].mean(axis=0))
-
 
 def _darken(rgb, f: float) -> Tuple[int, int, int]:
     rgb = rgb or (140, 90, 90)
