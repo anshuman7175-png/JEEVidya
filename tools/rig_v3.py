@@ -348,34 +348,70 @@ def normalize_contour(pts: np.ndarray, fh: float) -> np.ndarray:
     return (pts - c) / scale
 
 
+FIT_CONTOUR_SAMPLES = 64     # polar samples per ring in the 5-D fit
+
+
+def _resample_polar(poly: np.ndarray, n: int,
+                    center: Optional[np.ndarray] = None) -> np.ndarray:
+    """Resample a closed ring at `n` UNIFORM POLAR ANGLES about `center`,
+    returning points RELATIVE to that centre.
+
+    This is what establishes CORRESPONDENCE between a measured lip ring
+    and a model contour. Arc-length resampling does not: it preserves
+    each ring's own arbitrary starting vertex and winding direction, so
+    point *k* of the observation and point *k* of the model describe
+    different parts of the mouth. MediaPipe's LIP_OUTER ring starts at
+    the left commissure and `mouth_model.lip_contour` starts at the right,
+    a half-ring phase error — which made the least-squares fit minimize
+    a meaningless quantity and collapse every viseme onto the same
+    degenerate corner of the parameter space (jaw=0 ⇒ a mouth that never
+    opens). Sampling both rings by angle about a shared centre is
+    phase- and winding-invariant, so shape is compared against shape.
+
+    Valid because a lip ring is star-convex about its centroid.
+    """
+    p = np.asarray(poly, dtype=np.float64)
+    c = p.mean(axis=0) if center is None else np.asarray(center,
+                                                        dtype=np.float64)
+    d = p - c
+    ang = np.arctan2(d[:, 1], d[:, 0])
+    rad = np.hypot(d[:, 0], d[:, 1])
+    order = np.argsort(ang)
+    ang, rad = ang[order], rad[order]
+    # Tile ±2π so np.interp wraps continuously across the seam at ±π.
+    ang_p = np.concatenate([ang - 2.0 * math.pi, ang, ang + 2.0 * math.pi])
+    rad_p = np.concatenate([rad, rad, rad])
+    t = np.linspace(-math.pi, math.pi, n, endpoint=False)
+    r = np.interp(t, ang_p, rad_p)
+    return np.stack([r * np.cos(t), r * np.sin(t)], axis=1)
+
+
 def _contour_residual(params, observed_outer: np.ndarray,
                       observed_inner: np.ndarray) -> float:
+    """Mean squared distance between the model's lip rings and the
+    measured ones, in correspondence (see `_resample_polar`).
+
+    Both rings of a pair are sampled about their OUTER ring's centre, so
+    the inner ring's offset relative to the outer one — which is what
+    distinguishes an open jaw from a closed one — is preserved rather
+    than normalized away.
+    """
     from engine.mouth_model import MouthParams, lip_contour
     p = MouthParams(*params).clamped()
-    n = max(len(observed_outer), len(observed_inner))
+    n = FIT_CONTOUR_SAMPLES
     outer, inner = lip_contour(p, n=n)
+    m_outer = np.asarray(outer, dtype=np.float64)
+    m_inner = np.asarray(inner, dtype=np.float64)
+    obs_c = np.asarray(observed_outer, dtype=np.float64).mean(axis=0)
+    mod_c = m_outer.mean(axis=0)
     err = 0.0
-    for obs, model in ((observed_outer, outer), (observed_inner, inner)):
+    for obs, model in ((observed_outer, m_outer), (observed_inner, m_inner)):
         if len(obs) == 0:
             continue
-        m = _resample_closed(np.asarray(model, dtype=np.float64), len(obs))
-        err += float(np.mean(np.sum((m - obs) ** 2, axis=1)))
+        a = _resample_polar(obs, n, center=obs_c)
+        b = _resample_polar(model, n, center=mod_c)
+        err += float(np.mean(np.sum((a - b) ** 2, axis=1)))
     return err
-
-
-def _resample_closed(poly: np.ndarray, n: int) -> np.ndarray:
-    """Resample a closed polyline to n points by arc length, so the fit
-    compares shapes rather than accidental vertex counts."""
-    if len(poly) == n:
-        return poly
-    closed = np.vstack([poly, poly[:1]])
-    seg = np.linalg.norm(np.diff(closed, axis=0), axis=1)
-    cum = np.concatenate([[0.0], np.cumsum(seg)])
-    total = cum[-1] or 1.0
-    t = np.linspace(0.0, total, n, endpoint=False)
-    x = np.interp(t, cum, closed[:, 0])
-    y = np.interp(t, cum, closed[:, 1])
-    return np.stack([x, y], axis=1)
 
 
 def fit_mouth_target(observed_outer: np.ndarray, observed_inner: np.ndarray,
