@@ -47,11 +47,12 @@ from config import settings
 from engine.bone_engine import BoneEngine, PuppetPose
 from engine.rig import Rig
 from tools.face_qc import (GateResult, QCReport, at_phone_scale, color_mask,
-                           gate_av_sync, gate_blink_closure,
+                           dilate_mask, gate_av_sync, gate_blink_closure,
                            gate_discriminability, gate_registration,
                            gate_rig_sanity, gate_single_face,
                            gate_sync_confidence, gate_temporal,
-                           mask_centroid, PHONE_SCALE_PX)
+                           largest_component, mask_centroid, variation_mask,
+                           PHONE_SCALE_PX)
 
 # Sweep design constants — durations in SECONDS (frame counts are always
 # derived from the live fps; never a literal frame count).
@@ -62,19 +63,58 @@ CONTOUR_POINTS = 64        # resampled outer-contour samples per viseme
 # Lip-color detection tolerance: wider than the QC default because baked
 # art plates blend art pixels over the procedural lip fill.
 LIP_TOL = 48
+IRIS_TOL = 30              # irises are small; a loose tolerance swamps them
+ROI_DELTA = 10.0           # RGB span that counts as "this pixel moved"
+ROI_GROW_FRAC = 0.05       # ×face_h, ROI dilation so soft edges survive
 
-
-# ═══════════════════════════════════════════
-# Detection on rendered pixels
-# ═══════════════════════════════════════════
 
 def _lip_mask(frame: Image.Image, lip_rgb: Tuple[int, int, int],
-              shadow_rgb: Optional[Tuple[int, int, int]] = None
-              ) -> np.ndarray:
+              shadow_rgb: Optional[Tuple[int, int, int]] = None,
+              region: Optional[np.ndarray] = None) -> np.ndarray:
     m = color_mask(frame, lip_rgb, tol=LIP_TOL)
     if shadow_rgb is not None:
         m |= color_mask(frame, shadow_rgb, tol=LIP_TOL)
+    if region is not None and region.shape == m.shape:
+        m = m & region
     return m
+
+
+def _mouth_blob(frame: Image.Image, lip_rgb: Tuple[int, int, int],
+                shadow_rgb: Optional[Tuple[int, int, int]] = None,
+                region: Optional[np.ndarray] = None) -> np.ndarray:
+    """The mouth as a single connected body of lip colour.
+
+    Every measurement below (centroid, bbox, aperture, contour) reads
+    this instead of the raw colour mask, so scattered look-alike pixels
+    elsewhere in the artwork cannot drag the numbers. `single_face`
+    still judges the leftovers, so nothing is swept under the rug.
+    """
+    return largest_component(_lip_mask(frame, lip_rgb, shadow_rgb, region))
+
+
+def _roi_from_variation(frames: List[Image.Image], face_h: float
+                        ) -> Optional[np.ndarray]:
+    """A detection region derived from the RENDER itself: the bounding
+    box of every pixel that changed across `frames`, grown by a
+    face-relative margin.
+
+    The frames handed in differ in exactly ONE driven channel (viseme,
+    or blink), so the pixels that moved are that feature's own
+    footprint. Using the filled bounding box rather than the raw
+    difference keeps a feature's INVARIANT core (the lip centre that
+    every viseme shares) inside the region, while still excluding the
+    rest of the canvas. Nothing here consults `predict()`, so the
+    registration gate stays an independent check rather than a tautology.
+    """
+    var = variation_mask(frames, ROI_DELTA)
+    if var.shape == (1, 1) or not var.any():
+        return None
+    var = dilate_mask(var, ROI_GROW_FRAC * face_h)
+    ys, xs = np.nonzero(var)
+    region = np.zeros(var.shape, dtype=bool)
+    region[int(ys.min()):int(ys.max()) + 1,
+           int(xs.min()):int(xs.max()) + 1] = True
+    return region
 
 
 def _mask_bbox(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
@@ -187,20 +227,42 @@ def run_sweep(character: str, out_dir: str,
     shadow_rgb = tuple(palette["lip_shadow"]) if "lip_shadow" in palette \
         else None
     iris_rgb = tuple(palette.get("iris", (92, 58, 38)))
+    sclera_rgb = tuple(palette["sclera"]) if "sclera" in palette else None
 
     # ─── 5 · rig sanity (cheap; run first so a broken rig
     #         fails before any rendering) ─────────────────
     report.add(gate_rig_sanity(rig.to_dict(), rig.head.face_height))
 
     # ─── 1 · every baked viseme class, held ───────────────
+    # Two passes on purpose: render every viseme first so the mouth's own
+    # footprint can be measured from how the render CHANGES between them
+    # (`_roi_from_variation`), then gate inside that region. A held
+    # closed mouth is included so the region covers the resting lips too.
+    viseme_names = _baked_viseme_classes(rig)
+    held: Dict[str, Tuple[Image.Image, Dict[str, Tuple[float, float]]]] = {}
+    for vname in viseme_names:
+        pose = PuppetPose(viseme=vname, viseme_to=vname, mouth_open=1.0)
+        held[vname] = (engine.render(pose), engine.predict(pose))
+    rest_pose = PuppetPose(mouth_open=0.0)
+    rest_frame = engine.render(rest_pose)
+    mouth_roi = _roi_from_variation(
+        [f for f, _ in held.values()] + [rest_frame], face_h)
+    if mouth_roi is None:
+        report.add(GateResult(
+            "mouth_motion", False, 0.0, ROI_DELTA,
+            "no pixel changed across the baked viseme set — the mouth "
+            "never opens (check the art-fitted mouth targets in "
+            "rig.mouth_targets)"))
+    else:
+        report.add(GateResult("mouth_motion", True, float(mouth_roi.sum()),
+                              1.0, "mouth footprint measured from the render"))
+
     contours: Dict[str, np.ndarray] = {}
     mouth_w_phone = 1.0
-    for vname in _baked_viseme_classes(rig):
-        pose = PuppetPose(viseme=vname, viseme_to=vname, mouth_open=1.0)
-        frame = engine.render(pose)
-        pred = engine.predict(pose)
+    for vname in viseme_names:
+        frame, pred = held[vname]
 
-        mask = _lip_mask(frame, lip_rgb, shadow_rgb)
+        mask = _mouth_blob(frame, lip_rgb, shadow_rgb, mouth_roi)
         det = mask_centroid(mask)
         g = gate_registration(pred["mouth"], det, face_h,
                               f"mouth[{vname}]")
@@ -210,7 +272,9 @@ def run_sweep(character: str, out_dir: str,
 
         bb = _mask_bbox(mask)
         if bb is not None:
-            g = gate_single_face(frame, lip_rgb, bb, face_h)
+            # Whole-frame search here ON PURPOSE: a ghost mouth outside
+            # the ROI is exactly the defect this gate exists to catch.
+            g = gate_single_face(frame, lip_rgb, bb, face_h, tol=LIP_TOL)
             g.name = f"single_face[{vname}]"
             report.add(g)
             if not g.passed:
@@ -222,7 +286,7 @@ def run_sweep(character: str, out_dir: str,
 
         # phone-scale contour for the discriminability gate
         pframe = at_phone_scale(frame)
-        pmask = _lip_mask(pframe, lip_rgb, shadow_rgb)
+        pmask = _mouth_blob(pframe, lip_rgb, shadow_rgb)
         pc = _mouth_contour(pmask)
         pbb = _mask_bbox(pmask)
         if pc is not None and pbb is not None:
@@ -236,25 +300,16 @@ def run_sweep(character: str, out_dir: str,
                               2.0, "fewer than 2 viseme classes rendered "
                               "detectable mouth contours", skipped=False))
 
-    # iris registration on the neutral held frame
+    # ─── 2 · full blink, then iris registration ───────────
+    # The blink supplies the eyes' own footprint: the only pixels that
+    # differ between eyes-open and eyes-shut ARE the eyes. Irises are
+    # small — far smaller than a patch of same-toned hair — so unlike the
+    # mouth they cannot be found by "largest component" alone, and this
+    # region is what makes their registration measurable at all.
     neutral = PuppetPose()
-    frame = engine.render(neutral)
+    open_frame = engine.render(neutral)
     pred = engine.predict(neutral)
-    for eye in ("iris_l", "iris_r"):
-        m = color_mask(frame, iris_rgb, tol=LIP_TOL)
-        # split the iris mask by canvas midline of the two predictions
-        mid_x = (pred["iris_l"][0] + pred["iris_r"][0]) / 2.0
-        xs = np.zeros_like(m)
-        if eye == "iris_l":
-            xs[:, :int(mid_x)] = m[:, :int(mid_x)]
-        else:
-            xs[:, int(mid_x):] = m[:, int(mid_x):]
-        g = gate_registration(pred[eye], mask_centroid(xs), face_h, eye)
-        report.add(g)
-        if not g.passed:
-            art.save(frame, f"registration_{eye}")
 
-    # ─── 2 · full blink ───────────────────────────────────
     n_blink = max(4, round(fps * BLINK_S))
     closed_frame = None
     for i in range(n_blink):
@@ -265,7 +320,38 @@ def run_sweep(character: str, out_dir: str,
             closed_frame = f
     if closed_frame is None:
         closed_frame = engine.render(PuppetPose(blink=1.0))
-    g = gate_blink_closure(closed_frame, iris_rgb)
+
+    eye_roi = _roi_from_variation([open_frame, closed_frame], face_h)
+    if eye_roi is None:
+        report.add(GateResult(
+            "eye_motion", False, 0.0, ROI_DELTA,
+            "no pixel changed between blink=0 and blink=1 — the eyes "
+            "never move"))
+    else:
+        report.add(GateResult("eye_motion", True, float(eye_roi.sum()), 1.0,
+                              "eye footprint measured from the render"))
+
+    mid_x = int((pred["iris_l"][0] + pred["iris_r"][0]) / 2.0)
+    for eye in ("iris_l", "iris_r"):
+        m = color_mask(open_frame, iris_rgb, tol=IRIS_TOL)
+        if eye_roi is not None:
+            m = m & eye_roi
+        # Split by the canvas midline between the two eyes, then take
+        # each side's largest body of iris colour as that iris.
+        side = np.zeros_like(m)
+        if eye == "iris_l":
+            side[:, :mid_x] = m[:, :mid_x]
+        else:
+            side[:, mid_x:] = m[:, mid_x:]
+        det = mask_centroid(largest_component(side))
+        g = gate_registration(pred[eye], det, face_h, eye)
+        report.add(g)
+        if not g.passed:
+            art.save(open_frame, f"registration_{eye}")
+
+    g = gate_blink_closure(closed_frame, iris_rgb, frame_open=open_frame,
+                           sclera_rgb=sclera_rgb, region=eye_roi,
+                           tol=IRIS_TOL)
     report.add(g)
     if not g.passed:
         art.save(closed_frame, "blink_closure")
@@ -288,7 +374,10 @@ def run_sweep(character: str, out_dir: str,
                           body_pose_blend=t)
         f = engine.render(pose)
         pred = engine.predict(pose)
-        mask = _lip_mask(f, lip_rgb, shadow_rgb)
+        # No ROI across a pose blend: the head travels, so the mouth's
+        # footprint moves with it. `_mouth_blob` stays honest here — it
+        # constrains by connectivity, not by position.
+        mask = _mouth_blob(f, lip_rgb, shadow_rgb)
         det = mask_centroid(mask)
         if det is None:
             lock_worst = math.inf
@@ -336,7 +425,7 @@ def run_sweep(character: str, out_dir: str,
         pose = PuppetPose(viseme=classes[k], viseme_to=classes[k2],
                           viseme_blend=blend * 0.4, mouth_open=float(env[i]))
         f = engine.render(pose)
-        mask = _lip_mask(f, lip_rgb, shadow_rgb)
+        mask = _mouth_blob(f, lip_rgb, shadow_rgb, mouth_roi)
         apertures.append(_aperture(mask, face_h))
         c = mask_centroid(mask)
         centroids.append(c if c is not None
