@@ -335,6 +335,218 @@ def shading_map(plate: Image.Image, lms_plate: np.ndarray,
 
 
 # ═══════════════════════════════════════════
+# Palette extraction — regions, not pinprick samples
+# ═══════════════════════════════════════════
+# A palette entry is not decoration: the parametric mouth and eyes are
+# PAINTED with these colours, and QC then DETECTS the rendered features
+# by them. A wrong entry therefore breaks the render and the measurement
+# at once.
+#
+# The old form averaged a small box at one landmark. Landmark 13 is the
+# inner upper lip: on stylised art that box straddles the ink lip line
+# and the skin above it, so "lip" came out as muddy skin — invisible
+# lips that no colour search can find. The iris entry sampled the iris
+# CENTRE, which on cartoon eyes is the specular highlight, so "iris"
+# came out near-white and matched the sclera, the page, and the whites
+# of the eyes at every tolerance.
+#
+# Region statistics fix both: take every pixel of the anatomical region,
+# trim the extremes that are known contaminants (ink outline, specular
+# highlight), and use the MEDIAN, which a few stray pixels cannot move.
+# Then enforce the separations the renderer and the gates depend on.
+
+PALETTE_MIN_PX = 24         # fewer pixels than this is not a measurement
+LIP_SKIN_SEP = 40.0         # lips must be findable against the face
+IRIS_LASH_SEP = 56.0        # a closed lid must not read as an iris
+SEP_MAX_STEPS = 32          # bounded ⇒ deterministic
+
+
+def _disc_mask(size: Tuple[int, int], cx: float, cy: float,
+               r: float) -> np.ndarray:
+    w, h = size
+    yy, xx = np.ogrid[:h, :w]
+    return (((xx - cx) ** 2 + (yy - cy) ** 2) <= max(1.0, r) ** 2
+            ).astype(np.float32)
+
+
+def _region_px(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Opaque RGB pixels of a region, as (N, 3) float32."""
+    sel = (mask > 0.5) & (arr[..., 3] > 60)
+    if not sel.any():
+        return np.zeros((0, 3), dtype=np.float32)
+    return arr[sel][:, :3].astype(np.float32)
+
+
+def _luma(px: np.ndarray) -> np.ndarray:
+    return 0.299 * px[..., 0] + 0.587 * px[..., 1] + 0.114 * px[..., 2]
+
+
+def _trimmed_median(px: np.ndarray, drop_dark: float = 0.20,
+                    drop_light: float = 0.10
+                    ) -> Optional[Tuple[int, int, int]]:
+    """Median of a region after dropping its darkest and lightest tails.
+
+    The tails are the contaminants: the artwork's ink outline at the dark
+    end, the key-light specular at the bright end. The median of what
+    remains is the colour a human would call "the lip" or "the iris".
+    """
+    if len(px) < 1:
+        return None
+    lum = _luma(px)
+    order = np.argsort(lum, kind="stable")
+    n = len(px)
+    a = int(n * drop_dark)
+    b = max(a + 1, n - int(n * drop_light))
+    sel = px[order[a:b]] if b > a else px
+    return tuple(int(round(v)) for v in np.median(sel, axis=0))
+
+
+def _luma_band(px: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """Pixels whose luma falls between the `lo` and `hi` percentiles."""
+    if len(px) == 0:
+        return px
+    lum = _luma(px)
+    a, b = np.percentile(lum, lo), np.percentile(lum, hi)
+    return px[(lum >= a) & (lum <= b)]
+
+
+def _cheb(a, b) -> float:
+    """Chebyshev RGB distance — the same metric the QC colour masks use,
+    so "separated enough" here means "separable there"."""
+    if a is None or b is None:
+        return 0.0
+    return float(max(abs(int(x) - int(y)) for x, y in zip(a, b, strict=True)))
+
+
+def _redness(px: np.ndarray) -> np.ndarray:
+    return px[..., 0] - 0.5 * (px[..., 1] + px[..., 2])
+
+
+def _push_warm(color, ref, min_sep: float):
+    """Deepen a colour toward vermilion until it is `min_sep` from `ref`.
+
+    Only reached when the artwork genuinely gives lips the same value as
+    skin (flat cel shading with a line-art mouth). Some separation is
+    then required, not optional: a mouth that cannot be distinguished
+    from the cheek is invisible on a phone and unmeasurable by QC.
+    """
+    r, g, b = (float(c) for c in color)
+    for _ in range(SEP_MAX_STEPS):
+        if _cheb((r, g, b), ref) >= min_sep:
+            break
+        r = min(255.0, r * 1.02 + 2.0)
+        g *= 0.90
+        b *= 0.90
+    return tuple(int(round(max(0.0, min(255.0, c)))) for c in (r, g, b))
+
+
+def _push_dark(color, ref, min_sep: float):
+    """Darken a colour (lash ink) until it clears `ref` (the iris)."""
+    r, g, b = (float(c) for c in color)
+    for _ in range(SEP_MAX_STEPS):
+        if _cheb((r, g, b), ref) >= min_sep:
+            break
+        r, g, b = r * 0.85, g * 0.85, b * 0.85
+        if max(r, g, b) < 1.0:
+            break
+    return tuple(int(round(max(0.0, min(255.0, c)))) for c in (r, g, b))
+
+
+def extract_palette(arr: np.ndarray, lms: np.ndarray, fh: float,
+                    iris_l: Tuple[float, float, float],
+                    iris_r: Tuple[float, float, float]
+                    ) -> Dict[str, Tuple[int, int, int]]:
+    """Robust, region-based palette for one character's head plate.
+
+    `arr` is the RGBA head crop BEFORE inpainting (the features must
+    still be painted to be measured), `lms` its landmarks in plate space,
+    and the two iris tuples are (cx, cy, r) in the same space.
+    """
+    h, w = arr.shape[:2]
+    size = (w, h)
+
+    def hull_mask(idx: Sequence[int]) -> np.ndarray:
+        return polygon_mask(convex_hull(_pick(lms, idx)), size)
+
+    # ── skin: cheeks and mid-face, away from lips, eyes and brows ──
+    skin_mask = np.zeros((h, w), dtype=np.float32)
+    for lm in (50, 280, 205, 425):
+        if lm < len(lms):
+            skin_mask = np.maximum(
+                skin_mask, _disc_mask(size, lms[lm][0], lms[lm][1],
+                                      0.045 * fh))
+    skin = _trimmed_median(_region_px(arr, skin_mask), 0.20, 0.20) \
+        or (214, 176, 152)
+
+    # ── lips: the vermilion BAND between the outer and inner rings ──
+    outer, inner = hull_mask(LIP_OUTER), hull_mask(LIP_INNER)
+    band_px = _region_px(arr, np.clip(outer - inner, 0.0, 1.0))
+    if len(band_px) < PALETTE_MIN_PX:
+        band_px = _region_px(arr, outer)     # closed mouth: rings coincide
+    lip = _trimmed_median(band_px, 0.25, 0.10) or _push_warm(skin, skin,
+                                                             LIP_SKIN_SEP)
+    if _cheb(lip, skin) < LIP_SKIN_SEP and len(band_px) >= PALETTE_MIN_PX:
+        # The band's median is skin-like because the band also covers the
+        # skin margin the landmark hull always includes. The reddest
+        # quartile of the same pixels IS the vermilion.
+        red = _redness(band_px)
+        sub = band_px[red >= np.percentile(red, 75.0)]
+        cand = _trimmed_median(sub, 0.10, 0.10)
+        if cand is not None and _cheb(cand, skin) > _cheb(lip, skin):
+            lip = cand
+    lip = _push_warm(lip, skin, LIP_SKIN_SEP)
+
+    lip_shadow = _trimmed_median(_luma_band(band_px, 0.0, 30.0), 0.10, 0.10)
+    if lip_shadow is None or _luma(np.array([lip_shadow], dtype=np.float32))[0] \
+            > _luma(np.array([lip], dtype=np.float32))[0] - 8.0:
+        lip_shadow = _darken(lip, 0.72)
+
+    # ── eyes: pool both sockets, then separate by luma role ──
+    eye_hull = np.maximum(hull_mask(LID_UPPER_L + LID_LOWER_L),
+                          hull_mask(LID_UPPER_R + LID_LOWER_R))
+    iris_disc = np.maximum(
+        _disc_mask(size, iris_l[0], iris_l[1], iris_l[2] * 0.80),
+        _disc_mask(size, iris_r[0], iris_r[1], iris_r[2] * 0.80))
+    eye_px = _region_px(arr, eye_hull)
+    iris_px = _region_px(arr, np.minimum(iris_disc, np.maximum(eye_hull, 0.6)))
+
+    # Iris: drop the specular highlight (bright tail) and the pupil
+    # (dark tail) — what is left is the coloured ring itself.
+    iris = _trimmed_median(iris_px, 0.15, 0.30) \
+        if len(iris_px) >= PALETTE_MIN_PX else None
+    iris_lum = _luma(np.array([iris], dtype=np.float32))[0] if iris else 255.0
+    if iris is None or iris_lum > 210.0:
+        # The iris ring collapsed (unrefined landmarks) or the sample
+        # landed on the sclera: fall back to the socket's dark half,
+        # which is the eyeball, never the eye white.
+        iris = _trimmed_median(_luma_band(eye_px, 5.0, 40.0), 0.05, 0.05) \
+            or (92, 58, 38)
+
+    sclera = _trimmed_median(_luma_band(eye_px, 75.0, 100.0), 0.05, 0.05) \
+        or (248, 247, 245)
+    if _luma(np.array([sclera], dtype=np.float32))[0] < \
+            _luma(np.array([skin], dtype=np.float32))[0] + 8.0:
+        sclera = (248, 247, 245)     # no eye white in the art: use paper
+
+    lash = _trimmed_median(_luma_band(eye_px, 0.0, 8.0), 0.0, 0.0) \
+        or _darken(skin, 0.25)
+    # A lid that reads as an iris makes blink closure unverifiable.
+    lash = _push_dark(lash, iris, IRIS_LASH_SEP)
+
+    return {
+        "skin": skin,
+        "lip": lip,
+        "lip_shadow": lip_shadow,
+        "oral_cavity": _darken(lip_shadow, 0.55),
+        "teeth": _mix(sclera, (242, 240, 236), 0.5),
+        "tongue": _mix(lip, (196, 96, 104), 0.5),
+        "sclera": sclera,
+        "iris": iris,
+        "lash": lash,
+    }
+
+
+# ═══════════════════════════════════════════
 # §3.6 — fit the 5-D mouth targets from the art
 # ═══════════════════════════════════════════
 
@@ -589,18 +801,12 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
             r = 0.055 * fh
         return (float(c[0]), float(c[1]), r)
 
-    palette: Dict[str, Tuple[int, int, int]] = {}
+    # Measured on the head crop BEFORE inpainting: the features have to
+    # still be painted to be sampled. Region statistics, not pinpricks.
     plate_arr = np.asarray(head_crop.convert("RGBA"))
-    for key, lm_idx, rad in _PALETTE_SITES:
-        px, py = plate_lms[lm_idx]
-        palette[key] = _sample(plate_arr, px, py, max(1.0, rad * fh))
-    palette.setdefault("oral_cavity", _darken(palette.get("lip"), 0.35))
-    palette.setdefault("teeth", (242, 240, 236))
-    palette.setdefault("tongue", _mix(palette.get("lip"), (196, 96, 104), 0.5))
-    palette.setdefault("sclera", (248, 247, 245))
-    palette.setdefault("iris", _sample(plate_arr, *plate_lms[IRIS_L[0]],
-                                       radius=max(1.0, 0.02 * fh)))
-    palette.setdefault("lash", _darken(palette.get("skin"), 0.25))
+    iris_geo_l, iris_geo_r = iris(IRIS_L), iris(IRIS_R)
+    palette = extract_palette(plate_arr, plate_lms, fh,
+                              iris_geo_l, iris_geo_r)
 
     rig.head = HeadGeometry(
         plate="head_plate.png",

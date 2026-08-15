@@ -13,9 +13,11 @@ Checks implemented (each returns a `GateResult` with a number):
 
   registration      mouth centroid + iris centers vs. the ANALYTIC
                     prediction from engine/head_transform.ComposedAffine
-  single_face       exactly one connected lip-color component; no
-                    lip-color pixels outside mouth contour + margin
-  blink_closure     at blink=1: zero iris-color pixels
+  single_face       exactly one MOUTH-SCALE lip-colour region (no rival
+                    blob ≥ 25% of the mouth's area, stray area within a
+                    face-relative speckle budget)
+  blink_closure     at blink=1: ≤2% of the OPEN eyeball still visible,
+                    measured inside the eye's own rendered footprint
   temporal          per-frame deltas of aperture/centroid bounded;
                     jerk metric (no single-frame sign reversals)
   av_sync           cross-correlation of rendered aperture vs. audio
@@ -146,11 +148,42 @@ def color_mask(img: Image.Image, rgb: Tuple[int, int, int],
     return (d <= tol) & (a[..., 3] > 127)
 
 
-def connected_components(mask: np.ndarray) -> int:
-    """Count 4-connected components ≥ 4 px. Pure-numpy two-pass label."""
+MIN_COMPONENT_PX = 4       # below this a "component" is antialias speckle
+
+
+def label_components(mask: np.ndarray) -> Tuple[np.ndarray, int]:
+    """4-connected labelling of a boolean mask → (labels, count).
+
+    Backends in order: scipy.ndimage.label, cv2.connectedComponents, and
+    a pure-Python union-find. The accelerated backends are not a luxury:
+    a 1080×1920 QC frame is 2 M pixels, and the Python fallback walks
+    every one of them in the interpreter, which is why a full sweep used
+    to take minutes per gate. All three agree on 4-connectivity, so the
+    gate verdict is backend-independent.
+    """
+    m = np.ascontiguousarray(mask.astype(bool))
+    if not m.any():
+        return np.zeros(m.shape, dtype=np.int32), 0
+    try:
+        from scipy.ndimage import label as _label
+        structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+        lab, n = _label(m, structure=structure)
+        return lab.astype(np.int32), int(n)
+    except Exception:
+        pass
+    try:
+        import cv2
+        n, lab = cv2.connectedComponents(m.astype(np.uint8), connectivity=4)
+        return lab.astype(np.int32), int(max(0, n - 1))
+    except Exception:
+        pass
+    return _label_python(m)
+
+
+def _label_python(mask: np.ndarray) -> Tuple[np.ndarray, int]:
+    """Dependency-free two-pass union-find label (slow; last resort)."""
     h, w = mask.shape
     labels = np.zeros((h, w), dtype=np.int32)
-    nxt = 0
     parent: List[int] = []
 
     def find(x: int) -> int:
@@ -159,6 +192,7 @@ def connected_components(mask: np.ndarray) -> int:
             x = parent[x]
         return x
 
+    nxt = 0
     for y in range(h):
         row = mask[y]
         for x in range(w):
@@ -178,13 +212,114 @@ def connected_components(mask: np.ndarray) -> int:
                 nxt += 1
                 labels[y, x] = nxt
     if nxt == 0:
-        return 0
-    roots = {}
-    flat = labels[mask]
-    for lab in flat:
+        return labels, 0
+    remap = np.zeros(nxt + 1, dtype=np.int32)
+    seen: Dict[int, int] = {}
+    for lab in range(1, nxt + 1):
         r = find(lab - 1)
-        roots[r] = roots.get(r, 0) + 1
-    return sum(1 for c in roots.values() if c >= 4)
+        if r not in seen:
+            seen[r] = len(seen) + 1
+        remap[lab] = seen[r]
+    return remap[labels], len(seen)
+
+
+def component_sizes(mask: np.ndarray,
+                    min_px: int = MIN_COMPONENT_PX) -> np.ndarray:
+    """Areas of the 4-connected components ≥ `min_px`, largest first.
+
+    Sizes — not a bare count — are what let a gate distinguish a second
+    MOUTH from a stray speck of lip-coloured clothing. Counting alone
+    made `single_face` unusable on real artwork: a character with red
+    trim reports 21 "faces" and the gate fails a perfect render.
+    """
+    lab, n = label_components(mask)
+    if n == 0:
+        return np.zeros(0, dtype=np.int64)
+    counts = np.bincount(lab.ravel())
+    counts = counts[1:] if len(counts) > 1 else np.zeros(0, dtype=np.int64)
+    sizes = counts[counts >= max(1, int(min_px))]
+    return np.sort(sizes)[::-1].astype(np.int64)
+
+
+def connected_components(mask: np.ndarray,
+                         min_px: int = MIN_COMPONENT_PX) -> int:
+    """Count 4-connected components ≥ `min_px` px."""
+    return int(len(component_sizes(mask, min_px)))
+
+
+def largest_component(mask: np.ndarray,
+                      min_px: int = MIN_COMPONENT_PX) -> np.ndarray:
+    """The biggest 4-connected component of `mask`, as a boolean mask.
+
+    Feature measurement (centroid, bbox, aperture) reads THIS rather
+    than the raw colour mask. A colour mask over real artwork always
+    carries scattered look-alike pixels — a red hair tie, a warm
+    highlight in the hair, chroma fringing — and averaging them into the
+    centroid is precisely what produced "mouth 363 px off" on a render
+    whose mouth was in exactly the right place. The mouth is the largest
+    lip-coloured body on a face by construction, so the largest
+    component is the mouth; the leftovers are then judged separately by
+    `gate_single_face`, which is where stray lip colour BELONGS as a
+    verdict.
+    """
+    lab, n = label_components(mask)
+    if n == 0:
+        return np.zeros(mask.shape, dtype=bool)
+    counts = np.bincount(lab.ravel())
+    counts[0] = 0
+    top = int(np.argmax(counts))
+    if counts[top] < max(1, int(min_px)):
+        return np.zeros(mask.shape, dtype=bool)
+    return lab == top
+
+
+def dilate_mask(mask: np.ndarray, radius: float) -> np.ndarray:
+    """Grow a boolean mask by `radius` px (4-connected disc approx.).
+
+    Used to turn an exact detection region into a tolerant one, so a
+    legitimately antialiased feature edge is not clipped away by the
+    region constraint it is being measured inside.
+    """
+    r = int(round(radius))
+    if r <= 0 or not mask.any():
+        return mask.astype(bool)
+    try:
+        from scipy.ndimage import binary_dilation, iterate_structure
+        base = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+        return binary_dilation(mask, structure=iterate_structure(base, r))
+    except Exception:
+        out = mask.astype(bool)
+        for _ in range(r):
+            g = out.copy()
+            g[1:, :] |= out[:-1, :]
+            g[:-1, :] |= out[1:, :]
+            g[:, 1:] |= out[:, :-1]
+            g[:, :-1] |= out[:, 1:]
+            out = g
+        return out
+
+
+def variation_mask(frames: Sequence[Image.Image],
+                   min_delta: float = 10.0) -> np.ndarray:
+    """Pixels whose colour CHANGES across renders that differ only in the
+    feature under test — i.e. the feature's own footprint, measured from
+    rendered pixels alone.
+
+    This is how a gate can be spatially constrained without becoming
+    circular. Constraining detection to a neighbourhood of `predict()`
+    would make the registration gate check the prediction against
+    itself; constraining it to the pixels the feature actually moved
+    keeps the measurement independent of the prediction, while excluding
+    every unrelated pixel that merely happens to share the feature's
+    colour (hair, blush, clothing — the pollution that put a "mouth
+    centroid" 363 px off the mouth).
+    """
+    if len(frames) < 2:
+        return np.zeros((1, 1), dtype=bool)
+    stack = np.stack([np.asarray(f.convert("RGB"), dtype=np.float32)
+                      for f in frames])
+    span = stack.max(axis=0) - stack.min(axis=0)
+    return (span.max(axis=-1) >= float(min_delta))
 
 
 def mask_centroid(mask: np.ndarray) -> Optional[Tuple[float, float]]:
@@ -211,30 +346,121 @@ def gate_registration(predicted: Tuple[float, float],
     return GateResult(f"registration:{what}", err <= tol, err, tol)
 
 
+SECOND_MOUTH_FRAC = 0.25    # a rival lip-colour blob this big is a 2nd mouth
+STRAY_AREA_FRAC = 0.010     # stray lip-colour budget, ×face_h² (speckle only)
+
+
 def gate_single_face(frame: Image.Image, lip_rgb: Tuple[int, int, int],
                      mouth_bbox: Tuple[int, int, int, int],
-                     face_h: float) -> GateResult:
-    """Exactly one lip-color component; none outside mouth bbox + margin.
-    Kills D2/D3 regressions (three-mouth composites, painted-mouth ghosts)."""
-    m = color_mask(frame, lip_rgb)
-    n = connected_components(m)
-    margin = int(round(0.02 * face_h)) + 2
+                     face_h: float,
+                     region: Optional[np.ndarray] = None,
+                     tol: int = 26) -> GateResult:
+    """Exactly ONE mouth-scale lip-colour region. Kills D2/D3 regressions
+    (three-mouth composites, painted-mouth ghosts under the parametric
+    mouth) without failing on artwork that merely contains the lip hue.
+
+    The old form demanded exactly one component and literally zero
+    lip-coloured pixels outside the mouth bbox. On real character art
+    that is unsatisfiable — a red hair tie, a bindi, or the JPEG fringe
+    of a saturated garment each count as a "face", and the gate reported
+    21 of them on a flawless render. The defect being legislated against
+    is a SECOND MOUTH, so the measurement is area-relative: no rival
+    blob within a quarter of the mouth's own area, and total stray area
+    inside the search region bounded by a face-relative speckle budget.
+    `region` (typically a `variation_mask` ROI) narrows the search to
+    pixels the renderer actually touched.
+    """
+    m = color_mask(frame, lip_rgb, tol)
+    if region is not None and region.shape == m.shape:
+        m = m & region
+    lab, n = label_components(m)
+    if n == 0:
+        return GateResult("single_face", False, math.inf, 1.0,
+                          "no lip-colour pixels found at all")
+    counts = np.bincount(lab.ravel())
+    counts[0] = 0
+
+    # The mouth component: the largest one intersecting the mouth bbox.
     x0, y0, x1, y1 = mouth_bbox
-    outside = m.copy()
-    outside[max(0, y0 - margin):y1 + margin,
-            max(0, x0 - margin):x1 + margin] = False
-    stray = int(outside.sum())
-    ok = (n == 1) and (stray == 0)
-    return GateResult("single_face", ok, float(n + stray), 1.0,
-                      f"components={n} stray_px={stray}")
+    pad = int(round(0.02 * face_h)) + 2
+    win = lab[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad]
+    in_box = np.unique(win[win > 0])
+    if len(in_box) == 0:
+        return GateResult("single_face", False, math.inf, 1.0,
+                          "no lip-colour component inside the mouth bbox")
+    mouth_lab = int(in_box[np.argmax(counts[in_box])])
+    mouth_area = float(counts[mouth_lab])
+
+    others = np.nonzero(counts >= MIN_COMPONENT_PX)[0]
+    others = others[others != mouth_lab]
+    rival_area = float(counts[others].max()) if len(others) else 0.0
+    stray_area = float(counts[others].sum()) if len(others) else 0.0
+
+    rival_ratio = rival_area / max(1.0, mouth_area)
+    stray_budget = STRAY_AREA_FRAC * face_h * face_h
+    ok = (rival_ratio < SECOND_MOUTH_FRAC) and (stray_area <= stray_budget)
+    value = max(rival_ratio / SECOND_MOUTH_FRAC,
+                stray_area / max(1.0, stray_budget))
+    return GateResult(
+        "single_face", ok, value, 1.0,
+        f"mouth={int(mouth_area)}px rival={int(rival_area)}px "
+        f"({rival_ratio:.2f}× mouth) stray={int(stray_area)}px "
+        f"budget={int(stray_budget)}px comps={n}")
+
+
+BLINK_RESIDUAL_FRAC = 0.02   # ≤2% of the open eyeball may survive blink=1
+
+
+def eyeball_mask(frame: Image.Image, iris_rgb: Tuple[int, int, int],
+                 sclera_rgb: Optional[Tuple[int, int, int]] = None,
+                 region: Optional[np.ndarray] = None,
+                 tol: int = 26) -> np.ndarray:
+    """Visible eyeball pixels: iris colour, plus sclera colour when the
+    bake supplies it (a lid that hides the iris but leaves the white
+    showing is not a closed eye)."""
+    m = color_mask(frame, iris_rgb, tol)
+    if sclera_rgb is not None:
+        m |= color_mask(frame, sclera_rgb, tol)
+    if region is not None and region.shape == m.shape:
+        m = m & region
+    return m
 
 
 def gate_blink_closure(frame_closed: Image.Image,
-                       iris_rgb: Tuple[int, int, int]) -> GateResult:
-    """At blink=1 the iris must be GONE — geometric guarantee, verified."""
-    count = int(color_mask(frame_closed, iris_rgb).sum())
-    return GateResult("blink_closure", count == 0, float(count), 0.0,
-                      "iris-color px at blink=1")
+                       iris_rgb: Tuple[int, int, int],
+                       frame_open: Optional[Image.Image] = None,
+                       sclera_rgb: Optional[Tuple[int, int, int]] = None,
+                       region: Optional[np.ndarray] = None,
+                       tol: int = 26) -> GateResult:
+    """At blink=1 the eyeball must be occluded by the lid.
+
+    Measured as a RATIO against the same eye rendered open, inside the
+    eye's own footprint (`region`, from `variation_mask`), because the
+    absolute-zero form could not survive real art: lash ink and a dark
+    brown iris sit within any usable colour tolerance of each other, so
+    a perfectly shut eye still reported iris-coloured pixels — while a
+    frame-wide colour count also swept up every dark-brown pixel of
+    hair. A residual of ≤2% of the open eyeball is antialiasing at the
+    lid edge; anything more is an eye that did not close.
+    """
+    closed = int(eyeball_mask(frame_closed, iris_rgb, sclera_rgb,
+                             region, tol).sum())
+    if frame_open is None:
+        return GateResult("blink_closure", closed == 0, float(closed), 0.0,
+                          "eyeball-colour px at blink=1 (absolute form: no "
+                          "open-eye reference supplied)")
+    open_px = int(eyeball_mask(frame_open, iris_rgb, sclera_rgb,
+                              region, tol).sum())
+    if open_px < 16:
+        return GateResult("blink_closure", False, math.inf,
+                          BLINK_RESIDUAL_FRAC,
+                          f"the OPEN eye renders only {open_px} eyeball px — "
+                          "there is no visible eyeball to close")
+    ratio = closed / float(open_px)
+    return GateResult("blink_closure", ratio <= BLINK_RESIDUAL_FRAC,
+                      ratio, BLINK_RESIDUAL_FRAC,
+                      f"{closed}px of {open_px}px eyeball still visible "
+                      "at blink=1")
 
 
 def gate_temporal(apertures: Sequence[float],
@@ -360,7 +586,7 @@ def gate_rig_sanity(rig_dict: dict, face_h: float) -> GateResult:
                       f"version={ver} worst_pose={worst_pose}")
 
 
-# ═══════════════════════════════════════════
+# ════════════════════════════════��══════════
 # Phone-scale re-check (Part XI): rerun pixel gates at ~420 px
 # ═══════════════════════════════════════════
 
@@ -403,4 +629,7 @@ __all__ = ["QCReport", "GateResult", "gate_registration", "gate_single_face",
            "gate_blink_closure", "gate_temporal", "gate_av_sync",
            "gate_sync_confidence", "gate_discriminability", "gate_seam",
            "gate_rig_sanity", "at_phone_scale", "color_mask",
-           "connected_components", "mask_centroid", "PHONE_SCALE_PX"]
+           "connected_components", "component_sizes", "label_components",
+           "largest_component",
+           "dilate_mask", "variation_mask", "eyeball_mask", "mask_centroid",
+           "PHONE_SCALE_PX", "MIN_COMPONENT_PX", "BLINK_RESIDUAL_FRAC"]
