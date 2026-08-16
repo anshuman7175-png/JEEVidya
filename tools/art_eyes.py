@@ -122,6 +122,42 @@ LASH_IRIS_SEP = 56.0
 SKIN_IRIS_SEP = 56.0
 SEP_MAX_STEPS = 48       # bounded ⇒ deterministic
 
+# ── The aperture is a CLIP, so its rim must be outside the drawn eye ──
+#
+# Segmentation puts the boundary partway through the antialiased lash,
+# which leaves a 1–3 px ring of the ORIGINAL painted eye outside the
+# clip. Every eye pixel is masked to the aperture, so that ring survives
+# whatever is drawn: filling the eye with lid skin left the artwork's own
+# lash and sclera showing around the fill as a hard, jagged outline — the
+# "cracked eggshell" on gudiya's blink.
+#
+# Two properties fix it, and both are needed:
+#   grow   : the clip must SWALLOW the antialiased rim, so there is no
+#            original-eye pixel left outside it to show through.
+#   smooth : the raw contour is a pixel staircase, and decimating it by
+#            index keeps the steps. A staircase clip reads as a ragged
+#            edge at any zoom, so the boundary is low-passed into the
+#            smooth curve the artist actually drew.
+APERTURE_GROW = 0.009    # ×face_h, dilation of the clip past the lash
+APERTURE_SMOOTH = 5      # circular moving-average window on the contour
+
+# ── Gaze travel is bounded by the artwork, not by a fixed fraction ─���
+#
+# Gaze used to translate the eyeball by ±0.55·iris_r (±18 px on chintu),
+# but this art draws an iris that nearly fills the opening — the real
+# sclera margin is a few pixels. The consequences were both visible:
+# the iris rode onto the lash, and `socket_backdrop` had to inpaint the
+# WHOLE iris ellipse to hide the artwork's own iris behind it, which on
+# an eye that is almost all iris has no clean pixels to reconstruct from
+# and produced the radial brown smear seen behind every moving eye.
+#
+# Measuring the margin instead makes the excursion exactly what the
+# drawing affords, so the inpaint shrinks to the thin crescent the
+# eyeball can actually uncover — a region completely surrounded by real
+# sclera, which is the case inpainting handles well.
+GAZE_MARGIN_SAFETY = 1.0     # px kept between the iris rim and the lash
+GAZE_MAX_FRAC = 0.45         # ×iris_r, hard cap on measured travel
+
 
 class EyeMeasureError(RuntimeError):
     """Measurement that cannot be trusted fails loudly (Law 1).
@@ -143,6 +179,10 @@ class ArtEye:
     iris_angle : ellipse rotation, degrees
     iris_r     : sqrt(a·b) — the single scale gaze/pupil maths uses
     colors     : sclera / iris / pupil / lash, each sampled in-region
+    gaze_range : (dx, dy) px the eyeball may travel before its rim
+                 reaches the drawn opening. This is the artwork's own
+                 sclera margin, so a gaze of ±1 is the largest look the
+                 drawing can hold rather than a guessed fraction.
     """
     aperture: Tuple[Tuple[float, float], ...]
     iris_c: Tuple[float, float]
@@ -150,6 +190,7 @@ class ArtEye:
     iris_angle: float
     iris_r: float
     colors: Dict[str, Tuple[int, int, int]]
+    gaze_range: Tuple[float, float] = (0.0, 0.0)
 
     def to_dict(self) -> dict:
         return {
@@ -159,6 +200,7 @@ class ArtEye:
             "iris_angle": self.iris_angle,
             "iris_r": self.iris_r,
             "colors": {k: list(v) for k, v in self.colors.items()},
+            "gaze_range": list(self.gaze_range),
         }
 
     @staticmethod
@@ -301,17 +343,78 @@ def _push_from(color: Sequence[float], ref: Sequence[float],
 
 
 def _contour_poly(mask: np.ndarray, offset: Tuple[int, int],
-                  max_pts: int = 72) -> Tuple[Tuple[float, float], ...]:
-    """External contour of `mask` as a polygon in plate space."""
+                  max_pts: int = 72, smooth: int = 0
+                  ) -> Tuple[Tuple[float, float], ...]:
+    """External contour of `mask` as a polygon in plate space.
+
+    `smooth` low-passes the boundary with a CIRCULAR moving average before
+    decimation. Contours run along pixel edges, so the raw polygon is a
+    staircase; decimating it by index preserves those steps and the clip
+    reads as a ragged edge. The average must wrap around the seam or the
+    join between the last and first vertex stays a visible corner.
+    """
     cv2 = _require_cv2()
     cont, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     if not cont:
         return ()
     c = max(cont, key=cv2.contourArea).reshape(-1, 2).astype(np.float64)
+    if smooth > 1 and len(c) >= smooth * 2:
+        k = int(smooth) | 1                  # odd ⇒ symmetric, no drift
+        pad = k // 2
+        ring = np.concatenate([c[-pad:], c, c[:pad]], axis=0)
+        ker = np.ones(k, dtype=np.float64) / k
+        c = np.stack([np.convolve(ring[:, 0], ker, mode="valid"),
+                      np.convolve(ring[:, 1], ker, mode="valid")], axis=1)
     if len(c) > max_pts:                     # uniform decimation, keeps shape
         idx = np.linspace(0, len(c) - 1, max_pts).round().astype(int)
         c = c[idx]
     return tuple((float(x + offset[0]), float(y + offset[1])) for x, y in c)
+
+
+def _ellipse_mask(shape: Tuple[int, int], c: Tuple[float, float],
+                  axes: Tuple[float, float], angle: float,
+                  grow: float = 0.0) -> np.ndarray:
+    """Filled ellipse mask, drawn with sub-pixel centre rounding."""
+    cv2 = _require_cv2()
+    m = np.zeros(shape, np.uint8)
+    cv2.ellipse(m, (int(round(c[0])), int(round(c[1]))),
+                (max(1, int(round(axes[0] + grow))),
+                 max(1, int(round(axes[1] + grow))),
+                 ), angle, 0, 360, 1, -1)
+    return m
+
+
+def _gaze_margin(ap: np.ndarray, iris_c: Tuple[float, float],
+                 iris_axes: Tuple[float, float], iris_angle: float,
+                 cap: float) -> Tuple[float, float]:
+    """Largest (dx, dy) the eyeball may travel and stay inside the opening.
+
+    Translating the iris ellipse and testing containment answers this
+    directly from the art, and does so for the real, non-elliptical
+    aperture — a fixed fraction of `iris_r` cannot, because how much
+    sclera a drawing affords is a property of the drawing. Both signs are
+    tested and the smaller kept, so gaze stays symmetric around rest.
+    """
+    safety = GAZE_MARGIN_SAFETY
+    axes = (iris_axes[0] + safety, iris_axes[1] + safety)
+    inside = ap > 0
+
+    def travel(ux: float, uy: float) -> float:
+        best = 0.0
+        d = 0.5
+        while d <= cap:
+            m = _ellipse_mask(ap.shape,
+                              (iris_c[0] + ux * d, iris_c[1] + uy * d),
+                              axes, iris_angle)
+            if np.any((m > 0) & ~inside):
+                break
+            best = d
+            d += 0.5
+        return best
+
+    dx = min(travel(-1.0, 0.0), travel(1.0, 0.0))
+    dy = min(travel(0.0, -1.0), travel(0.0, 1.0))
+    return float(dx), float(dy)
 
 
 # ═══════════════════════════════════════════
@@ -494,13 +597,31 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
         ls = _darken_rgb(colors["pupil"], 1.0)
     colors["lash"] = _push_from(ls, colors["iris"], LASH_IRIS_SEP)
 
+    # ── 4 · the exported clip: grown past the lash, then smoothed ──
+    #
+    # Growth is what removes the cracked-eggshell ring. `ap` ends at the
+    # midpoint of the antialiased lash, so any pixel of the ORIGINAL eye
+    # outside it survives clipping and outlines whatever is drawn. Dilating
+    # the clip swallows that rim; the lid then paints over a region strictly
+    # larger than the painted eye, and nothing of the old eye remains to
+    # show through.
+    grow_px = max(1, int(round(APERTURE_GROW * face_h)))
+    ap_clip = cv2.dilate(ap, np.ones((grow_px * 2 + 1,) * 2, np.uint8))
+    ap_clip = _fill_holes(ap_clip)
+
+    # Gaze is bounded by the UNGROWN opening: travel must respect where the
+    # artist drew the lash, not the padded clip.
+    gx, gy = _gaze_margin(ap, (ecx, ecy), (a, b_), float(ang),
+                          cap=GAZE_MAX_FRAC * r_eq)
+
     return ArtEye(
-        aperture=_contour_poly(ap, (x0, y0)),
+        aperture=_contour_poly(ap_clip, (x0, y0), smooth=APERTURE_SMOOTH),
         iris_c=(float(ecx + x0), float(ecy + y0)),
         iris_axes=(float(a), float(b_)),
         iris_angle=float(ang),
         iris_r=r_eq,
         colors=colors,
+        gaze_range=(gx, gy),
     )
 
 
