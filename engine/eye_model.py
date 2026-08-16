@@ -71,12 +71,52 @@ class EyeGeometry:
     socket : (N,2) polygon of the eye opening (sclera boundary)
     lid_upper / lid_lower : polylines left→right along the lid margins
     iris_c : iris center;  iris_r : iris radius (px, head space)
+
+    §3.5b — when the rig carries a MEASURED eye (tools/art_eyes.py) the
+    fields below are populated and are AUTHORITATIVE:
+
+    aperture   : the outline of the eye the artist actually drew. It is
+                 the clip for every pixel this module paints, which is
+                 what makes the blink-skin-rectangle unrepresentable
+                 rather than merely unlikely.
+    iris_axes  : semi-axes of the drawn eyeball. A circle cannot fit
+                 stylised art (chintu measures 28.7 × 39.4 px), and a
+                 circular iris inside an oval eye leaves crescents of
+                 the artwork's own iris showing on either side.
+    iris_angle : that ellipse's rotation, degrees.
+    colors     : sclera/iris/pupil/lash sampled inside their own
+                 measured regions, so they cannot pick up shirt or hair.
+
+    `measured` is the single predicate the renderer branches on. Legacy
+    v1/v2 rigs leave it False and keep the old socket behaviour.
     """
     socket: Tuple[Tuple[float, float], ...]
     lid_upper: Tuple[Tuple[float, float], ...]
     lid_lower: Tuple[Tuple[float, float], ...]
     iris_c: Tuple[float, float]
     iris_r: float
+    aperture: Tuple[Tuple[float, float], ...] = ()
+    iris_axes: Tuple[float, float] = (0.0, 0.0)
+    iris_angle: float = 0.0
+    colors: Dict[str, Tuple[int, int, int]] = field(default_factory=dict)
+
+    @property
+    def measured(self) -> bool:
+        """True when this eye was measured from the artwork's pixels."""
+        return len(self.aperture) >= 3
+
+    @property
+    def clip(self) -> Tuple[Tuple[float, float], ...]:
+        """The polygon no painted eye pixel may leave."""
+        return self.aperture if self.measured else self.socket
+
+    @property
+    def axes(self) -> Tuple[float, float]:
+        """Iris semi-axes, falling back to a circle of radius `iris_r`."""
+        a, b = self.iris_axes
+        if a > 0.0 and b > 0.0:
+            return (float(a), float(b))
+        return (self.iris_r, self.iris_r)
 
     @staticmethod
     def from_rig_dict(d: dict) -> "EyeGeometry":
@@ -86,6 +126,12 @@ class EyeGeometry:
             lid_lower=tuple(map(tuple, d["lid_lower"])),
             iris_c=tuple(d["iris"][:2]),
             iris_r=float(d["iris"][2]),
+            aperture=tuple(map(tuple, d.get("aperture") or ())),
+            iris_axes=tuple(float(v) for v in
+                            (d.get("iris_axes") or (0.0, 0.0)))[:2],
+            iris_angle=float(d.get("iris_angle") or 0.0),
+            colors={k: tuple(int(c) for c in v)
+                    for k, v in (d.get("colors") or {}).items()},
         )
 
     @staticmethod
@@ -283,15 +329,61 @@ def _resample(poly: Sequence[Tuple[float, float]], n: int) -> np.ndarray:
     return out
 
 
+def _aperture_margins(geo: EyeGeometry, n: int
+                      ) -> Tuple[np.ndarray, np.ndarray]:
+    """Upper and lower rim of the MEASURED aperture, as x-ordered arcs.
+
+    Deriving the two margins from the aperture itself (rather than from
+    MediaPipe's polylines, even rescaled) guarantees the sweep starts on
+    the drawn eye's true top edge and ends on its true bottom edge. That
+    is what makes blink=1 fully occlude the iris: the closing path
+    becomes the aperture's own lower rim, so there is nothing left of
+    the opening for an iris pixel to survive in.
+
+    For each of `n` columns spanning the aperture, take the topmost and
+    bottommost boundary point. A closed contour always yields both, so
+    the two arcs together re-describe the aperture exactly.
+    """
+    ap = np.asarray(geo.clip, dtype=np.float64)
+    x0, x1 = float(ap[:, 0].min()), float(ap[:, 0].max())
+    if x1 - x0 < 1e-6:
+        up = _resample(geo.lid_upper, n)
+        return up, _resample(geo.lid_lower, n)
+
+    # Densify the contour so every column contains samples.
+    closed = np.vstack([ap, ap[:1]])
+    dense = _resample(closed, max(4 * n, 256))
+    xs = np.linspace(x0, x1, n)
+    half = (x1 - x0) / max(n - 1, 1)
+    upper = np.empty((n, 2))
+    lower = np.empty((n, 2))
+    for i, x in enumerate(xs):
+        band = dense[np.abs(dense[:, 0] - x) <= half]
+        if len(band) == 0:                       # column fell in a notch
+            j = int(np.argmin(np.abs(dense[:, 0] - x)))
+            band = dense[j:j + 1]
+        upper[i] = (x, float(band[:, 1].min()))
+        lower[i] = (x, float(band[:, 1].max()))
+    return upper, lower
+
+
 def _lid_path(geo: EyeGeometry, closure: float, n: int = 24) -> np.ndarray:
     """Upper-lid margin at `closure` ∈ [0,1].
 
-    Interpolates the baked upper-lid polyline toward the LOWER-lid
-    contour along an arc concentric with the eyeball, so at closure=1
-    the path IS the lower lid — full occlusion by identity (D9).
+    Interpolates the upper margin toward the LOWER margin along an arc
+    concentric with the eyeball, so at closure=1 the path IS the lower
+    margin — full occlusion by identity (D9).
+
+    On a measured eye both margins come from the aperture, so "the lower
+    margin" is the drawn eye's own bottom rim. The MediaPipe polylines
+    described a band across the middle third of the drawn eye, which is
+    why a fully-closed blink used to leave the iris plainly visible.
     """
-    up = _resample(geo.lid_upper, n)
-    lo = _resample(geo.lid_lower, n)
+    if geo.measured:
+        up, lo = _aperture_margins(geo, n)
+    else:
+        up = _resample(geo.lid_upper, n)
+        lo = _resample(geo.lid_lower, n)
     c = np.asarray(geo.iris_c)
     # Concentric-arc interpolation: lerp radius + angle about the eyeball
     # center rather than straight lines, so the lid margin stays curved.
@@ -316,13 +408,22 @@ class EyeRasterizer:
     def __init__(self, geo: EyeGeometry, palette: Dict[str, Tuple[int, int, int]],
                  cache_size: int = 512):
         self.geo = geo
+        # Measured, in-region eye colours beat the landmark-sampled
+        # palette: they were taken from inside the segmented iris and
+        # sclera, so they cannot be the lash line or a glasses frame.
         self.palette = dict(palette)
+        self.palette.update(geo.colors)
         self._cache: "OrderedDict[Tuple, Tuple[Image.Image, Tuple[float, float]]]" \
             = OrderedDict()
         self._cache_size = cache_size
-        xs = [p[0] for p in geo.socket]
-        ys = [p[1] for p in geo.socket]
-        pad = geo.iris_r * 0.9
+        # The patch bounds the CLIP polygon (the measured aperture where
+        # one exists). Padding is cosmetic only — since every stroke is
+        # masked to the aperture, the patch border can no longer become a
+        # visible edge the way the old lid "cap" did.
+        clip = geo.clip or geo.socket
+        xs = [p[0] for p in clip]
+        ys = [p[1] for p in clip]
+        pad = max(2.0, geo.iris_r * 0.35)
         self._x0, self._y0 = min(xs) - pad, min(ys) - pad
         self._x1, self._y1 = max(xs) + pad, max(ys) + pad
 
@@ -350,61 +451,112 @@ class EyeRasterizer:
             return [((x - self._x0) * S, (y - self._y0) * S) for x, y in pts]
 
         geo = self.geo
-        socket = _resample(geo.socket, 48)
+        clip_poly = _resample(np.vstack([np.asarray(geo.clip, dtype=np.float64),
+                                        np.asarray(geo.clip[:1],
+                                                   dtype=np.float64)]), 96) \
+            if geo.measured else _resample(geo.socket, 48)
 
-        # 1 · Sclera fill inside the socket
-        draw.polygon(T(socket), fill=self._color("sclera", (245, 243, 238)) + (255,))
+        # 0 · The aperture clip. EVERY pixel this method paints is masked
+        # to it at the end, so no stroke can reach the patch border. This
+        # is the structural fix for the hard-edged skin rectangle: the
+        # lid's fill used to be bounded only by the patch rectangle, so a
+        # blink painted a rectangle of skin over the brow. A stroke that
+        # cannot leave the drawn eye cannot draw a rectangle.
+        clip_mask = Image.new("L", img.size, 0)
+        ImageDraw.Draw(clip_mask).polygon(T(clip_poly), fill=255)
 
-        # 2 · Iris + pupil, offset by gaze, CLIPPED to the socket
+        # 1 · Sclera fill inside the aperture
+        draw.polygon(T(clip_poly),
+                     fill=self._color("sclera", (245, 243, 238)) + (255,))
+
+        # 2 · Iris + pupil, offset by gaze, clipped to the aperture.
+        # Gaze travels in iris radii, so it scales with the DRAWN eye.
         gaze = np.array([state.eye_dx, state.eye_dy]) * geo.iris_r * 0.55
         ic = np.asarray(geo.iris_c) + gaze
-        socket_mask = Image.new("L", img.size, 0)
-        ImageDraw.Draw(socket_mask).polygon(T(socket), fill=255)
 
         ball = Image.new("RGBA", img.size, (0, 0, 0, 0))
         bd = ImageDraw.Draw(ball)
-        r = geo.iris_r * S
+        # Elliptical iris: the drawn eyeball is not a circle on stylised
+        # art. Drawing a circle inside an oval eye left crescents of the
+        # artwork's own iris uncovered at the sides.
+        ax, ay = geo.axes
+        ra, rb = ax * S, ay * S
         cx, cy = (ic[0] - self._x0) * S, (ic[1] - self._y0) * S
         iris_rgb = self._color("iris", (74, 52, 38))
-        bd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=iris_rgb + (255,))
+
+        def _oval(img_draw, sx: float, sy: float, fill=None, outline=None,
+                  width: int = 0) -> None:
+            """Iris-concentric ellipse at (sx, sy)× the semi-axes, rotated
+            by the measured angle. Rotation matters: an unrotated ellipse
+            on a tilted eye shows the same crescent gap it was meant to
+            close."""
+            box = [cx - ra * sx, cy - rb * sy, cx + ra * sx, cy + rb * sy]
+            if abs(geo.iris_angle) < 0.5:
+                img_draw.ellipse(box, fill=fill, outline=outline, width=width)
+                return
+            th = math.radians(geo.iris_angle)
+            pts = []
+            for i in range(64):
+                t = 2 * math.pi * i / 64
+                px, py = ra * sx * math.cos(t), rb * sy * math.sin(t)
+                pts.append((cx + px * math.cos(th) - py * math.sin(th),
+                            cy + px * math.sin(th) + py * math.cos(th)))
+            if fill is not None:
+                img_draw.polygon(pts, fill=fill)
+            if outline is not None:
+                img_draw.line(pts + pts[:1], fill=outline, width=max(1, width))
+
+        _oval(bd, 1.0, 1.0, fill=iris_rgb + (255,))
         # limbal ring — darker iris edge, reads as depth at phone scale
         ring = tuple(int(c * 0.55) for c in iris_rgb)
-        bd.ellipse([cx - r, cy - r, cx + r, cy + r], outline=ring + (255,),
-                   width=max(1, int(r * 0.10)))
-        pr = r * 0.42 * state.pupil
-        bd.ellipse([cx - pr, cy - pr, cx + pr, cy + pr], fill=(18, 12, 10, 255))
+        _oval(bd, 1.0, 1.0, outline=ring + (255,),
+              width=max(1, int(min(ra, rb) * 0.10)))
+        pupil_rgb = self._color("pupil", (18, 12, 10))
+        ps = 0.42 * state.pupil
+        _oval(bd, ps, ps, fill=pupil_rgb + (255,))
         # catchlight — upper-left, the single most "alive" pixel in the face
-        clr = r * 0.22
-        bd.ellipse([cx - r * 0.45 - clr, cy - r * 0.45 - clr,
-                    cx - r * 0.45 + clr, cy - r * 0.45 + clr],
+        clr = min(ra, rb) * 0.22
+        bd.ellipse([cx - ra * 0.45 - clr, cy - rb * 0.45 - clr,
+                    cx - ra * 0.45 + clr, cy - rb * 0.45 + clr],
                    fill=(255, 255, 255, 230))
         ball.putalpha(Image.composite(ball.split()[3], Image.new("L", img.size, 0),
-                                      socket_mask))
+                                      clip_mask))
         img.alpha_composite(ball)
 
-        # 3 · Lower lid (squint rise), then upper lid at blink closure
+        # 3 · Lower lid (squint rise), then upper lid at blink closure.
+        # Both are painted with a generous fill and then masked to the
+        # aperture in step 4, so their extent is bounded by the drawn eye
+        # rather than by the polygon we happen to hand PIL.
         skin = self._color("skin", (232, 190, 160))
+        _, ap_lower = (_aperture_margins(geo, 24) if geo.measured
+                       else (None, _resample(geo.lid_lower, 24)))
         if state.squint > 0.01:
             lo_path = _lid_path(geo, 1.0 - 0.18 * state.squint)
-            lo_poly = T(np.vstack([lo_path,
-                                   _resample(geo.lid_lower, 24)[::-1]
-                                   + np.array([0, geo.iris_r])]))
-            draw.polygon(lo_poly, fill=skin + (255,))
+            floor = ap_lower.copy()
+            floor[:, 1] += max(geo.iris_r, 2.0) * 2.0
+            draw.polygon(T(np.vstack([lo_path, floor[::-1]])),
+                         fill=skin + (255,))
 
         closure = max(0.0, min(1.0, blink))
         lid = _lid_path(geo, closure)
-        # Lid polygon: lid margin + a cap extending above the socket top
+        # Lid polygon: the margin plus a cap well above the aperture top.
+        # The cap only needs to be tall enough to cover the whole opening;
+        # the aperture mask decides where it actually lands.
         cap = lid.copy()
-        cap[:, 1] -= geo.iris_r * 2.2
-        lid_poly = T(np.vstack([lid, cap[::-1]]))
-        draw.polygon(lid_poly, fill=skin + (255,))
+        cap[:, 1] -= (self._y1 - self._y0) + max(geo.iris_r, 2.0)
+        draw.polygon(T(np.vstack([lid, cap[::-1]])), fill=skin + (255,))
         # Crease + lash line on the leading edge
         crease = self._color("lip_shadow", (150, 100, 84))
         draw.line(T(lid), fill=crease + (160,), width=max(1, int(S * 0.9)))
         lash = self._color("lash", (38, 26, 24))
         draw.line(T(lid), fill=lash + (255,), width=max(1, int(S * 1.6)))
 
-        # 4 · Downsample; mask everything to socket ∪ lid region
+        # 4 · Clip to the aperture, then downsample.
+        # Applied at supersampled resolution so the boundary is
+        # antialiased by the LANCZOS step and the eye's rim blends into
+        # the artwork's lash line instead of showing a stair-stepped edge.
+        img.putalpha(Image.composite(img.split()[3],
+                                     Image.new("L", img.size, 0), clip_mask))
         img = img.resize((max(w // S, 1), max(h // S, 1)), Image.LANCZOS)
         img = img.filter(ImageFilter.GaussianBlur(0.4))
         out = (img, (self._x0, self._y0))

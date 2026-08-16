@@ -350,19 +350,50 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
     sc = _trimmed_median(sclera_px, 0.10, 0.10)
     colors["sclera"] = sc if sc is not None else (246, 245, 242)
 
-    # Iris body: the mid-luma band. Excluding the darkest slice drops the
-    # pupil and the lash that overlaps the eyeball's top edge; excluding
-    # the brightest drops the catchlight. What is left is the colour a
-    # human calls "her eye colour" — and, crucially, it is NOT the near
-    # black that made iris and lash indistinguishable, so blink-closure
-    # becomes measurable.
+    # Iris body: the CHROMATIC pixels of the eyeball.
+    #
+    # A luma percentile cannot find this. On this artwork the pupil is a
+    # large black disc — ~30% of the fitted ellipse, with 25% of iris
+    # pixels at luma ≤ 5 — so any "drop the darkest N%" rule with N below
+    # the pupil's share returns the pupil, and `iris` came out (37,9,5):
+    # visually black, indistinguishable from every ink outline in the
+    # frame, which made the QC iris mask match 17–25% of the whole body
+    # and left blink-closure unmeasurable.
+    #
+    # Colour space separates the three parts cleanly instead, because
+    # they differ in KIND, not merely in brightness:
+    #     pupil  → dark   AND achromatic (saturation ≈ 0)
+    #     sclera → bright AND achromatic
+    #     iris   → the coloured ring in between
+    # Selecting on saturation therefore excludes pupil, sclera, catchlight
+    # and the black lash by construction. Measured across all four eyes
+    # this yields a stable warm brown (94–113, 40–52, 9–28) from
+    # 1000–1400 px per eye — the colour a human calls "her eye colour".
     if len(iris_px) >= SAMPLE_MIN_PX:
-        lo_q, hi_q = np.percentile(iris_lum, [PUPIL_PCTL, 88.0])
-        body = iris_px[(iris_lum > lo_q) & (iris_lum <= hi_q)]
-        ib = _trimmed_median(body, 0.10, 0.10) or _trimmed_median(iris_px, .2, .2)
+        iris_sat = iris_px.max(axis=1) - iris_px.min(axis=1)
+        chromatic = ((iris_sat >= IRIS_SAT_MIN)
+                     & (iris_lum >= IRIS_LUM_MIN)
+                     & (iris_lum <= IRIS_LUM_MAX))
+        body = iris_px[chromatic]
+        ib = (_trimmed_median(body, 0.10, 0.10) if len(body) >= SAMPLE_MIN_PX
+              else None)
+        if ib is None:
+            # A genuinely greyscale eye (monochrome art). Fall back to the
+            # mid-luma band, which is the best available answer, rather
+            # than failing a bake over a stylistic choice.
+            lo_q, hi_q = np.percentile(iris_lum, [55.0, 92.0])
+            band = iris_px[(iris_lum >= lo_q) & (iris_lum <= hi_q)]
+            ib = _trimmed_median(band, 0.10, 0.10)
         colors["iris"] = ib if ib is not None else (92, 62, 44)
-        pupil_px = iris_px[iris_lum <= np.percentile(iris_lum, PUPIL_PCTL)]
-        pp = _trimmed_median(pupil_px, 0.0, 0.25)
+
+        # Pupil: the achromatic dark core, by the same separation.
+        pupil_sel = iris_px[(iris_sat < IRIS_SAT_MIN)
+                            & (iris_lum <= max(IRIS_LUM_MIN, 60.0))]
+        pp = _trimmed_median(pupil_sel, 0.0, 0.25) if len(pupil_sel) else None
+        if pp is None:
+            pp = _trimmed_median(
+                iris_px[iris_lum <= np.percentile(iris_lum, PUPIL_PCTL)],
+                0.0, 0.25)
         colors["pupil"] = pp if pp is not None else (22, 16, 14)
     else:
         colors["iris"], colors["pupil"] = (92, 62, 44), (22, 16, 14)
