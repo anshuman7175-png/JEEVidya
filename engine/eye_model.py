@@ -57,13 +57,6 @@ MICROSACCADE_AMP = (0.015, 0.045)   # amplitude as fraction of iris radius ×3
                                     # (0.1–0.3° of a ~10° iris span)
 PUPIL_EMPHASIS_GAIN = 0.08          # up to +8% dilation on emphasis
 
-# Gaze travel for LEGACY rigs only (no measured sclera margin baked).
-# A v3 rig carries `gaze_range` measured from the artwork, and that always
-# wins — see EyeGeometry.travel. This fraction is retained purely so a rig
-# baked before the measurement still moves its eyes; applying it to this
-# art is what slid the iris onto the painted lash.
-LEGACY_GAZE_FRAC = 0.55
-
 SUPERSAMPLE = 4
 
 
@@ -127,27 +120,6 @@ class EyeGeometry:
     socket_origin: Tuple[float, float] = (0.0, 0.0)
     lid_img: str = ""
     lid_origin: Tuple[float, float] = (0.0, 0.0)
-    # (dx, dy) px the eyeball may travel before its rim reaches the drawn
-    # opening — the artwork's OWN sclera margin, measured in art_eyes. On
-    # this art the iris nearly fills the eye, so the true margin is a few
-    # px; the generic 0.55·iris_r excursion used before was ~18 px, which
-    # drove the iris onto the lash and forced `socket_backdrop` to inpaint
-    # the whole ellipse, producing the brown radial smear behind the eye.
-    gaze_range: Tuple[float, float] = (0.0, 0.0)
-
-    @property
-    def travel(self) -> Tuple[float, float]:
-        """Px the eyeball may move for a gaze of ±1, per axis.
-
-        Prefers the MEASURED margin. Falls back to the legacy fraction of
-        the iris radius only for rigs baked before the margin existed, so
-        an old rig still animates instead of freezing its eyes open.
-        """
-        dx, dy = self.gaze_range
-        if dx > 0.0 or dy > 0.0:
-            return (float(dx), float(dy))
-        r = self.iris_r * LEGACY_GAZE_FRAC
-        return (r, r)
 
     @property
     def measured(self) -> bool:
@@ -187,7 +159,6 @@ class EyeGeometry:
             socket_origin=_pt2(d.get("socket_origin")),
             lid_img=str(d.get("lid_img") or ""),
             lid_origin=_pt2(d.get("lid_origin")),
-            gaze_range=_pt2(d.get("gaze_range")),
         )
 
     @staticmethod
