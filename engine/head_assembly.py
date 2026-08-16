@@ -163,10 +163,28 @@ class HeadAssembly:
         return [(p[0] * self.scale, p[1] * self.scale) for p in pts]
 
     def _scaled_eye(self, d: dict) -> dict:
-        out = {k: [[x * self.scale, y * self.scale] for x, y in v]
-               for k, v in d.items() if k != "iris"}
-        cx, cy, r = d["iris"]
-        out["iris"] = [cx * self.scale, cy * self.scale, r * self.scale]
+        """Scale one eye payload into work space.
+
+        Keys are scaled by KIND, not by position: `colors` is RGB and must
+        pass through untouched, `iris_angle` is degrees (scale-invariant),
+        `iris_axes` is a length pair, and everything else is a point list.
+        Scaling blindly here would multiply a colour channel by the render
+        scale and tint the eye.
+        """
+        s = self.scale
+        out: dict = {}
+        for k, v in d.items():
+            if k == "iris":
+                cx, cy, r = v
+                out[k] = [cx * s, cy * s, r * s]
+            elif k == "iris_axes":
+                out[k] = [float(v[0]) * s, float(v[1]) * s]
+            elif k in ("iris_angle",):
+                out[k] = float(v)
+            elif k == "colors":
+                out[k] = {ck: list(cv) for ck, cv in (v or {}).items()}
+            else:
+                out[k] = [[x * s, y * s] for x, y in v]
         return out
 
     def headless(self, pose: str) -> Optional[Image.Image]:
@@ -348,7 +366,7 @@ class HeadAssembly:
             body.alpha_composite(occ, (0, 0))
         return body
 
-    # ─── QC surface ───────────────────────────────────────
+    # ─── QC surface ───────────────────────���───────────────
 
     def predict(self, ch: FaceChannels, head: ht.HeadPose,
                 from_pose: str, to_pose: str, blend_t: float

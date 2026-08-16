@@ -48,6 +48,49 @@ RIG_VERSION = 3
 # raises instead of silently misplacing the face (Part III).
 MIN_RENDERABLE_VERSION = 3
 
+
+def _fit_lids_to_aperture(upper: List[Tuple[float, float]],
+                          lower: List[Tuple[float, float]],
+                          aperture: List[Tuple[float, float]]
+                          ) -> Tuple[List[Tuple[float, float]],
+                                     List[Tuple[float, float]]]:
+    """Rescale MediaPipe's lid margins onto the MEASURED eye.
+
+    MediaPipe gives lid polylines whose SHAPE is right (a lid is a
+    shallow arc, higher at the centre) but whose SCALE is human — on
+    chibi art they span ~30px of a ~68px drawn eye. A lid sweep driven
+    by them can only ever cross the middle of the eye, which is why
+    blink=1 left the iris visible.
+
+    So map the lid pair affinely from its own bounding box onto the
+    aperture's: shape preserved, extent corrected. The upper margin is
+    placed on the aperture's top edge and the lower on its bottom, so a
+    full sweep traverses the entire drawn opening and closure is
+    geometric rather than tuned.
+    """
+    if not upper or not lower or not aperture:
+        return upper, lower
+    ap = [(float(x), float(y)) for x, y in aperture]
+    axs = [p[0] for p in ap]
+    ays = [p[1] for p in ap]
+    ax0, ax1, ay0, ay1 = min(axs), max(axs), min(ays), max(ays)
+
+    lid = [(float(x), float(y)) for x, y in list(upper) + list(lower)]
+    lxs = [p[0] for p in lid]
+    lys = [p[1] for p in lid]
+    lx0, lx1, ly0, ly1 = min(lxs), max(lxs), min(lys), max(lys)
+    if lx1 - lx0 < 1e-6 or ly1 - ly0 < 1e-6:
+        return upper, lower
+
+    sx = (ax1 - ax0) / (lx1 - lx0)
+    sy = (ay1 - ay0) / (ly1 - ly0)
+
+    def warp(pts):
+        return [(ax0 + (x - lx0) * sx, ay0 + (y - ly0) * sy)
+                for x, y in pts]
+
+    return warp(upper), warp(lower)
+
 # Canonical MediaPipe FaceLandmarker landmark count (468 mesh + 10 iris).
 N_LANDMARKS = 478
 # The 10-class viseme set — MUST match engine/visemes.py V enum values,
@@ -136,6 +179,16 @@ class HeadGeometry:
     brow_r: List[Point] = field(default_factory=list)
     iris_l: Tuple[float, float, float] = (0.0, 0.0, 0.0)   # cx, cy, r
     iris_r: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    # §3.5b — the eye the ARTIST drew, measured from pixels by
+    # tools/art_eyes.py. MediaPipe is trained on photographs, so on
+    # stylised art its lid ring is 2.2–2.9× too small and sits on the
+    # eyeball's upper third; believing it painted a small procedural eye
+    # inside the big drawn one and let a blink's skin fill escape as a
+    # hard rectangle. These entries are the measured truth and take
+    # precedence; the MediaPipe lids above are kept only as the seed
+    # that located the eye and for brow/lid tracking.
+    art_eye_l: Dict[str, object] = field(default_factory=dict)
+    art_eye_r: Dict[str, object] = field(default_factory=dict)
     palette: Dict[str, Tuple[int, int, int]] = field(default_factory=dict)
     shading: Optional[str] = None           # mouth-region shading map PNG
     offset: Point = (0.0, 0.0)              # plate origin in puppet space
@@ -155,6 +208,8 @@ class HeadGeometry:
             "brow_r": [list(p) for p in self.brow_r],
             "iris_l": list(self.iris_l),
             "iris_r": list(self.iris_r),
+            "art_eye_l": dict(self.art_eye_l),
+            "art_eye_r": dict(self.art_eye_r),
             "palette": {k: list(v) for k, v in self.palette.items()},
             "shading": self.shading,
             "offset": list(self.offset),
@@ -174,6 +229,8 @@ class HeadGeometry:
             brow_l=poly("brow_l"), brow_r=poly("brow_r"),
             iris_l=tuple(d.get("iris_l", (0.0, 0.0, 0.0))),
             iris_r=tuple(d.get("iris_r", (0.0, 0.0, 0.0))),
+            art_eye_l=dict(d.get("art_eye_l") or {}),
+            art_eye_r=dict(d.get("art_eye_r") or {}),
             palette={k: tuple(v) for k, v in d.get("palette", {}).items()},
             shading=d.get("shading"),
             offset=tuple(d.get("offset", (0.0, 0.0))),
@@ -183,15 +240,46 @@ class HeadGeometry:
     def eye_dict(self, left: bool) -> dict:
         """The EyeGeometry payload for one side (engine/eye_model.py).
 
-        The socket is DERIVED from the two baked lid margins (upper
-        left→right, then lower right→left) rather than stored: a stored
-        socket could disagree with the lids it is supposed to bound, and
-        a sclera that leaks past a lid is exactly the class of bug Law 1
-        forbids representing. Derivation makes the two consistent by
-        construction.
+        The APERTURE is the measured outline of the eye the artist drew
+        (§3.5b). It is the authoritative bound: every pixel the eye
+        renderer paints is clipped to it, so a blink's skin fill cannot
+        escape onto the brow and a saccade cannot slide the iris onto the
+        cheek. Where the measurement exists it also supplies the iris,
+        because MediaPipe's ring is ~2.5× too small on this art.
+
+        The lid margins stay MediaPipe-derived: they are polylines used
+        to shape the lid sweep and track the brow, and their SHAPE is
+        right even where their scale is not. They are rescaled to span
+        the measured aperture so the sweep crosses the whole drawn eye.
+
+        Without a measurement (legacy v1/v2 rigs) the socket is DERIVED
+        from the two lid margins rather than stored: a stored socket
+        could disagree with the lids it is supposed to bound, and a
+        sclera that leaks past a lid is the class of bug Law 1 forbids
+        representing. Derivation makes the two consistent by construction.
         """
         upper = [tuple(p) for p in (self.lid_upper_l if left else self.lid_upper_r)]
         lower = [tuple(p) for p in (self.lid_lower_l if left else self.lid_lower_r)]
+        art = self.art_eye_l if left else self.art_eye_r
+        aperture = list(art.get("aperture") or ())
+
+        if aperture:
+            ic = list(art.get("iris_c") or (0.0, 0.0))
+            axes = list(art.get("iris_axes") or (0.0, 0.0))
+            r = float(art.get("iris_r") or 0.0)
+            upper, lower = _fit_lids_to_aperture(upper, lower, aperture)
+            return {
+                "socket": [list(p) for p in aperture],
+                "aperture": [list(p) for p in aperture],
+                "lid_upper": [list(p) for p in upper],
+                "lid_lower": [list(p) for p in lower],
+                "iris": [ic[0], ic[1], r],
+                "iris_axes": axes,
+                "iris_angle": float(art.get("iris_angle") or 0.0),
+                "colors": {k: list(v) for k, v in
+                           (art.get("colors") or {}).items()},
+            }
+
         socket = upper + list(reversed(lower))
         return {
             "socket": [list(p) for p in socket],
