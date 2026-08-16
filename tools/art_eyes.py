@@ -141,7 +141,7 @@ SEP_MAX_STEPS = 48       # bounded ⇒ deterministic
 APERTURE_GROW = 0.009    # ×face_h, dilation of the clip past the lash
 APERTURE_SMOOTH = 5      # circular moving-average window on the contour
 
-# ── Gaze travel is bounded by the artwork, not by a fixed fraction ─�������
+# ── Gaze travel is bounded by the artwork, not by a fixed fraction ─���������
 #
 # Gaze used to translate the eyeball by ±0.55·iris_r (±18 px on chintu),
 # but this art draws an iris that nearly fills the opening — the real
@@ -166,23 +166,35 @@ GAZE_MAX_FRAC = 0.45         # ×iris_r, hard cap on measured travel
 # renderer then slid that ink down over the eye: a blink drew a dark bar
 # across the eyeball, and a stretched copy of it smeared over the socket.
 #
-# So the band is now MEASURED: rows are accepted upward from the aperture
-# only while they are still eyelid skin, judged per row against a local
-# skin reference. Two independent tests, because the two contaminants
-# differ in kind — a brow is INK (dark, achromatic) while a hair strand or
-# a bright glasses highlight is merely NOT SKIN (far from the reference in
-# RGB). A row failing either test stops the walk, so nothing below the
-# brow, the frame or the hairline can ever enter the strip.
+# So the band is MEASURED: rows are accepted upward from the aperture only
+# while they are still eyelid skin. The test that matters is which SKIN the
+# row is compared against, and getting that wrong is what produced the
+# flat-disc blinks:
 #
-# Whatever survives is then de-inked pixel-wise: a stray dark speck inside
-# an accepted row is replaced by that row's own clean median, which keeps
-# the artist's vertical shading gradient while guaranteeing no ink pixel
-# can slide over the eye.
+#   A reference taken over a block as tall as the eye reaches past the lid
+#   — the forehead on chintu, the hair fringe on gudiya. It then reads as
+#   bright face skin (252,190,151) on one eye and as fringe brown
+#   (100,50,35) on the other, so the two eyes disagreed about their own
+#   face, EVERY genuine lid row (a shaded 160,90,63 inside the glasses
+#   lens) was rejected as "not skin", all four strips collapsed to the
+#   4px flat fallback — and a blink became a flat disc of whichever tone
+#   the contaminated block happened to hold.
+#
+# The lid is therefore judged against ITSELF: the reference is the first
+# clean rows found above the lash, and it then tracks the accepted rows as
+# an exponential mean. That is what lets a lid darken smoothly into its
+# crease (a gradient the artist painted) while still ending the walk at the
+# STEP in tone that a brow, a glasses rim or a hairline always is.
 LID_BAND_FRAC = 0.55      # ×aperture height, cap on the sampled band
 LID_LASH_SKIP_FRAC = 0.30  # ×aperture height, how far up the lash may reach
 LID_BAND_MIN = 4          # px, a band thinner than this is not a lid
+LID_ROW_INK_MAX = 0.34    # a row with more ink than this is lash/brow/frame
 LID_ROW_DIRT_MAX = 0.10   # ≤10% of a row may be ink or non-skin
-LID_SKIN_DELTA = 46.0     # max|ΔRGB| from the local lid skin reference
+LID_SKIN_DELTA = 46.0     # max|ΔRGB| a row's median may sit from the running
+                          # lid reference before the walk calls it a new
+                          # feature rather than more of the same eyelid
+LID_REF_ROWS = 3          # rows above the lash that seed the reference
+LID_REF_EMA = 0.35        # weight of a newly accepted row in the reference
 
 
 class EyeMeasureError(RuntimeError):
@@ -793,6 +805,31 @@ def _luma(px: np.ndarray) -> np.ndarray:
     return px @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
 
 
+def _ink(px: np.ndarray) -> np.ndarray:
+    """Dark AND near-achromatic pixels: a lash, a brow, a glasses rim.
+
+    Reference-free by design. It is the one lid test that can be trusted
+    before any tone has been established, which is why the walk uses it to
+    find the lash before it decides what the eyelid's skin even looks like.
+    """
+    lum = _luma(px)
+    sat = px.max(axis=-1) - px.min(axis=-1)
+    return (lum <= LASH_LUM_MAX) & (sat <= LASH_SAT_MAX)
+
+
+def _row_tone(row: np.ndarray) -> Optional[np.ndarray]:
+    """A row's own skin tone: the median of its NON-INK pixels.
+
+    Excluding the ink is what makes the tone comparable from row to row —
+    include it and a row holding the lash's tip reads as a tone step, so the
+    walk stops one row into a lid it should have kept walking up.
+    """
+    keep = row[~_ink(row)]
+    if len(keep) < max(3, row.shape[0] // 4):
+        return None
+    return np.median(keep, axis=0)
+
+
 def _dirty(px: np.ndarray, skin: np.ndarray) -> np.ndarray:
     """Pixels that are not clean eyelid skin: ink, or far from `skin`.
 
@@ -825,9 +862,9 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
 
       • HOW TALL it may be. A fixed fraction of the eye height reached the
         eyebrow on gudiya and the glasses rim on chintu, and the renderer
-        duly slid that ink over the eyeball. The walk upward therefore
-        stops at the first row that is no longer eyelid skin
-        (`LID_ROW_DIRT_MAX` of `_dirty` pixels), and never exceeds
+        duly slid that ink over the eyeball. So the walk climbs only while
+        each row is still this eyelid — little ink, and its tone within
+        `LID_SKIN_DELTA` of the rows already accepted — and never exceeds
         `LID_BAND_FRAC` of the opening.
 
       • WHAT IS IN IT. Even an accepted row can hold a few stray dark
@@ -835,9 +872,12 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
         its own row's clean median, so the vertical skin gradient survives
         while no ink pixel remains to slide over the eye.
 
-    The reference tone is taken from the rows just above the aperture,
-    excluding their ink, so it is this eyelid's skin on this face — not a
-    palette entry sampled somewhere else and not the brow.
+    The reference tone is SEEDED from the first clean rows above the lash
+    and then tracks the band as it is accepted, so it is this eyelid's own
+    skin under this eyelid's own shading. Anything wider — a block as tall
+    as the eye — reaches the forehead or the hair fringe, and comparing a
+    shaded in-lens eyelid against bright forehead skin is what rejected
+    every real lid row and left all four blinks a flat disc.
 
     Returns (RGBA strip, (x0, y0) origin in plate space). The strip's
     BOTTOM row is the row directly above the aperture, which is the lid's
@@ -863,46 +903,58 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
     ap_h = max(3, bot - top)
     cap = max(LID_BAND_MIN, int(round(ap_h * LID_BAND_FRAC)))
 
-    # Local skin reference, measured over a generous block above the eye
-    # rather than the three rows nearest it.
-    #
-    # Those three rows looked like the obvious choice — closest to the lid,
-    # so closest in tone — but they are the LASH. The exported aperture is
-    # deliberately dilated past the drawn lash line (see APERTURE_GROW), and
-    # a dilation of one or two pixels does not clear a lash several pixels
-    # thick, so the rows just above the grown rim are still ink. Sampling
-    # them, then testing rows against them, rejected every row immediately
-    # and collapsed all four strips to the flat LID_BAND_MIN fallback.
-    #
-    # A taller block is dominated by eyelid skin, and the two contaminants
-    # in it are removed rather than averaged in: ink (lash, brow, a glasses
-    # rim) is dropped by the achromatic-dark test, and a median then ignores
-    # what few bright outliers remain (a frame highlight, a hair strand).
-    ref = rgb[max(0, top - ap_h):top, x0:x1].reshape(-1, 3)
-    lum, sat = _luma(ref), ref.max(axis=1) - ref.min(axis=1)
-    clean = ref[~((lum <= LASH_LUM_MAX) & (sat <= LASH_SAT_MAX))]
-    skin = (np.median(clean, axis=0) if len(clean) >= SAMPLE_MIN_PX
-            else np.median(ref, axis=0))
-
-    # Walk upward: first past the lash, then along the eyelid.
+    # 1 · Walk past the lash.
     #
     # The lash is not a failure to stop for — it is the rim the aperture was
-    # grown over, and it sits between the opening and the lid. So dirty rows
-    # are SKIPPED while still within the lash's plausible thickness, and the
-    # band is collected from the first clean row above it. Beyond that skip
-    # a dirty row means brow, frame or hairline, and the walk ends.
+    # grown over, and it sits between the opening and the lid. It is found by
+    # its INK alone, which needs no reference tone and so cannot be fooled by
+    # one: a row is lash while it is mostly dark and achromatic.
     skip_cap = max(2, int(round(ap_h * LID_LASH_SKIP_FRAC)))
     lid_bot = top
-    while (lid_bot > 0 and (top - lid_bot) < skip_cap
-           and float(np.mean(_dirty(rgb[lid_bot - 1, x0:x1], skin)))
-           > LID_ROW_DIRT_MAX):
+    while lid_bot > 0 and (top - lid_bot) < skip_cap:
+        row = rgb[lid_bot - 1, x0:x1]
+        if float(np.mean(_ink(row))) <= LID_ROW_INK_MAX:
+            break
         lid_bot -= 1
 
+    # 2 · Seed the reference from the lid's own first clean rows.
+    #
+    # `_row_tone` ignores each row's ink, so a few surviving lash pixels
+    # cannot drag the seed dark, and the seed is the EYELID's tone — shaded
+    # by whatever the artist put over it (a glasses lens, a fringe shadow) —
+    # rather than the bright face skin further up.
+    seed: List[np.ndarray] = []
+    for i in range(LID_REF_ROWS):
+        yy = lid_bot - 1 - i
+        if yy < 0:
+            break
+        t = _row_tone(rgb[yy, x0:x1])
+        if t is not None:
+            seed.append(t)
+    if seed:
+        skin = np.median(np.stack(seed), axis=0)
+    else:                                   # the lid is entirely ink
+        blk = rgb[max(0, top - ap_h):top, x0:x1].reshape(-1, 3)
+        keep = blk[~_ink(blk)]
+        skin = (np.median(keep, axis=0) if len(keep) >= SAMPLE_MIN_PX
+                else np.median(blk, axis=0))
+
+    # 3 · Collect the band, the reference tracking what it accepts.
+    #
+    # Tracking is the whole point: eyelid skin darkens gradually toward the
+    # crease, so a fixed reference either rejects the far end of a real
+    # gradient or admits a brow that is merely one step darker. An EMA
+    # follows the gradient and still sees the step.
+    ref = skin.copy()
     y = lid_bot
     while y > 0 and (lid_bot - y) < cap:
         row = rgb[y - 1, x0:x1]
-        if float(np.mean(_dirty(row, skin))) > LID_ROW_DIRT_MAX:
+        tone = _row_tone(row)
+        if (tone is None                                  # all ink
+                or float(np.mean(_ink(row))) > LID_ROW_INK_MAX
+                or float(np.abs(tone - ref).max()) > LID_SKIN_DELTA):
             break
+        ref = (1.0 - LID_REF_EMA) * ref + LID_REF_EMA * tone
         y -= 1
     if lid_bot - y < LID_BAND_MIN:
         # The brow, the frame or the hairline sits directly on the eye, so
@@ -916,15 +968,25 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
     else:
         band = rgb[y:lid_bot, x0:x1].copy()
         src_y0 = y
-        # De-ink each row against its own clean median, so the strip keeps
-        # the vertical gradient the artist painted.
-        dirt = _dirty(band, skin)
+        # De-ink each row against ITS OWN tone, not the band's.
+        #
+        # The band is allowed to be a gradient, so its top row can legitimately
+        # sit further from the bottom row's tone than LID_SKIN_DELTA. Judging
+        # every row against one reference would then condemn whole rows at the
+        # far end of a real gradient and flatten them; judging a row against
+        # itself condemns only the specks that differ from their own
+        # neighbourhood, which is exactly what a stray lash tip or hair strand
+        # is.
         for r in range(band.shape[0]):
-            bad = dirt[r]
+            tone = _row_tone(band[r])
+            if tone is None:
+                band[r] = skin
+                continue
+            bad = _dirty(band[r], tone)
             if not bad.any():
                 continue
             good = band[r][~bad]
-            fill = (np.median(good, axis=0) if len(good) >= 3 else skin)
+            fill = (np.median(good, axis=0) if len(good) >= 3 else tone)
             band[r][bad] = fill
 
     strip = np.zeros((band.shape[0], x1 - x0, 4), dtype=np.uint8)
