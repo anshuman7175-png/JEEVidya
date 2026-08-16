@@ -258,6 +258,13 @@ class HeadGeometry:
         sclera that leaks past a lid is the class of bug Law 1 forbids
         representing. Derivation makes the two consistent by construction.
         """
+        def _pt(v) -> list:
+            """A 2-vector from a possibly-absent rig field."""
+            try:
+                return [float(v[0]), float(v[1])]
+            except Exception:
+                return [0.0, 0.0]
+
         upper = [tuple(p) for p in (self.lid_upper_l if left else self.lid_upper_r)]
         lower = [tuple(p) for p in (self.lid_lower_l if left else self.lid_lower_r)]
         art = self.art_eye_l if left else self.art_eye_r
@@ -268,6 +275,7 @@ class HeadGeometry:
             axes = list(art.get("iris_axes") or (0.0, 0.0))
             r = float(art.get("iris_r") or 0.0)
             upper, lower = _fit_lids_to_aperture(upper, lower, aperture)
+            org = _pt(art.get("eyeball_origin"))
             return {
                 "socket": [list(p) for p in aperture],
                 "aperture": [list(p) for p in aperture],
@@ -278,6 +286,18 @@ class HeadGeometry:
                 "iris_angle": float(art.get("iris_angle") or 0.0),
                 "colors": {k: list(v) for k, v in
                            (art.get("colors") or {}).items()},
+                # The artist's own eyeball, cut out at bake time. The
+                # renderer translates THESE pixels for gaze instead of
+                # synthesizing an eye, so a resting frame is the artwork.
+                "eyeball": str(art.get("eyeball") or ""),
+                "eyeball_origin": [float(org[0]), float(org[1])],
+                # The socket the eyeball uncovers when gaze moves, and the
+                # artist's own eyelid skin that slides down to blink. Both
+                # replace flat palette fills with real painted pixels.
+                "socket_img": str(art.get("socket_img") or ""),
+                "socket_origin": _pt(art.get("socket_origin")),
+                "lid_img": str(art.get("lid_img") or ""),
+                "lid_origin": _pt(art.get("lid_origin")),
             }
 
         socket = upper + list(reversed(lower))
@@ -352,7 +372,7 @@ class Rig:
     visemes: Dict[str, str] = field(default_factory=dict)    # name → file
     params: Dict[str, float] = field(default_factory=dict)   # feather_px, hair_line_y
 
-    # ─── Rig v3 (Part III) ────────────────────────────────
+    # ���── Rig v3 (Part III) ────────────────────────────────
     canonical_pose: str = "neutral"
     head: Optional[HeadGeometry] = None
     # viseme name → {"jaw","width","round","press","pull"}, fitted from art

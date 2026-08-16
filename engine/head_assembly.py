@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 
 from engine import head_transform as ht
 from engine.eye_model import EyeGeometry, EyePair, EyeState
@@ -101,10 +101,14 @@ class HeadAssembly:
 
         pal = geo.palette
         self.mouth = MouthRasterizer(self._pts(geo.lip_outer), pal, shading)
+        geo_l = EyeGeometry.from_rig_dict(self._scaled_eye(geo.eye_dict(True)))
+        geo_r = EyeGeometry.from_rig_dict(self._scaled_eye(geo.eye_dict(False)))
+        # The eyeball sprites are loaded HERE, through the same `_load`
+        # that scales the plate, so sprite pixels and eye geometry are
+        # always in one space. `_scaled_eye` scaled their origins to match.
         self.eyes = EyePair(
-            EyeGeometry.from_rig_dict(self._scaled_eye(geo.eye_dict(True))),
-            EyeGeometry.from_rig_dict(self._scaled_eye(geo.eye_dict(False))),
-            palette=pal, seed=seed or rig.character, fps=fps)
+            geo_l, geo_r, palette=pal, seed=seed or rig.character, fps=fps,
+            sprite_l=self._eyeball(d, geo_l), sprite_r=self._eyeball(d, geo_r))
 
         # Brow polylines in plate space (warped, never patch-pasted: a
         # feathered ellipse patch was how brow ghosting reached the eyes)
@@ -162,14 +166,33 @@ class HeadAssembly:
     def _pts(self, pts) -> list:
         return [(p[0] * self.scale, p[1] * self.scale) for p in pts]
 
+    def _eyeball(self, d: str, geo: EyeGeometry) -> Optional[Image.Image]:
+        """The artwork's own eyeball sprite for one eye, if the rig baked one.
+
+        Missing pixels are not fatal: the rasterizer falls back to the
+        synthetic eye, which is worse-looking but correct. A hard failure
+        here would take down a render for a cosmetic asset.
+        """
+        if not geo.eyeball:
+            return None
+        p = os.path.join(d, geo.eyeball)
+        if not os.path.exists(p):
+            return None
+        try:
+            return self._load(p)
+        except Exception as e:
+            print(f"  [HeadAssembly] eyeball sprite {geo.eyeball} unusable: {e}")
+            return None
+
     def _scaled_eye(self, d: dict) -> dict:
         """Scale one eye payload into work space.
 
         Keys are scaled by KIND, not by position: `colors` is RGB and must
         pass through untouched, `iris_angle` is degrees (scale-invariant),
-        `iris_axes` is a length pair, and everything else is a point list.
-        Scaling blindly here would multiply a colour channel by the render
-        scale and tint the eye.
+        `iris_axes` is a length pair, `eyeball` is a FILENAME, and
+        everything else is a point list. Scaling blindly here would
+        multiply a colour channel by the render scale and tint the eye —
+        and would iterate a filename character by character.
         """
         s = self.scale
         out: dict = {}
@@ -183,6 +206,13 @@ class HeadAssembly:
                 out[k] = float(v)
             elif k == "colors":
                 out[k] = {ck: list(cv) for ck, cv in (v or {}).items()}
+            elif k in ("eyeball", "socket_img", "lid_img"):
+                out[k] = str(v or "")
+            elif k in ("eyeball_origin", "socket_origin", "lid_origin"):
+                # A single point, not a list of them. It must scale with
+                # the sprite `_load` resizes, or the eyeball pastes off
+                # the eye at any render scale but 1.0.
+                out[k] = [float(v[0]) * s, float(v[1]) * s]
             else:
                 out[k] = [[x * s, y * s] for x, y in v]
         return out
@@ -249,9 +279,16 @@ class HeadAssembly:
     def _draw_brows(self, plate: Image.Image, brow: float) -> None:
         """Warp the baked brow polylines instead of sliding a patch.
 
-        A rectangular (or feathered-ellipse) patch carries its own
-        neighbourhood with it, which is how a raised brow used to smear a
-        skin panel across the eyes. A polyline warp moves only the brow.
+        The patch is masked to the BROW'S OWN STROKE — a thick polyline
+        along the baked brow, feathered in every direction — not to its
+        bounding box. Feathering only the top and bottom of a rectangle
+        (what this did before) leaves two hard vertical edges, which is
+        exactly the pale rectangle that showed over gudiya's brow.
+
+        The measured eye apertures are then subtracted from that mask, so
+        a brow raise CANNOT paint inside the drawn eye however large the
+        gain grows. Smearing skin across the eyes stops being a bug to
+        avoid and becomes a state the code cannot represent.
         """
         if abs(brow) < 0.02:
             return
@@ -263,24 +300,40 @@ class HeadAssembly:
             x0, x1 = int(math.floor(min(xs))), int(math.ceil(max(xs)))
             y0, y1 = int(math.floor(min(ys))), int(math.ceil(max(ys)))
             span = max(2.0, (y1 - y0))
-            pad = int(span * 2.0)
+            dy = -brow * BROW_RAISE_GAIN * span
+            # Only as much room as the stroke plus its travel and feather.
+            pad = int(math.ceil(span * 1.1 + abs(dy)))
             box = (max(0, x0 - pad), max(0, y0 - pad),
                    min(plate.width, x1 + pad), min(plate.height, y1 + pad))
             if box[2] - box[0] < 3 or box[3] - box[1] < 3:
                 continue
-            dy = -brow * BROW_RAISE_GAIN * span
             patch = plate.crop(box)
-            # Sub-pixel vertical shift of the brow band only, with the
-            # band's own alpha feathered top and bottom so no edge shows.
             shifted = patch.transform(patch.size, Image.AFFINE,
                                       (1, 0, 0, 0, 1, -dy),
                                       resample=Image.BICUBIC)
-            a = np.asarray(shifted.getchannel("A"), dtype=np.float32)
-            h = a.shape[0]
-            ramp = np.minimum(np.linspace(0, 1, h, dtype=np.float32) * 3.0,
-                              np.linspace(1, 0, h, dtype=np.float32) * 3.0)
-            a *= np.clip(ramp, 0.0, 1.0)[:, None]
-            shifted.putalpha(Image.fromarray(a.astype(np.uint8)))
+
+            stroke = Image.new("L", patch.size, 0)
+            sd = ImageDraw.Draw(stroke)
+            sd.line([(p[0] - box[0], p[1] - box[1] + dy) for p in poly],
+                    fill=255, width=max(3, int(span * 1.25)), joint="curve")
+            # Round the ends so the stroke has no square corner to show.
+            r = max(2, int(span * 0.62))
+            for p in (poly[0], poly[-1]):
+                cx, cy = p[0] - box[0], p[1] - box[1] + dy
+                sd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=255)
+            # The eye is off-limits, at bake-measured accuracy.
+            for ras in (self.eyes.left, self.eyes.right):
+                clip = ras.geo.clip
+                if len(clip) >= 3:
+                    sd.polygon([(p[0] - box[0], p[1] - box[1]) for p in clip],
+                               fill=0)
+            stroke = stroke.filter(ImageFilter.GaussianBlur(
+                max(1.0, span * 0.30)))
+
+            a = (np.asarray(shifted.getchannel("A"), dtype=np.float32)
+                 * (np.asarray(stroke, dtype=np.float32) / 255.0))
+            shifted.putalpha(Image.fromarray(
+                np.clip(a, 0, 255).astype(np.uint8)))
             plate.alpha_composite(shifted, (box[0], box[1]))
 
     # ─── step 3: THE affine ───────────────────────────────

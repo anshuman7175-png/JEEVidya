@@ -543,6 +543,98 @@ def eyeball_sprite(art: np.ndarray, eye: "ArtEye",
     return np.dstack([crop, mask]), (x0, y0)
 
 
+def socket_backdrop(art: np.ndarray, eye: "ArtEye",
+                    grow: float = 1.30
+                    ) -> Tuple[np.ndarray, Tuple[int, int]]:
+    """The eye with its EYEBALL PAINTED OUT — what gaze uncovers.
+
+    When the eyeball sprite translates, something has to be behind it.
+    Filling that with the `sclera` palette colour is wrong twice over: it
+    is flat where the artist painted a gradient, and the sample can be a
+    shadow (chintu measured a grey 156,147,146 on one eye and a white
+    251,241,236 on the other, so his eyes did not match each other).
+
+    Inpainting the iris out of the artwork instead gives a backdrop with
+    the artist's own shading and per-eye tone, and needs no colour
+    decision at all. `grow` covers the whole eyeball plus its rim so no
+    ring of the original iris survives at the edge of the fill.
+
+    Returns (RGBA patch, (x0, y0) origin in plate space); alpha is the
+    aperture, so the backdrop can never paint onto the cheek.
+    """
+    cv2 = _require_cv2()
+    h, w = art.shape[:2]
+    ap = np.asarray(eye.aperture, dtype=np.float64)
+    if len(ap) < 3:
+        raise EyeMeasureError("socket backdrop needs a measured aperture")
+    pad = 3
+    x0 = max(0, int(math.floor(ap[:, 0].min())) - pad)
+    y0 = max(0, int(math.floor(ap[:, 1].min())) - pad)
+    x1 = min(w, int(math.ceil(ap[:, 0].max())) + pad)
+    y1 = min(h, int(math.ceil(ap[:, 1].max())) + pad)
+    if x1 - x0 < 3 or y1 - y0 < 3:
+        raise EyeMeasureError("socket backdrop box collapsed")
+
+    crop = np.ascontiguousarray(art[y0:y1, x0:x1, :3].astype(np.uint8))
+    hole = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+    ax, ay = eye.iris_axes
+    cv2.ellipse(hole, (int(round(eye.iris_c[0] - x0)),
+                       int(round(eye.iris_c[1] - y0))),
+                (max(2, int(round(ax * grow))), max(2, int(round(ay * grow)))),
+                float(eye.iris_angle), 0, 360, 255, -1)
+    filled = cv2.inpaint(crop, hole,
+                         max(3, int(0.35 * max(ax, ay))), cv2.INPAINT_NS)
+
+    alpha = np.zeros_like(hole)
+    cv2.fillPoly(alpha, [np.round(ap - [x0, y0]).astype(np.int32)], 255)
+    return np.dstack([filled, alpha]), (x0, y0)
+
+
+def lid_sprite(art: np.ndarray, eye: "ArtEye", skin_frac: float = 0.42
+               ) -> Tuple[np.ndarray, Tuple[int, int]]:
+    """The artist's own upper eyelid, as a strip that slides down to blink.
+
+    A blink used to be a flat ellipse of `skin` dropped over the eye,
+    which reads as a hole punched in the face rather than a closed lid —
+    no crease, no lash, no shading, and the palette's skin tone is a
+    single sample of a face that is painted with a gradient.
+
+    The lid the artist DREW is the strip of plate immediately above the
+    aperture. Sliding those pixels down covers the eye with real skin
+    that already carries the lid crease and lash edge. Only the lower
+    `skin_frac` of the strip is real art: taking a full eye-height of it
+    would drag the eyebrow down into the eye, so everything above is the
+    topmost sampled row repeated, which continues the local skin gradient
+    instead of introducing a second colour.
+
+    Returns (RGBA strip, (x0, y0) origin in plate space) positioned so
+    that at closure 0 the strip sits exactly ABOVE the aperture, and a
+    downward shift of the aperture's own height closes the eye.
+    """
+    h, w = art.shape[:2]
+    ap = np.asarray(eye.aperture, dtype=np.float64)
+    if len(ap) < 3:
+        raise EyeMeasureError("lid sprite needs a measured aperture")
+    x0 = max(0, int(math.floor(ap[:, 0].min())) - 3)
+    x1 = min(w, int(math.ceil(ap[:, 0].max())) + 3)
+    top = int(math.floor(ap[:, 1].min()))
+    bot = int(math.ceil(ap[:, 1].max()))
+    H = max(3, bot - top)
+    if x1 - x0 < 3:
+        raise EyeMeasureError("lid sprite box collapsed")
+
+    strip = np.zeros((H, x1 - x0, 4), dtype=np.uint8)
+    real = max(1, int(round(H * skin_frac)))
+    src_y0 = max(0, top - real)
+    src = art[src_y0:top, x0:x1, :3]
+    if src.shape[0] == 0:                      # aperture touches the top edge
+        src = art[top:top + 1, x0:x1, :3]
+    strip[H - src.shape[0]:, :, :3] = src
+    strip[:H - src.shape[0], :, :3] = src[:1]  # edge-replicate upward
+    strip[..., 3] = 255
+    return strip, (x0, top - H)
+
+
 def measure_pair(art: np.ndarray, seed_l: Tuple[float, float],
                  seed_r: Tuple[float, float], face_h: float
                  ) -> Tuple[ArtEye, ArtEye]:
