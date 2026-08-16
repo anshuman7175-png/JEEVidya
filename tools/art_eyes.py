@@ -141,7 +141,7 @@ SEP_MAX_STEPS = 48       # bounded ⇒ deterministic
 APERTURE_GROW = 0.009    # ×face_h, dilation of the clip past the lash
 APERTURE_SMOOTH = 5      # circular moving-average window on the contour
 
-# ── Gaze travel is bounded by the artwork, not by a fixed fraction ─���������
+# ── Gaze travel is bounded by the artwork, not by a fixed fraction ─�����������
 #
 # Gaze used to translate the eyeball by ±0.55·iris_r (±18 px on chintu),
 # but this art draws an iris that nearly fills the opening — the real
@@ -185,6 +185,20 @@ GAZE_MAX_FRAC = 0.45         # ×iris_r, hard cap on measured travel
 # an exponential mean. That is what lets a lid darken smoothly into its
 # crease (a gradient the artist painted) while still ending the walk at the
 # STEP in tone that a brow, a glasses rim or a hairline always is.
+#
+# But a tracking reference alone is not enough, and gudiya's right eye shows
+# why. Its lid is a real 30-row gradient (240,158,104 → 232,145,90) and then
+# STEPS into the fringe at (198,110,60), (178,90,49), (172,85,44). Measured
+# row-to-row those steps are 38, 45, 35 — each below LID_SKIN_DELTA, so the
+# EMA followed them, and the walk ratcheted 7 rows up into the hair it was
+# written to stop at. A reference that chases the edge cannot detect it.
+#
+# So the band is bounded twice: per row against the running reference, which
+# catches a sharp edge, AND cumulatively against the SEED, which catches a
+# slow ratchet no single step betrays. The two thresholds are far apart in
+# the art — the genuine gradient drifts 14 from its seed over 30 rows, while
+# the fringe is 42 away the moment it starts — so the cumulative bound
+# separates lid from hair cleanly instead of by a hair's breadth.
 LID_BAND_FRAC = 0.55      # ×aperture height, cap on the sampled band
 LID_LASH_SKIP_FRAC = 0.30  # ×aperture height, how far up the lash may reach
 LID_BAND_MIN = 4          # px, a band thinner than this is not a lid
@@ -193,6 +207,9 @@ LID_ROW_DIRT_MAX = 0.10   # ≤10% of a row may be ink or non-skin
 LID_SKIN_DELTA = 46.0     # max|ΔRGB| a row's median may sit from the running
                           # lid reference before the walk calls it a new
                           # feature rather than more of the same eyelid
+LID_SEED_DRIFT_MAX = 30.0  # max|ΔRGB| the band may drift from its seed in
+                           # total, so no sequence of small steps can walk
+                           # the strip into a brow, fringe or glasses rim
 LID_REF_ROWS = 3          # rows above the lash that seed the reference
 LID_REF_EMA = 0.35        # weight of a newly accepted row in the reference
 
@@ -952,7 +969,9 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
         tone = _row_tone(row)
         if (tone is None                                  # all ink
                 or float(np.mean(_ink(row))) > LID_ROW_INK_MAX
-                or float(np.abs(tone - ref).max()) > LID_SKIN_DELTA):
+                or float(np.abs(tone - ref).max()) > LID_SKIN_DELTA
+                # …and against the seed, so small steps cannot add up
+                or float(np.abs(tone - skin).max()) > LID_SEED_DRIFT_MAX):
             break
         ref = (1.0 - LID_REF_EMA) * ref + LID_REF_EMA * tone
         y -= 1

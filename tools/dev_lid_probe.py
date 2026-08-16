@@ -18,8 +18,9 @@ import numpy as np
 from PIL import Image
 
 from engine.rig import Rig
-from tools.art_eyes import (LID_BAND_FRAC, LID_LASH_SKIP_FRAC,
-                            LID_REF_EMA, LID_ROW_INK_MAX, LID_SKIN_DELTA,
+from tools.art_eyes import (LID_BAND_FRAC, LID_BAND_MIN, LID_LASH_SKIP_FRAC,
+                            LID_REF_EMA, LID_REF_ROWS, LID_ROW_INK_MAX,
+                            LID_SEED_DRIFT_MAX, LID_SKIN_DELTA,
                             _ink, _row_tone)
 
 CHARS = ("chintu", "gudiya")
@@ -50,38 +51,63 @@ def probe(name: str) -> None:
         cap = int(round(ap_h * LID_BAND_FRAC))
         print(f"  eye_{side}: x={x0}..{x1} top={top} bot={bot} h={ap_h} "
               f"skip_cap={skip} band_cap={cap}")
-        print(f"    {'dy':>4} {'ink%':>6}  {'tone':<18} {'Δref':>6}  verdict")
+        # Mirror `lid_sprite` exactly: lash by ink, a seed median, then a
+        # walk bounded per-row against the running ref AND cumulatively
+        # against the seed. Δref catches an edge, Δseed catches a ratchet.
+        lash = 0
+        while lash < skip:
+            yy = top - lash - 1
+            if yy < 0 or float(np.mean(_ink(head[yy, x0:x1]))) <= LID_ROW_INK_MAX:
+                break
+            lash += 1
 
-        # Mirror `lid_sprite`: lash by ink alone, then a tracking reference.
-        ref = None
+        seed_rows = []
+        for i in range(LID_REF_ROWS):
+            yy = top - lash - 1 - i
+            if yy < 0:
+                break
+            t = _row_tone(head[yy, x0:x1])
+            if t is not None:
+                seed_rows.append(t)
+        if not seed_rows:
+            print(f"    lash={lash} · no clean seed row — flat fallback")
+            continue
+        seed = np.median(np.stack(seed_rows), axis=0)
+        print(f"    lash={lash} seed={seed.round(0)}")
+        print(f"    {'dy':>4} {'ink%':>6}  {'tone':<18} {'Δref':>6} "
+              f"{'Δseed':>6}  verdict")
+
+        ref = seed.copy()
         seen = 0
-        state = "lash"
-        for dy in range(1, min(top, ap_h) + 1):
+        for dy in range(lash + 1, min(top, ap_h) + 1):
             row = head[top - dy, x0:x1]
             ink = float(np.mean(_ink(row)))
             tone = _row_tone(row)
-            if state == "lash":
-                if ink <= LID_ROW_INK_MAX:
-                    state = "band"
-                    ref = tone
-                else:
-                    print(f"    {dy:>4} {ink * 100:6.1f}  {'':<18} {'':>6}  lash skip")
-                    continue
-            d = (float(np.abs(tone - ref).max())
-                 if (tone is not None and ref is not None) else float("inf"))
-            if state == "band" and (tone is None or ink > LID_ROW_INK_MAX
-                                    or d > LID_SKIN_DELTA):
-                state = "done"
-            verdict = ("accepted" if state == "band" and seen < cap
-                       else "STOP" if state == "done" else "over cap")
-            if state == "band" and seen < cap:
+            d_ref = (float(np.abs(tone - ref).max())
+                     if tone is not None else float("inf"))
+            d_seed = (float(np.abs(tone - seed).max())
+                      if tone is not None else float("inf"))
+            if tone is None:
+                why = "STOP all-ink"
+            elif ink > LID_ROW_INK_MAX:
+                why = "STOP ink"
+            elif d_ref > LID_SKIN_DELTA:
+                why = "STOP edge"
+            elif d_seed > LID_SEED_DRIFT_MAX:
+                why = "STOP drift"
+            elif seen >= cap:
+                why = "STOP cap"
+            else:
+                why = "accepted"
                 seen += 1
                 ref = (1.0 - LID_REF_EMA) * ref + LID_REF_EMA * tone
             t = "—" if tone is None else str(tone.round(0))
-            print(f"    {dy:>4} {ink * 100:6.1f}  {t:<18} {d:6.1f}  {verdict}")
-            if state != "band":
+            print(f"    {dy:>4} {ink * 100:6.1f}  {t:<18} {d_ref:6.1f} "
+                  f"{d_seed:6.1f}  {why}")
+            if why != "accepted":
                 break
-        print(f"    → band {seen} rows")
+        print(f"    → band {seen} rows"
+              + ("  (FLAT FALLBACK)" if seen < LID_BAND_MIN else ""))
 
 
 if __name__ == "__main__":
