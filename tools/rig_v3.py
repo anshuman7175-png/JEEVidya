@@ -44,7 +44,8 @@ from config import settings
 from engine.registration import (RegistrationError, SimilarityTransform,
                                  register_pose)
 from engine.rig import HeadGeometry, PoseEntry, Rig, N_LANDMARKS, rig_dir
-from tools.art_eyes import EyeMeasureError, eyeball_sprite, measure_pair
+from tools.art_eyes import (EyeMeasureError, eyeball_sprite, lid_sprite,
+                            measure_pair, socket_backdrop)
 
 # ═══════════════════════════════════════════
 # MediaPipe canonical landmark index sets
@@ -831,13 +832,23 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     # Synthesizing the eye from flat colour every frame threw away the
     # artist's shading, lash overlap and highlight, and painted eye-white
     # the art never had. Moving real pixels keeps all of it.
-    for _side, _eye, _key in ((art_l, art_l, "art_eye_l"),
-                              (art_r, art_r, "art_eye_r")):
-        _spr, _org = eyeball_sprite(crop_arr, _eye)
-        _fn = f"eyeball_{'l' if _key.endswith('_l') else 'r'}.png"
-        Image.fromarray(_spr, "RGBA").save(os.path.join(d, _fn))
-        (art_eye_l if _key.endswith("_l") else art_eye_r).update(
-            {"eyeball": _fn, "eyeball_origin": [int(_org[0]), int(_org[1])]})
+    # Three art assets per eye, cut from the SAME plate crop so they
+    # register with each other by construction: the eyeball gaze moves,
+    # the socket it uncovers, and the lid that closes over it.
+    for _eye, _key in ((art_l, "art_eye_l"), (art_r, "art_eye_r")):
+        _s = "l" if _key.endswith("_l") else "r"
+        _dst = art_eye_l if _s == "l" else art_eye_r
+        for _fn, _payload, _kimg, _korg in (
+                (f"eyeball_{_s}.png", eyeball_sprite(crop_arr, _eye),
+                 "eyeball", "eyeball_origin"),
+                (f"socket_{_s}.png", socket_backdrop(crop_arr, _eye),
+                 "socket_img", "socket_origin"),
+                (f"lid_{_s}.png", lid_sprite(crop_arr, _eye),
+                 "lid_img", "lid_origin")):
+            _arr, _org = _payload
+            Image.fromarray(_arr, "RGBA").save(os.path.join(d, _fn))
+            _dst.update({_kimg: _fn,
+                         _korg: [int(_org[0]), int(_org[1])]})
     print(f"  [RigV3] {rig.character}: art eyes measured — "
           f"iris r={art_l.iris_r:.1f}/{art_r.iris_r:.1f}px "
           f"(MediaPipe said {iris_mp(plate_lms, IRIS_L, fh)[2]:.1f}/"

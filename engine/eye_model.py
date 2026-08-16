@@ -64,6 +64,15 @@ SUPERSAMPLE = 4
 # Data model
 # ═══════════════════════════════════════════
 
+def _pt2(v) -> Tuple[float, float]:
+    """A 2-vector from a possibly-absent rig field. A legacy rig has no
+    art-eye assets at all, so every read of them must tolerate absence."""
+    try:
+        return (float(v[0]), float(v[1]))
+    except Exception:
+        return (0.0, 0.0)
+
+
 @dataclass(frozen=True)
 class EyeGeometry:
     """One eye's baked geometry in HEAD-PLATE space (from rig v3 §3.5).
@@ -104,6 +113,13 @@ class EyeGeometry:
     # an eye from flat colour, so a resting frame equals the artwork.
     eyeball: str = ""
     eyeball_origin: Tuple[float, float] = (0.0, 0.0)
+    # The socket the eyeball uncovers when gaze moves (the artwork's eye
+    # with its iris inpainted out), and the artist's own eyelid skin. Both
+    # exist so no flat palette colour is ever painted inside the eye.
+    socket_img: str = ""
+    socket_origin: Tuple[float, float] = (0.0, 0.0)
+    lid_img: str = ""
+    lid_origin: Tuple[float, float] = (0.0, 0.0)
 
     @property
     def measured(self) -> bool:
@@ -137,6 +153,12 @@ class EyeGeometry:
             iris_angle=float(d.get("iris_angle") or 0.0),
             colors={k: tuple(int(c) for c in v)
                     for k, v in (d.get("colors") or {}).items()},
+            eyeball=str(d.get("eyeball") or ""),
+            eyeball_origin=_pt2(d.get("eyeball_origin")),
+            socket_img=str(d.get("socket_img") or ""),
+            socket_origin=_pt2(d.get("socket_origin")),
+            lid_img=str(d.get("lid_img") or ""),
+            lid_origin=_pt2(d.get("lid_origin")),
         )
 
     @staticmethod
@@ -411,8 +433,13 @@ class EyeRasterizer:
     """
 
     def __init__(self, geo: EyeGeometry, palette: Dict[str, Tuple[int, int, int]],
-                 cache_size: int = 512):
+                 cache_size: int = 512,
+                 sprite: Optional[Image.Image] = None):
         self.geo = geo
+        # §3.5b — the artist's eyeball. When present, gaze TRANSLATES these
+        # pixels; the synthetic sclera/iris/catchlight path below is the
+        # fallback for rigs baked before the measurement existed.
+        self.sprite = sprite
         # Measured, in-region eye colours beat the landmark-sampled
         # palette: they were taken from inside the segmented iris and
         # sclera, so they cannot be the lash line or a glasses frame.
@@ -470,31 +497,31 @@ class EyeRasterizer:
         clip_mask = Image.new("L", img.size, 0)
         ImageDraw.Draw(clip_mask).polygon(T(clip_poly), fill=255)
 
-        # 1 · Sclera fill inside the aperture
-        draw.polygon(T(clip_poly),
-                     fill=self._color("sclera", (245, 243, 238)) + (255,))
-
-        # 2 · Iris + pupil, offset by gaze, clipped to the aperture.
+        # 1 · The eyeball, offset by gaze and clipped to the aperture.
         # Gaze travels in iris radii, so it scales with the DRAWN eye.
         gaze = np.array([state.eye_dx, state.eye_dy]) * geo.iris_r * 0.55
         ic = np.asarray(geo.iris_c) + gaze
 
         ball = Image.new("RGBA", img.size, (0, 0, 0, 0))
         bd = ImageDraw.Draw(ball)
-        # Elliptical iris: the drawn eyeball is not a circle on stylised
-        # art. Drawing a circle inside an oval eye left crescents of the
-        # artwork's own iris uncovered at the sides.
+        # The drawn eyeball is not a circle on stylised art. A circle
+        # inside an oval eye left crescents of the artwork's own iris
+        # uncovered at the sides.
         ax, ay = geo.axes
         ra, rb = ax * S, ay * S
-        cx, cy = (ic[0] - self._x0) * S, (ic[1] - self._y0) * S
+        rest = ((geo.iris_c[0] - self._x0) * S, (geo.iris_c[1] - self._y0) * S)
+        moved = ((ic[0] - self._x0) * S, (ic[1] - self._y0) * S)
         iris_rgb = self._color("iris", (74, 52, 38))
+        sclera_rgb = self._color("sclera", (245, 243, 238))
 
         def _oval(img_draw, sx: float, sy: float, fill=None, outline=None,
-                  width: int = 0) -> None:
-            """Iris-concentric ellipse at (sx, sy)× the semi-axes, rotated
-            by the measured angle. Rotation matters: an unrotated ellipse
-            on a tilted eye shows the same crescent gap it was meant to
-            close."""
+                  width: int = 0, center=None) -> None:
+            """Ellipse at (sx, sy)× the iris semi-axes, rotated by the
+            measured angle, centred on the gaze-shifted iris unless
+            `center` says otherwise. Rotation matters: an unrotated
+            ellipse on a tilted eye shows the same crescent gap it was
+            meant to close."""
+            cx, cy = moved if center is None else center
             box = [cx - ra * sx, cy - rb * sy, cx + ra * sx, cy + rb * sy]
             if abs(geo.iris_angle) < 0.5:
                 img_draw.ellipse(box, fill=fill, outline=outline, width=width)
@@ -511,19 +538,48 @@ class EyeRasterizer:
             if outline is not None:
                 img_draw.line(pts + pts[:1], fill=outline, width=max(1, width))
 
-        _oval(bd, 1.0, 1.0, fill=iris_rgb + (255,))
-        # limbal ring — darker iris edge, reads as depth at phone scale
-        ring = tuple(int(c * 0.55) for c in iris_rgb)
-        _oval(bd, 1.0, 1.0, outline=ring + (255,),
-              width=max(1, int(min(ra, rb) * 0.10)))
-        pupil_rgb = self._color("pupil", (18, 12, 10))
-        ps = 0.42 * state.pupil
-        _oval(bd, ps, ps, fill=pupil_rgb + (255,))
-        # catchlight — upper-left, the single most "alive" pixel in the face
-        clr = min(ra, rb) * 0.22
-        bd.ellipse([cx - ra * 0.45 - clr, cy - rb * 0.45 - clr,
-                    cx - ra * 0.45 + clr, cy - rb * 0.45 + clr],
-                   fill=(255, 255, 255, 230))
+        if self.sprite is not None:
+            # ART PATH — move the artist's pixels. At gaze 0 the sprite
+            # lands exactly where it was cut from, so a resting frame is
+            # the artwork: its shading, lash overlap and highlight all
+            # survive, which synthesis threw away.
+            #
+            # Repaint only the FOOTPRINT the eyeball vacates, never the
+            # whole aperture: this art is almost all iris, so flooding the
+            # aperture with `sclera` painted eye-white the artist never
+            # drew. 1.12× covers the largest gaze excursion.
+            _oval(draw, 1.12, 1.12, fill=sclera_rgb + (255,), center=rest)
+            sw = max(1, int(round(self.sprite.width * S)))
+            sh = max(1, int(round(self.sprite.height * S)))
+            spr = self.sprite.resize((sw, sh), Image.LANCZOS)
+            # paste (not alpha_composite) because it clips out-of-bounds
+            # boxes instead of raising; `ball` is empty, so the two agree.
+            ball.paste(spr,
+                       (int(round((geo.eyeball_origin[0] + gaze[0]
+                                   - self._x0) * S)),
+                        int(round((geo.eyeball_origin[1] + gaze[1]
+                                   - self._y0) * S))),
+                       spr)
+            # Pupil dilation is deliberately NOT applied here: the pupil
+            # is part of the drawing, and redrawing it flat would undo the
+            # very shading this path exists to keep.
+        else:
+            # SYNTHETIC FALLBACK — legacy rigs with no baked sprite.
+            draw.polygon(T(clip_poly), fill=sclera_rgb + (255,))
+            _oval(bd, 1.0, 1.0, fill=iris_rgb + (255,))
+            # limbal ring — darker iris edge, reads as depth at phone scale
+            ring = tuple(int(c * 0.55) for c in iris_rgb)
+            _oval(bd, 1.0, 1.0, outline=ring + (255,),
+                  width=max(1, int(min(ra, rb) * 0.10)))
+            pupil_rgb = self._color("pupil", (18, 12, 10))
+            ps = 0.42 * state.pupil
+            _oval(bd, ps, ps, fill=pupil_rgb + (255,))
+            # catchlight — upper-left, the most "alive" pixel in the face
+            clr = min(ra, rb) * 0.22
+            cx, cy = moved
+            bd.ellipse([cx - ra * 0.45 - clr, cy - rb * 0.45 - clr,
+                        cx - ra * 0.45 + clr, cy - rb * 0.45 + clr],
+                       fill=(255, 255, 255, 230))
         ball.putalpha(Image.composite(ball.split()[3], Image.new("L", img.size, 0),
                                       clip_mask))
         img.alpha_composite(ball)
@@ -581,9 +637,11 @@ class EyePair:
 
     def __init__(self, geo_l: EyeGeometry, geo_r: EyeGeometry,
                  palette: Dict[str, Tuple[int, int, int]],
-                 seed: str, fps: int):
-        self.left = EyeRasterizer(geo_l, palette)
-        self.right = EyeRasterizer(geo_r, palette)
+                 seed: str, fps: int,
+                 sprite_l: Optional[Image.Image] = None,
+                 sprite_r: Optional[Image.Image] = None):
+        self.left = EyeRasterizer(geo_l, palette, sprite=sprite_l)
+        self.right = EyeRasterizer(geo_r, palette, sprite=sprite_r)
         self.blinks = BlinkScheduler(seed, fps)
         self.gaze = GazeEngine(seed)
 
