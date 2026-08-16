@@ -117,6 +117,41 @@ def _roi_from_variation(frames: List[Image.Image], face_h: float
     return region
 
 
+def _painted_region(frame: Image.Image, reference: Image.Image,
+                    face_h: float) -> Optional[np.ndarray]:
+    """Pixels where `frame` differs from a reference render — i.e. every
+    pixel the face renderer actually PAINTED, anywhere on the canvas.
+
+    This is the honest search region for the "is there a second mouth?"
+    question. The gate used to scan the whole frame for lip COLOUR, on
+    the theory that a ghost mouth could appear anywhere and a region
+    would hide it. True, but unusable on this artwork: flat cel shading
+    draws lips, skin, ears and clothing from one warm ramp, so lip
+    colour matches 17.7% of chintu's body (measured) and the gate
+    reported ~1000 components and a "rival blob 3× the mouth" on a
+    render whose mouth was provably correct.
+
+    Differencing against a reference keeps the whole canvas in scope —
+    a ghost mouth on the shirt still shows up, because painting one
+    CHANGES those pixels — while a cheek that merely shares the lip hue
+    does not, because nothing painted it. So the gate keeps its full
+    reach and loses only its false positives.
+
+    The reference is a render of the same pose with the mouth closed and
+    eyes open; anything the mouth/eye compositors added relative to it is
+    by definition renderer output, not artwork.
+    """
+    a = np.asarray(frame.convert("RGB"), dtype=np.int16)
+    b = np.asarray(reference.convert("RGB"), dtype=np.int16)
+    if a.shape != b.shape:
+        return None
+    diff = np.abs(a - b).max(axis=-1) >= ROI_DELTA
+    if not diff.any():
+        return None
+    # Grow so the antialiased rim of a painted feature counts as painted.
+    return dilate_mask(diff, ROI_GROW_FRAC * face_h)
+
+
 def _mask_bbox(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
     ys, xs = np.nonzero(mask)
     if len(xs) == 0:
@@ -272,9 +307,22 @@ def run_sweep(character: str, out_dir: str,
 
         bb = _mask_bbox(mask)
         if bb is not None:
-            # Whole-frame search here ON PURPOSE: a ghost mouth outside
-            # the ROI is exactly the defect this gate exists to catch.
-            g = gate_single_face(frame, lip_rgb, bb, face_h, tol=LIP_TOL)
+            # Judged over the WHOLE canvas, but only on pixels the
+            # renderer painted (vs. the mouth-closed reference). A ghost
+            # mouth anywhere is still caught — painting one changes those
+            # pixels — while a lip-hued cheek or shirt is not, because
+            # nothing painted it. Searching raw lip colour instead made
+            # this gate unsatisfiable on cel-shaded art.
+            # Union with the mouth's own footprint: a REST frame barely
+            # differs from the rest reference, so on its own `painted`
+            # could exclude the very mouth the gate must find.
+            painted = _painted_region(frame, rest_frame, face_h)
+            if painted is not None and mouth_roi is not None:
+                painted = painted | mouth_roi
+            elif painted is None:
+                painted = mouth_roi
+            g = gate_single_face(frame, lip_rgb, bb, face_h,
+                                 region=painted, tol=LIP_TOL)
             g.name = f"single_face[{vname}]"
             report.add(g)
             if not g.passed:

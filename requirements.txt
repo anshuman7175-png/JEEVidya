@@ -25,5 +25,11 @@ audioop-lts>=0.2.1; python_version >= "3.13"
 # file, ALWAYS run the two-step fix (also detected by `jvmake doctor`):
 #   pip uninstall -y opencv-contrib-python
 #   pip install --force-reinstall opencv-contrib-python-headless
+# GOTCHA 2: the OpenCV 5.0.0.x wheels install without error but ship no
+# importable `cv2` on this platform — `import cv2` raises ModuleNotFound
+# while pip/uv report the package as satisfied. That combination is
+# especially nasty because it looks like a code bug, not an install bug.
+# The 4.x series is the last one known to import cleanly, so the major
+# version is CAPPED rather than left open.
 mediapipe>=1.0.0
-opencv-contrib-python-headless>=4.9
+opencv-contrib-python-headless>=4.9,<5
