@@ -122,6 +122,42 @@ LASH_IRIS_SEP = 56.0
 SKIN_IRIS_SEP = 56.0
 SEP_MAX_STEPS = 48       # bounded ⇒ deterministic
 
+# ── The aperture is a CLIP, so its rim must be outside the drawn eye ──
+#
+# Segmentation puts the boundary partway through the antialiased lash,
+# which leaves a 1–3 px ring of the ORIGINAL painted eye outside the
+# clip. Every eye pixel is masked to the aperture, so that ring survives
+# whatever is drawn: filling the eye with lid skin left the artwork's own
+# lash and sclera showing around the fill as a hard, jagged outline — the
+# "cracked eggshell" on gudiya's blink.
+#
+# Two properties fix it, and both are needed:
+#   grow   : the clip must SWALLOW the antialiased rim, so there is no
+#            original-eye pixel left outside it to show through.
+#   smooth : the raw contour is a pixel staircase, and decimating it by
+#            index keeps the steps. A staircase clip reads as a ragged
+#            edge at any zoom, so the boundary is low-passed into the
+#            smooth curve the artist actually drew.
+APERTURE_GROW = 0.009    # ×face_h, dilation of the clip past the lash
+APERTURE_SMOOTH = 5      # circular moving-average window on the contour
+
+# ── Gaze travel is bounded by the artwork, not by a fixed fraction ──
+#
+# Gaze used to translate the eyeball by ±0.55·iris_r (±18 px on chintu),
+# but this art draws an iris that nearly fills the opening — the real
+# sclera margin is a few pixels. The consequences were both visible:
+# the iris rode onto the lash, and `socket_backdrop` had to inpaint the
+# WHOLE iris ellipse to hide the artwork's own iris behind it, which on
+# an eye that is almost all iris has no clean pixels to reconstruct from
+# and produced the radial brown smear seen behind every moving eye.
+#
+# Measuring the margin instead makes the excursion exactly what the
+# drawing affords, so the inpaint shrinks to the thin crescent the
+# eyeball can actually uncover — a region completely surrounded by real
+# sclera, which is the case inpainting handles well.
+GAZE_MARGIN_SAFETY = 1.0     # px kept between the iris rim and the lash
+GAZE_MAX_FRAC = 0.45         # ×iris_r, hard cap on measured travel
+
 
 class EyeMeasureError(RuntimeError):
     """Measurement that cannot be trusted fails loudly (Law 1).
@@ -143,6 +179,10 @@ class ArtEye:
     iris_angle : ellipse rotation, degrees
     iris_r     : sqrt(a·b) — the single scale gaze/pupil maths uses
     colors     : sclera / iris / pupil / lash, each sampled in-region
+    gaze_range : (dx, dy) px the eyeball may travel before its rim
+                 reaches the drawn opening. This is the artwork's own
+                 sclera margin, so a gaze of ±1 is the largest look the
+                 drawing can hold rather than a guessed fraction.
     """
     aperture: Tuple[Tuple[float, float], ...]
     iris_c: Tuple[float, float]
@@ -150,6 +190,7 @@ class ArtEye:
     iris_angle: float
     iris_r: float
     colors: Dict[str, Tuple[int, int, int]]
+    gaze_range: Tuple[float, float] = (0.0, 0.0)
 
     def to_dict(self) -> dict:
         return {
@@ -159,6 +200,7 @@ class ArtEye:
             "iris_angle": self.iris_angle,
             "iris_r": self.iris_r,
             "colors": {k: list(v) for k, v in self.colors.items()},
+            "gaze_range": list(self.gaze_range),
         }
 
     @staticmethod
