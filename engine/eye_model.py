@@ -554,15 +554,27 @@ class EyeRasterizer:
                 img_draw.line(pts + pts[:1], fill=outline, width=max(1, width))
 
         def art_layer(src: Image.Image, origin: Tuple[float, float],
-                      shift: Tuple[float, float] = (0.0, 0.0)) -> Image.Image:
+                      shift: Tuple[float, float] = (0.0, 0.0),
+                      stretch_to: Optional[float] = None) -> Image.Image:
             """`src` upscaled to the supersampled grid and placed at its
             baked plate-space origin plus `shift`, on a transparent layer
             the size of the patch. Placing every art layer through one
             function is what keeps the eyeball, the socket behind it and
-            the lid over it in register at any render scale."""
+            the lid over it in register at any render scale.
+
+            `stretch_to` overrides the vertical size in PLATE units, for
+            the lid: the bake samples only a fraction of an eye-height of
+            real eyelid skin (sampling a whole one would drag the eyebrow
+            into the eye), so the strip is shorter than the opening it has
+            to cover and is stretched to fit. Stretching keeps the skin's
+            real gradient, crease and lash; the alternative the bake used
+            to apply — padding with a repeated row — is what filled a
+            closed eye with a flat pale panel.
+            """
             layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-            up = src.resize((max(1, int(round(src.width * S))),
-                            max(1, int(round(src.height * S)))),
+            h_px = (max(1, int(round(src.height * S))) if stretch_to is None
+                    else max(1, int(round(stretch_to * S))))
+            up = src.resize((max(1, int(round(src.width * S))), h_px),
                            Image.LANCZOS)
             # paste (not alpha_composite) because it clips out-of-bounds
             # boxes instead of raising; `layer` is empty, so the two agree.
@@ -639,22 +651,24 @@ class EyeRasterizer:
             # ART LID — the artist's own eyelid skin, slid down over the
             # eye. Two things are combined, and both are needed:
             #
-            #   pixels : the baked strip, shifted down by `closure` × the
-            #            aperture's height. It was cut from just above the
-            #            aperture, so at closure 1 it lands exactly on the
-            #            opening, and the skin arriving at the leading edge
-            #            is the crease and lash the artist actually drew.
+            #   pixels : the baked strip, held at its origin just above the
+            #            aperture and STRETCHED down to the closing margin.
+            #            Its bottom row is the aperture's top — the artist's
+            #            own lash line — so the skin arriving at the leading
+            #            edge is the crease and lash actually drawn, and at
+            #            closure 0 the needed height equals the strip's own,
+            #            leaving a resting frame as untouched artwork.
             #   shape  : the region above the CURVED `_lid_path` margin.
-            #            The strip's own bottom edge is a straight row, and
-            #            a straight-edged lid at half closure is the single
+            #            The strip's bottom edge is a straight row, and a
+            #            straight-edged lid at half closure is the single
             #            most obvious tell that a blink is fake. Masking by
             #            the margin gives the closing edge the drawn eye's
             #            own curvature, and at closure 1 that margin IS the
             #            aperture's lower rim — so the eye is fully covered
             #            by geometric identity, not by a tuned offset.
-            ap_np = np.asarray(geo.clip, dtype=np.float64)
-            travel = float(ap_np[:, 1].max() - ap_np[:, 1].min()) * closure
-            lid_layer = art_layer(self.lid, geo.lid_origin, (0.0, travel))
+            need = float(lid[:, 1].max()) - float(geo.lid_origin[1])
+            lid_layer = art_layer(self.lid, geo.lid_origin,
+                                  stretch_to=max(need, 1.0))
             shape = Image.new("L", img.size, 0)
             ImageDraw.Draw(shape).polygon(T(np.vstack([lid, cap[::-1]])),
                                           fill=255)
