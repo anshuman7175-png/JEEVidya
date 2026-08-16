@@ -44,6 +44,7 @@ from config import settings
 from engine.registration import (RegistrationError, SimilarityTransform,
                                  register_pose)
 from engine.rig import HeadGeometry, PoseEntry, Rig, N_LANDMARKS, rig_dir
+from tools.art_eyes import EyeMeasureError, measure_pair
 
 # ═══════════════════════════════════════════
 # MediaPipe canonical landmark index sets
@@ -97,6 +98,25 @@ def face_height(lms: np.ndarray) -> float:
     """Chin→forehead distance: the scale every threshold is derived from,
     so gates are resolution-independent (Part VIII)."""
     return float(max(8.0, abs(lms[CHIN][1] - lms[FOREHEAD][1])))
+
+
+def iris_mp(lms: np.ndarray, idx: Sequence[int],
+            fh: float) -> Tuple[float, float, float]:
+    """MediaPipe's own iris ring as (cx, cy, r).
+
+    Retained ONLY as the seed that locates each eye and for reporting how
+    far off it was; the geometry that renders comes from the pixel
+    measurement in tools/art_eyes.py, because this ring carries the
+    proportions of a photographed human eye.
+    """
+    pts = _pick(lms, idx)
+    c = pts.mean(axis=0)
+    r = float(np.linalg.norm(pts - c, axis=1).mean())
+    # A refined-iris ring collapses to its centre on some exports;
+    # fall back to an anatomical radius so the eye is never a dot.
+    if r < 0.5:
+        r = 0.055 * fh
+    return (float(c[0]), float(c[1]), r)
 
 
 def convex_hull(points: np.ndarray) -> np.ndarray:
@@ -234,17 +254,33 @@ def seam_error(head_a: np.ndarray, body_a: np.ndarray) -> float:
 # §3.5 — head plate: crop + inpaint features out
 # ═══════════════════════════════════════════
 
-def feature_mask(lms: np.ndarray, size: Tuple[int, int],
-                 fh: float) -> np.ndarray:
-    """Binary mask of the painted features to remove: the outer lip ring
-    and both lid rings, dilated so the artwork's ink outline goes too.
-    Leaving the outline behind is what produced ghost lips under the
-    parametric mouth."""
+def feature_mask(lms: np.ndarray, size: Tuple[int, int], fh: float,
+                 eye_apertures: Optional[Sequence[Sequence[
+                     Tuple[float, float]]]] = None) -> np.ndarray:
+    """Binary mask of the painted features to remove before inpainting.
+
+    The outer lip ring always comes out: leaving its ink outline behind
+    is what produced ghost lips under the parametric mouth.
+
+    The EYES are only removed when `eye_apertures` is absent. With a
+    measured aperture we keep the artwork's eyes, because the artwork's
+    eye IS the resting eye (§3.5b) — big painted iris, sclera, lashes and
+    catchlight, all of it better than anything drawn procedurally. Only
+    the small region the gaze actually displaces gets replaced, at render
+    time, clipped to that aperture.
+
+    This also repairs a real defect: MediaPipe's lid hull is ~2.5× too
+    small on stylised art, so inpainting it did not remove the eye — it
+    smeared a grey blur across the top of an otherwise perfect iris while
+    leaving the rest of the eye visible underneath the procedural patch.
+    """
     w, h = size
     m = np.zeros((h, w), dtype=np.float32)
-    for idx in (LIP_OUTER, LID_UPPER_L + LID_LOWER_L,
-                LID_UPPER_R + LID_LOWER_R):
-        m = np.maximum(m, polygon_mask(convex_hull(_pick(lms, idx)), (w, h)))
+    m = np.maximum(m, polygon_mask(convex_hull(_pick(lms, LIP_OUTER)), (w, h)))
+    if not eye_apertures:
+        for idx in (LID_UPPER_L + LID_LOWER_L, LID_UPPER_R + LID_LOWER_R):
+            m = np.maximum(m, polygon_mask(convex_hull(_pick(lms, idx)),
+                                           (w, h)))
     grown = _distance_blur(m, INPAINT_DILATE * fh)
     return (grown > 0.35).astype(np.uint8)
 
@@ -773,7 +809,31 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
 
     # landmarks in plate space
     plate_lms = canon_lms - np.array([x0, y0], dtype=np.float64)
-    fmask = feature_mask(plate_lms, head_crop.size, fh)
+
+    # ─── §3.5b measure the eyes the ARTIST drew ───────────
+    # Must run on head_crop, BEFORE inpainting: the eyes have to still be
+    # painted to be measured. MediaPipe's lid centroid is a reliable
+    # SEED (Δ ≤ 14px) even though its scale is 2.2–2.9× too small, so we
+    # keep the centre and re-derive the size from pixels.
+    crop_arr = np.asarray(head_crop.convert("RGBA"))
+    seed_l = _pick(plate_lms, LID_UPPER_L + LID_LOWER_L).mean(axis=0)
+    seed_r = _pick(plate_lms, LID_UPPER_R + LID_LOWER_R).mean(axis=0)
+    try:
+        art_l, art_r = measure_pair(crop_arr, (seed_l[0], seed_l[1]),
+                                    (seed_r[0], seed_r[1]), fh)
+    except EyeMeasureError as exc:
+        raise BakeError(
+            f"character '{rig.character}': could not measure the drawn "
+            f"eyes — {exc}") from exc
+    art_eye_l, art_eye_r = art_l.to_dict(), art_r.to_dict()
+    print(f"  [RigV3] {rig.character}: art eyes measured — "
+          f"iris r={art_l.iris_r:.1f}/{art_r.iris_r:.1f}px "
+          f"(MediaPipe said {iris_mp(plate_lms, IRIS_L, fh)[2]:.1f}/"
+          f"{iris_mp(plate_lms, IRIS_R, fh)[2]:.1f}px)")
+
+    # Eyes stay in the plate: the artwork's eye IS the resting eye.
+    fmask = feature_mask(plate_lms, head_crop.size, fh,
+                         eye_apertures=(art_l.aperture, art_r.aperture))
     plate = inpaint(head_crop, fmask)
     plate.save(os.path.join(d, "head_plate.png"))
 
@@ -784,22 +844,21 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     def poly(idx) -> List[Tuple[float, float]]:
         return [(float(p[0]), float(p[1])) for p in _pick(plate_lms, idx)]
 
-    def iris(idx) -> Tuple[float, float, float]:
-        pts = _pick(plate_lms, idx)
-        c = pts.mean(axis=0)
-        r = float(np.linalg.norm(pts - c, axis=1).mean())
-        # A refined-iris ring collapses to its centre on some exports;
-        # fall back to an anatomical radius so the eye is never a dot.
-        if r < 0.5:
-            r = 0.055 * fh
-        return (float(c[0]), float(c[1]), r)
-
     # Measured on the head crop BEFORE inpainting: the features have to
     # still be painted to be sampled. Region statistics, not pinpricks.
-    plate_arr = np.asarray(head_crop.convert("RGBA"))
-    iris_geo_l, iris_geo_r = iris(IRIS_L), iris(IRIS_R)
-    palette = extract_palette(plate_arr, plate_lms, fh,
+    # The eye entries come from the pixel measurement (§3.5b), which is
+    # the only source that cannot confuse an iris with a lash.
+    iris_geo_l = (art_l.iris_c[0], art_l.iris_c[1], art_l.iris_r)
+    iris_geo_r = (art_r.iris_c[0], art_r.iris_c[1], art_r.iris_r)
+    palette = extract_palette(crop_arr, plate_lms, fh,
                               iris_geo_l, iris_geo_r)
+    # Measured eye colours win over the landmark-sampled ones: they were
+    # taken from inside the segmented iris/sclera, so they cannot pick up
+    # hair, a glasses frame or the lash line.
+    for _k in ("sclera", "iris", "pupil", "lash"):
+        _v = art_l.colors.get(_k) or art_r.colors.get(_k)
+        if _v:
+            palette[_k] = tuple(int(c) for c in _v)
 
     rig.head = HeadGeometry(
         plate="head_plate.png",
@@ -808,7 +867,8 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
         lid_upper_l=poly(LID_UPPER_L), lid_lower_l=poly(LID_LOWER_L),
         lid_upper_r=poly(LID_UPPER_R), lid_lower_r=poly(LID_LOWER_R),
         brow_l=poly(BROW_L), brow_r=poly(BROW_R),
-        iris_l=iris(IRIS_L), iris_r=iris(IRIS_R),
+        iris_l=iris_geo_l, iris_r=iris_geo_r,
+        art_eye_l=art_eye_l, art_eye_r=art_eye_r,
         palette=palette, shading="mouth_shading.png",
         offset=(float(x0), float(y0)), face_height=fh)
 
