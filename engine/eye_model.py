@@ -505,26 +505,53 @@ class EyeRasterizer:
         idx = np.nonzero(self._col_any)[0]
         return [(float(x), float(rows[x])) for x in idx]
 
-    def _art_rgb(self, src: Image.Image, origin: Tuple[float, float],
-                 height: float) -> np.ndarray:
-        """`src` stretched to `height` PLATE units, placed at `origin`, and
-        edge-extended over the whole patch as an (H, W, 3) array.
+    def _lid_shear(self, src: Image.Image, origin: Tuple[float, float],
+                   rows: np.ndarray) -> np.ndarray:
+        """The lid strip at NATURAL SCALE, sheared per column so its bottom
+        row rides the leading edge. Returns (H, W, 3) over the whole patch.
 
-        Edge extension is the guarantee that matters: the lid's alpha is
-        the coverage mask, so every covered pixel must have a colour. A
-        paste could leave a covered pixel outside the strip's rectangle
-        transparent — which is exactly the kind of hole this rewrite
-        exists to make impossible. Clamped sampling has no outside.
+        The previous version stretched the strip to whatever height the
+        closure needed. On this art that is a 28px band over a 95px opening
+        — a 3.4× smear, which is why a blink looked like a bar of mush
+        drawn across the eye. A lid does not stretch as it closes; it
+        TRANSLATES over the eyeball. So here the pixels keep their aspect
+        and each column is merely shifted down by its own amount:
+
+            shift[x] = rows[x] − (rest bottom row)
+
+        Per column, not one shift for the patch, because the leading edge
+        is a curve — the eye closes deepest at its middle. A single shift
+        would either tear the lid away from the rim at the corners or crush
+        it at the centre; the shear keeps the strip continuous and lets its
+        bottom row follow the curve exactly. At closure 0 the shift is the
+        one pixel that returns the strip where it was cut from, so a
+        resting frame is untouched artwork.
+
+        Sampling is CLAMPED vertically, which is the guarantee that
+        matters: the lid's alpha is the coverage mask, so every covered
+        pixel must have a colour, and a covered pixel above the shifted
+        strip would otherwise be a transparent hole in the lid. Clamping
+        repeats the strip's topmost row — measured clean eyelid skin — so
+        the deep part of a closure continues that tone instead of
+        distorting the crease to reach it.
         """
         S = SUPERSAMPLE
         sw = max(1, int(round(src.width * S)))
-        sh = max(1, int(round(height * S)))
+        sh = max(1, int(round(src.height * S)))          # natural scale
         arr = np.asarray(src.convert("RGB").resize((sw, sh), Image.LANCZOS))
         oy = int(round((origin[1] - self._y0) * S))
         ox = int(round((origin[0] - self._x0) * S))
-        yy = np.clip(np.arange(self._h) - oy, 0, sh - 1)
-        xx = np.clip(np.arange(self._w) - ox, 0, sw - 1)
-        return arr[np.ix_(yy, xx)]
+
+        # Per-column shift that puts the strip's bottom row on the edge.
+        shift = np.rint(rows - float(oy + sh - 1))
+        shift[~self._col_any] = 0.0
+        # Columns outside the aperture are never painted (the coverage mask
+        # is empty there), but they still index the array, so keep them in
+        # range rather than relying on the mask.
+        ys = np.arange(self._h)[:, None]
+        sy = np.clip(ys - shift[None, :] - oy, 0, sh - 1).astype(np.intp)
+        sx = np.clip(np.arange(self._w) - ox, 0, sw - 1).astype(np.intp)
+        return arr[sy, sx[None, :].repeat(self._h, axis=0)]
 
     @staticmethod
     def _as_mask(m: np.ndarray) -> Image.Image:
@@ -612,7 +639,7 @@ class EyeRasterizer:
             the size of the patch. Placing every art layer through one
             function is what keeps the eyeball and the socket behind it in
             register at any render scale. (The lid is handled by
-            `_art_rgb`, which must also stretch and edge-extend.)
+            `_lid_shear`, which shears per column and clamps.)
             """
             layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
             up = src.resize((max(1, int(round(src.width * S))),
@@ -688,24 +715,21 @@ class EyeRasterizer:
             # eye. Colour and extent come from different places, and both
             # matter:
             #
-            #   pixels : the baked strip, held at its origin just above the
-            #            aperture and STRETCHED down to the leading edge's
-            #            deepest column. Its bottom row is the aperture's
-            #            top — the artist's own lash line — so the skin
-            #            arriving at the leading edge is the crease and
-            #            lash actually drawn, and a resting frame is
-            #            untouched artwork.
-            #   alpha  : the coverage mask itself. Because the strip is
-            #            edge-extended over the whole patch, every covered
-            #            pixel has real skin behind it; the alpha alone
-            #            decides the shape. The old code took the opposite
-            #            approach — paste the strip, then intersect with a
-            #            polygon — which meant any disagreement between
-            #            the two became a transparent hole in the lid.
-            deep = (float(rows[self._col_any].max()) / S + self._y0
-                    if self._col_any.any() else self._y1)
-            need = max(deep - float(geo.lid_origin[1]), 1.0)
-            rgb = self._art_rgb(self.lid, geo.lid_origin, need)
+            #   pixels : the baked strip at NATURAL SCALE, sheared per
+            #            column so its bottom row rides the leading edge
+            #            (see `_lid_shear`). That bottom row is the row
+            #            directly above the aperture — the artist's own
+            #            crease and lash — so the skin arriving at the
+            #            closing edge is drawn skin, undistorted, and a
+            #            resting frame is untouched artwork.
+            #   alpha  : the coverage mask itself. Because the shear samples
+            #            with vertical clamping, every covered pixel has
+            #            real skin behind it; the alpha alone decides the
+            #            shape. The old code took the opposite approach —
+            #            paste the strip, then intersect with a polygon —
+            #            which meant any disagreement between the two
+            #            became a transparent hole in the lid.
+            rgb = self._lid_shear(self.lid, geo.lid_origin, rows)
             alpha = (cover * 255).astype(np.uint8)
             img.alpha_composite(Image.fromarray(
                 np.dstack([rgb, alpha]), "RGBA"))
