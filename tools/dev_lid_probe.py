@@ -18,21 +18,25 @@ import numpy as np
 from PIL import Image
 
 from engine.rig import Rig
-from tools.art_eyes import (LASH_LUM_MAX, LASH_SAT_MAX, LID_BAND_FRAC,
-                            LID_LASH_SKIP_FRAC, LID_ROW_DIRT_MAX,
-                            LID_SKIN_DELTA, SAMPLE_MIN_PX, _luma)
+from tools.art_eyes import (LID_BAND_FRAC, LID_BAND_MIN, LID_LASH_SKIP_FRAC,
+                            LID_REF_EMA, LID_REF_ROWS, LID_ROW_INK_MAX,
+                            LID_SEED_DRIFT_MAX, LID_SKIN_DELTA,
+                            _ink, _row_tone)
 
 CHARS = ("chintu", "gudiya")
 
 
 def probe(name: str) -> None:
     rig = Rig.load(name)
+    if rig.head is None:
+        print(f"\n=== {name}: no v3 head plate — run `jvmake.py rig` first")
+        return
     head = np.asarray(Image.open(rig.head_plate_path()).convert("RGB"),
                       dtype=np.float32)
     print(f"\n=== {name} · head plate {head.shape[1]}x{head.shape[0]} ===")
 
     for side in ("l", "r"):
-        geo = rig.eye_dict(side == "l")
+        geo = rig.head.eye_dict(side == "l")
         ap = np.asarray(geo["aperture"], dtype=np.float64)
         if len(ap) < 3:
             print(f"  eye_{side}: no measured aperture")
@@ -43,28 +47,67 @@ def probe(name: str) -> None:
         bot = int(np.ceil(ap[:, 1].max()))
         ap_h = max(3, bot - top)
 
-        ref = head[max(0, top - ap_h):top, x0:x1].reshape(-1, 3)
-        lum, sat = _luma(ref), ref.max(axis=1) - ref.min(axis=1)
-        clean = ref[~((lum <= LASH_LUM_MAX) & (sat <= LASH_SAT_MAX))]
-        skin = (np.median(clean, axis=0) if len(clean) >= SAMPLE_MIN_PX
-                else np.median(ref, axis=0))
-
         skip = max(2, int(round(ap_h * LID_LASH_SKIP_FRAC)))
         cap = int(round(ap_h * LID_BAND_FRAC))
         print(f"  eye_{side}: x={x0}..{x1} top={top} bot={bot} h={ap_h} "
-              f"skin={skin.round(0)} skip_cap={skip} band_cap={cap}")
-        print(f"    {'dy':>4} {'ink%':>6} {'far%':>6} {'dirt%':>6}  median")
-        for dy in range(1, min(top, ap_h) + 1):
+              f"skip_cap={skip} band_cap={cap}")
+        # Mirror `lid_sprite` exactly: lash by ink, a seed median, then a
+        # walk bounded per-row against the running ref AND cumulatively
+        # against the seed. Δref catches an edge, Δseed catches a ratchet.
+        lash = 0
+        while lash < skip:
+            yy = top - lash - 1
+            if yy < 0 or float(np.mean(_ink(head[yy, x0:x1]))) <= LID_ROW_INK_MAX:
+                break
+            lash += 1
+
+        seed_rows = []
+        for i in range(LID_REF_ROWS):
+            yy = top - lash - 1 - i
+            if yy < 0:
+                break
+            t = _row_tone(head[yy, x0:x1])
+            if t is not None:
+                seed_rows.append(t)
+        if not seed_rows:
+            print(f"    lash={lash} · no clean seed row — flat fallback")
+            continue
+        seed = np.median(np.stack(seed_rows), axis=0)
+        print(f"    lash={lash} seed={seed.round(0)}")
+        print(f"    {'dy':>4} {'ink%':>6}  {'tone':<18} {'Δref':>6} "
+              f"{'Δseed':>6}  verdict")
+
+        ref = seed.copy()
+        seen = 0
+        for dy in range(lash + 1, min(top, ap_h) + 1):
             row = head[top - dy, x0:x1]
-            lum = _luma(row)
-            sat = row.max(axis=1) - row.min(axis=1)
-            ink = (lum <= LASH_LUM_MAX) & (sat <= LASH_SAT_MAX)
-            far = np.abs(row - skin).max(axis=1) > LID_SKIN_DELTA
-            dirt = ink | far
-            flag = "" if dirt.mean() <= LID_ROW_DIRT_MAX else "  <-- rejected"
-            print(f"    {dy:>4} {ink.mean() * 100:6.1f} {far.mean() * 100:6.1f} "
-                  f"{dirt.mean() * 100:6.1f}  {np.median(row, axis=0).round(0)}"
-                  f"{flag}")
+            ink = float(np.mean(_ink(row)))
+            tone = _row_tone(row)
+            d_ref = (float(np.abs(tone - ref).max())
+                     if tone is not None else float("inf"))
+            d_seed = (float(np.abs(tone - seed).max())
+                      if tone is not None else float("inf"))
+            if tone is None:
+                why = "STOP all-ink"
+            elif ink > LID_ROW_INK_MAX:
+                why = "STOP ink"
+            elif d_ref > LID_SKIN_DELTA:
+                why = "STOP edge"
+            elif d_seed > LID_SEED_DRIFT_MAX:
+                why = "STOP drift"
+            elif seen >= cap:
+                why = "STOP cap"
+            else:
+                why = "accepted"
+                seen += 1
+                ref = (1.0 - LID_REF_EMA) * ref + LID_REF_EMA * tone
+            t = "—" if tone is None else str(tone.round(0))
+            print(f"    {dy:>4} {ink * 100:6.1f}  {t:<18} {d_ref:6.1f} "
+                  f"{d_seed:6.1f}  {why}")
+            if why != "accepted":
+                break
+        print(f"    → band {seen} rows"
+              + ("  (FLAT FALLBACK)" if seen < LID_BAND_MIN else ""))
 
 
 if __name__ == "__main__":
