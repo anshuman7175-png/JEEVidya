@@ -122,6 +122,20 @@ LASH_IRIS_SEP = 56.0
 SKIN_IRIS_SEP = 56.0
 SEP_MAX_STEPS = 48       # bounded ⇒ deterministic
 
+# Upper-lid strip extraction. The strip is the band of plate between the
+# aperture's top and the BROW, and its height is measured per character
+# rather than assumed: the previous bake took a fixed 0.42 × eye-height,
+# but on chibi art the brow sits closer than that, so the band it cut was
+# mostly eyebrow ink — chintu's strips came out with mean RGB (120,76,60)
+# and (69,38,29), i.e. black brow, and a closed eye filled with ink.
+# Walking outward from the aperture and stopping AT the brow cannot make
+# that mistake on any face, because the stop is the brow itself.
+LID_INK_LUM_MAX = 105.0  # a row's pixel is ink if it is this dark…
+LID_INK_SAT_MAX = 60.0   # …and this close to achromatic
+LID_LASH_FRAC = 0.55     # ≥ this share of a row is ink ⇒ ink row
+LID_LASH_MAX = 0.30      # ×eye-height, cap on the lash zone kept at bottom
+LID_SKIN_MIN = 0.09      # ×eye-height, less brow-free skin than this fails
+
 
 class EyeMeasureError(RuntimeError):
     """Measurement that cannot be trusted fails loudly (Law 1).
@@ -616,7 +630,7 @@ def socket_backdrop(art: np.ndarray, eye: "ArtEye"
     return np.dstack([filled, alpha]), (x0, y0)
 
 
-def lid_sprite(art: np.ndarray, eye: "ArtEye", skin_frac: float = 0.42
+def lid_sprite(art: np.ndarray, eye: "ArtEye"
                ) -> Tuple[np.ndarray, Tuple[int, int]]:
     """The artist's own upper eyelid, as a strip that slides down to blink.
 
@@ -625,30 +639,32 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye", skin_frac: float = 0.42
     no crease, no lash, no shading, and the palette's skin tone is a
     single sample of a face that is painted with a gradient.
 
-    The lid the artist DREW is the strip of plate immediately above the
-    aperture. Sliding those pixels down covers the eye with real skin
-    that already carries the lid crease and lash edge. Only the lower
-    `skin_frac` of the strip is real art: taking a full eye-height of it
-    would drag the eyebrow down into the eye, so everything above is the
-    topmost sampled row repeated, which continues the local skin gradient
-    instead of introducing a second colour.
+    The lid the artist DREW is the band of plate between the aperture's
+    top and the eyebrow. Sliding those pixels down covers the eye with
+    real skin that already carries the lid crease and lash edge.
 
-    Only `skin_frac` of an eye-height is sampled: taking a full eye-height
-    would drag the eyebrow down into the eye. The strip is therefore
-    SHORTER than the opening it must cover, and the renderer stretches it
-    vertically to whatever height the current closure needs.
+    WHERE THE BAND ENDS IS MEASURED, NOT ASSUMED. The previous bake took a
+    fixed 0.42 × eye-height above the aperture, on the reasoning that a
+    full eye-height "would drag the eyebrow down into the eye". On chibi
+    art the brow is closer than 0.42 eye-heights, so 0.42 dragged it in
+    anyway: chintu's baked strips had mean RGB (120,76,60) and (69,38,29)
+    — eyebrow ink, not skin — and a closed eye filled with a dark smear.
+    Any fixed fraction has this failure mode on some face. So this walks
+    up from the aperture and STOPS AT THE BROW, which cannot be wrong
+    about the brow's position because the brow is what halts it:
 
-    Stretching is the right way to make up the difference. The previous
-    bake padded the strip to a full eye-height by repeating its topmost
-    row, and that flat repeated band — sampled nearest the brow, so the
-    wrong tone as well as flat — was what filled a closed chibi eye with a
-    pale panel. A vertical stretch of the same pixels keeps the lid's real
-    skin gradient, crease and lash all the way to the closing edge, which
-    is exactly how a lid's skin behaves as it draws over the eye.
+      1. the LASH zone — ink rows contiguous with the aperture's top edge,
+         which are the lid line the artist drew and belong in the strip,
+         at its bottom, as the lid's leading edge;
+      2. the SKIN rows above them, taken while rows stay non-ink;
+      3. the BROW — the next ink row after that skin — which ends the band.
+
+    A face whose brow leaves less than `LID_SKIN_MIN` of an eye-height of
+    skin gives no lid to sample, and this raises rather than shipping a
+    strip of eyebrow (Law 1).
 
     Returns (RGBA strip, (x0, y0) origin in plate space); y0 is the top of
-    the sampled rows, so the strip's BOTTOM edge is the aperture's top —
-    the artist's own lash line, and the lid's leading edge.
+    the sampled rows and the strip's BOTTOM row is the aperture's top.
     """
     h, w = art.shape[:2]
     ap = np.asarray(eye.aperture, dtype=np.float64)
@@ -660,15 +676,38 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye", skin_frac: float = 0.42
     bot = int(math.ceil(ap[:, 1].max()))
     if x1 - x0 < 3:
         raise EyeMeasureError("lid sprite box collapsed")
+    eye_h = max(3, bot - top)
 
-    real = max(1, int(round(max(3, bot - top) * skin_frac)))
-    src_y0 = max(0, top - real)
-    src = art[src_y0:top, x0:x1, :3]
-    if src.shape[0] == 0:                      # aperture touches the top edge
-        src = art[top:top + 1, x0:x1, :3]
-        src_y0 = top
-    strip = np.zeros((src.shape[0], x1 - x0, 4), dtype=np.uint8)
-    strip[..., :3] = src
+    # Per-row ink share over the eye's own width, in the same colour-space
+    # separation the lash colour uses: ink is dark AND near-achromatic,
+    # while shaded eyelid skin stays warm and saturated.
+    col = art[:top, x0:x1, :3].astype(np.float32)
+    if col.shape[0] == 0:
+        raise EyeMeasureError(f"{eye.name}: aperture touches the plate top")
+    lum = col @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    sat = col.max(axis=2) - col.min(axis=2)
+    ink_row = (((lum <= LID_INK_LUM_MAX) & (sat <= LID_INK_SAT_MAX))
+               .mean(axis=1) >= LID_LASH_FRAC)
+
+    r = top - 1                                  # walk upward from the eye
+    lash_cap = int(round(eye_h * LID_LASH_MAX))
+    lash_n = 0
+    while r >= 0 and ink_row[r] and lash_n < lash_cap:
+        r -= 1
+        lash_n += 1
+    skin_n = 0
+    while r >= 0 and not ink_row[r]:             # stops on the brow
+        r -= 1
+        skin_n += 1
+
+    if skin_n < max(2, int(round(eye_h * LID_SKIN_MIN))):
+        raise EyeMeasureError(
+            f"{eye.name}: only {skin_n}px of brow-free eyelid skin above a "
+            f"{eye_h}px eye — no lid to sample")
+
+    src_y0 = top - (lash_n + skin_n)
+    strip = np.zeros((lash_n + skin_n, x1 - x0, 4), dtype=np.uint8)
+    strip[..., :3] = art[src_y0:top, x0:x1, :3]
     strip[..., 3] = 255
     return strip, (x0, src_y0)
 
