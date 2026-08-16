@@ -148,6 +148,36 @@ SEP_MAX_STEPS = 48       # bounded ⇒ deterministic
 APERTURE_GROW = 0.009    # ×face_h, dilation of the clip past the lash
 APERTURE_SMOOTH = 5      # circular moving-average window on the contour
 
+# ── The eye-like test has a hole in tone space, so the rim is repaired ──
+#
+# "Eye-like" is `not skin AND (bright-desaturated OR dark)`. Between those
+# two clauses lies a MID-LUMA BAND — HSV V in (DARK_V_MAX, SCLERA_V_MIN),
+# i.e. 110…150 — that neither claims, and on this art the iris passes
+# straight through it. Measured in the excluded pixels: chintu's left iris
+# shades to (125,55,29) at its foot, his right eye's lens-shadowed white to
+# (134,126,128), gudiya's lower iris to (144,62,12). Every one of them is
+# ≥99% "not skin" and 0% ink — unambiguously eye, and unambiguously dropped.
+#
+# The consequence was a BITE out of the aperture's lower rim, 5–9 px deep,
+# and it broke the chain: the iris ellipse fitted to the drawn eyeball then
+# spilled 7% of its area through that bite, the containment invariant
+# failed, and the whole v3 bake was refused for both characters (rigs fell
+# back to v2, which the render path rightly rejects).
+#
+# Widening the tone test is not the fix — it is what leaks. `not_skin`
+# compares against the ROI border median, and that ring holds hair on
+# chintu (median 112,54,46), so admitting the mid band globally made the
+# aperture swallow the entire ROI (measured: frac 0.83 → 1.00).
+#
+# The repair is GEOMETRIC and local instead. A drawn eye opening is a
+# smooth, near-convex almond; a shallow bite into its rim is a threshold
+# artifact, while a DEEP concavity is real shape (or a leak) and must be
+# left alone. So the aperture's convex-hull deficiencies are filled only
+# where their own maximum depth is under this bound — measured depths are
+# 1–9 px against a 12–15 px bound, and every filled component is non-ink,
+# ≥99%-not-skin eye pixels.
+APERTURE_CONCAVE_MAX = 0.05   # ×face_h, deepest rim bite treated as artifact
+
 # ── Gaze travel is bounded by the artwork, not by a fixed fraction ─�������������
 #
 # Gaze used to translate the eyeball by ±0.55·iris_r (±18 px on chintu),
