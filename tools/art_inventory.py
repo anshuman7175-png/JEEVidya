@@ -110,6 +110,58 @@ def _verify_source(manifest: dict, report: InventoryReport) -> None:
         report.source_ok.append(rel)
 
 
+def _verify_mapping(manifest: dict, report: InventoryReport) -> None:
+    """`viseme_mapping` is what the stager OBEYS; each asset entry's
+    `viseme` field is what a human READS. They record the same fact
+    twice, so they can drift — and they did: a letter was re-pointed in
+    the mapping while its asset entry still named the old class, which
+    made the manifest lie about which art plays which sound.
+
+    Treated as a source-art failure (not a derived gap) because the
+    manifest is source truth, and a fresh clone must fail on it too.
+    """
+    mapping: Dict[str, Dict[str, str]] = manifest.get("viseme_mapping", {})
+    seen: Dict[Tuple[str, str], bool] = {}
+    for asset in manifest.get("assets", []):
+        char, letter = asset.get("character"), asset.get("letter")
+        rel = asset.get("file", f"{char}/{letter}")
+        seen[(char, letter)] = True
+        mapped = mapping.get(char, {}).get(letter)
+        if mapped is None:
+            report.source_bad.append(
+                (rel, f"letter '{letter}' has no viseme_mapping entry for "
+                      f"{char} — the stager would skip this art"))
+        elif asset.get("viseme") != mapped:
+            report.source_bad.append(
+                (rel, f"manifest disagrees with itself: viseme_mapping says "
+                      f"{mapped!r} but the asset entry says "
+                      f"{asset.get('viseme')!r}"))
+    # A mapped letter with no asset entry is just as broken: the stager
+    # would look for art the manifest never verifies.
+    for char, letters in mapping.items():
+        for letter in letters:
+            if (char, letter) not in seen:
+                report.source_bad.append(
+                    (f"{char}/{letter}",
+                     f"viseme_mapping references letter '{letter}' but there "
+                     f"is no asset entry for it"))
+
+    # Duplicate classes silently shadow each other in the stager (last
+    # letter wins), so two letters claiming one class is a defect.
+    for char, letters in mapping.items():
+        by_class: Dict[str, List[str]] = {}
+        for letter, klass in letters.items():
+            if klass in _NON_DERIVED_CLASSES:
+                continue
+            by_class.setdefault(klass, []).append(letter)
+        for klass, ls in sorted(by_class.items()):
+            if len(ls) > 1:
+                report.source_bad.append(
+                    (f"{char}: {klass}",
+                     f"claimed by {len(ls)} letters ({', '.join(sorted(ls))})"
+                     " — the stager keeps only one"))
+
+
 def _check_derived(manifest: dict, report: InventoryReport) -> None:
     """Per-character body/pose/viseme completeness — exact filenames."""
     from config import settings
@@ -145,6 +197,7 @@ def run_inventory() -> InventoryReport:
     manifest = load_manifest()
     report = InventoryReport()
     _verify_source(manifest, report)
+    _verify_mapping(manifest, report)
     _check_derived(manifest, report)
     return report
 
