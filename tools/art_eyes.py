@@ -99,6 +99,13 @@ SAMPLE_MIN_PX = 24       # fewer pixels than this is not a measurement
 # eyes of the two characters: 1000–1400 px survive per eye and the
 # medians agree to within a few units — (100,40,21), (94,42,25),
 # (104,44,9), (113,52,13) — i.e. a stable warm brown, not ink.
+# Containment invariant (§2b): the fitted eyeball must sit inside the eye
+# opening. Expressed as a fraction of the fitted ellipse's own area so it
+# holds at any export resolution. This is a rasterization tolerance, not a
+# licence to overflow — a correct fit measures 0.0–0.3% here, while the
+# lash-contaminated fit this guards against measured 18–34%.
+IRIS_SPILL_MAX = 0.01
+
 IRIS_SAT_MIN = 25.0      # max(RGB)−min(RGB) at or above this is chromatic
 IRIS_LUM_MIN = 24.0      # below this is lash/pupil ink, not iris colour
 IRIS_LUM_MAX = 190.0     # above this is sclera or the catchlight
@@ -141,7 +148,7 @@ SEP_MAX_STEPS = 48       # bounded ⇒ deterministic
 APERTURE_GROW = 0.009    # ×face_h, dilation of the clip past the lash
 APERTURE_SMOOTH = 5      # circular moving-average window on the contour
 
-# ── Gaze travel is bounded by the artwork, not by a fixed fraction ─�����������
+# ── Gaze travel is bounded by the artwork, not by a fixed fraction ─�������������
 #
 # Gaze used to translate the eyeball by ±0.55·iris_r (±18 px on chintu),
 # but this art draws an iris that nearly fills the opening — the real
@@ -531,25 +538,54 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
             f"box — the mask leaked out of the eye into the face "
             f"(expected ≲{MAX_APERTURE * 100:.0f}%).")
 
-    # ── 2 · iris: aperture minus eye white, ellipse-fitted ──
+    # ── 2 · iris: the CHROMATIC eyeball, ellipse-fitted ──
+    #
+    # `ap` deliberately INCLUDES the painted lash (see "What is measured"
+    # above), so "aperture minus eye white" is iris + pupil + LASH. The
+    # lash is a dark arc that touches the eyeball's top rim, so it survives
+    # `_largest_near` as ONE component and the ellipse is then fitted to
+    # the UNION of eyeball and lash. Measured on this art that returned an
+    # iris TALLER than the opening it has to sit inside — chintu L 57×79 px
+    # in a 92×73 px aperture — which is geometrically impossible, and it
+    # starved every consumer downstream: `_gaze_margin` found the iris out
+    # of bounds at its very first probe and returned 0.0 travel, and the
+    # lid band was measured against an opening its own "iris" overflowed.
+    #
+    # Ink and iris differ in KIND, not in brightness — the separation this
+    # module already trusts for the iris body colour (IRIS_SAT_MIN et al)
+    # and for the lash colour (`_ink`). So fit to the CHROMATIC pixels of
+    # the opening: that drops the achromatic lash AND the achromatic pupil,
+    # and the CONVEX HULL of what remains is the eyeball's outer boundary —
+    # the pupil is interior to it, while a lash overlapping the eyeball's
+    # top is simply absent instead of dragging the fit upward. Hulling
+    # rather than contour-fitting also stops a ring broken by the pupil or
+    # the catchlight from fitting a lens shape.
     inner = cv2.erode(ap, np.ones((3, 3), np.uint8))
-    iris_m = ((inner > 0) & (~sclera_like)).astype(np.uint8)
+    roi_sat = roi.max(axis=2) - roi.min(axis=2)
+    roi_lum = _luma(roi)
+    chroma = ((roi_sat >= IRIS_SAT_MIN)
+              & (roi_lum >= IRIS_LUM_MIN)
+              & (roi_lum <= IRIS_LUM_MAX))
+    iris_m = ((inner > 0) & (~sclera_like) & chroma & (~_ink(roi))
+              ).astype(np.uint8)
     iris_m = cv2.morphologyEx(iris_m, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
     iris_m = cv2.morphologyEx(iris_m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    iris_m = _largest_near(iris_m, (seed[0] - x0, seed[1] - y0))
     if iris_m.sum() < MIN_COMPONENT:
         raise EyeMeasureError(
-            f"{label}: no iris inside the measured aperture — the whole "
-            f"opening reads as eye white. Gaze would have nothing to move.")
-    iris_m = _fill_holes(iris_m)
+            f"{label}: no chromatic iris inside the measured aperture — the "
+            f"opening reads as eye white and ink only. Gaze would have "
+            f"nothing to move.")
 
-    cont, _ = cv2.findContours(iris_m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    cpts = max(cont, key=cv2.contourArea)
-    if len(cpts) >= 5:
-        (ecx, ecy), (ew, eh), ang = cv2.fitEllipse(cpts)
+    # Every surviving pixel is already inside the opening, so the hull over
+    # ALL of them is the eyeball. No nearest-component pick is needed, and
+    # a ring split in two by a large pupil cannot bias the fit.
+    ys, xs = np.nonzero(iris_m)
+    hull = cv2.convexHull(
+        np.stack([xs, ys], axis=1).astype(np.int32).reshape(-1, 1, 2))
+    if len(hull) >= 5:
+        (ecx, ecy), (ew, eh), ang = cv2.fitEllipse(hull)
         a, b_ = ew / 2.0, eh / 2.0
-    else:                       # degenerate contour: fall back to the disc
-        ys, xs = np.nonzero(iris_m)
+    else:                       # degenerate hull: fall back to the disc
         ecx, ecy = float(xs.mean()), float(ys.mean())
         a = b_ = float(np.sqrt(iris_m.sum() / np.pi))
         ang = 0.0
@@ -560,6 +596,30 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
             f"{r_eq / face_h:.3f}×face_height, outside the plausible "
             f"[{IRIS_MIN_RATIO}, {IRIS_MAX_RATIO}] band. The fit latched "
             f"onto a lash, a glasses frame or a shadow, not the eyeball.")
+
+    # ── 2b · hard invariant: the eyeball fits inside its own opening ──
+    #
+    # This is the check whose absence let an iris taller than its aperture
+    # ship silently, and with it a rig whose gaze could not move and whose
+    # blink painted a blob. A ratio test would not catch it (a wide-but-too
+    # -tall iris passes any single ratio); containment is the real property,
+    # so test containment. The tolerance covers only ellipse RASTERIZATION
+    # against an irregular hand-drawn rim, not real overflow: the hull came
+    # from pixels strictly inside `erode(ap)`, so a correct fit spills a
+    # sub-percent sliver at worst.
+    ell = _ellipse_mask(ap.shape, (ecx, ecy), (a, b_), float(ang))
+    ell_area = max(1, int((ell > 0).sum()))
+    spill = int(((ell > 0) & (ap == 0)).sum())
+    if spill > IRIS_SPILL_MAX * ell_area:
+        ah = int((ap > 0).any(axis=1).sum())
+        aw = int((ap > 0).any(axis=0).sum())
+        raise EyeMeasureError(
+            f"{label}: fitted iris {2 * a:.0f}×{2 * b_:.0f}px spills "
+            f"{spill}px ({spill / ell_area * 100:.1f}%) outside the "
+            f"{aw}×{ah}px aperture it must sit inside. The eyeball cannot "
+            f"be larger than the eye opening — the fit has latched onto "
+            f"the lash, the brow or a glasses rim, and a rig baked from it "
+            f"would have zero gaze travel and a stretched lid.")
 
     # ── 3 · colours, each from inside its OWN measured region ──
     sclera_px = roi[(ap > 0) & sclera_like]
