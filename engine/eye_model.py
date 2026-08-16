@@ -99,6 +99,11 @@ class EyeGeometry:
     iris_axes: Tuple[float, float] = (0.0, 0.0)
     iris_angle: float = 0.0
     colors: Dict[str, Tuple[int, int, int]] = field(default_factory=dict)
+    # §3.5b — the artist's own eyeball, cut from the plate as a sprite.
+    # When present the renderer MOVES these pixels instead of synthesizing
+    # an eye from flat colour, so a resting frame equals the artwork.
+    eyeball: str = ""
+    eyeball_origin: Tuple[float, float] = (0.0, 0.0)
 
     @property
     def measured(self) -> bool:

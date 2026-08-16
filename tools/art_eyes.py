@@ -67,6 +67,7 @@ Every step is deterministic: same art in, same numbers out.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -90,6 +91,28 @@ IRIS_MIN_RATIO = 0.06    # iris r_eq ≥ this ×face_h, else implausible
 IRIS_MAX_RATIO = 0.30    # iris r_eq ≤ this ×face_h
 PUPIL_PCTL = 12.0        # darkest luma percentile inside the iris = pupil
 SAMPLE_MIN_PX = 24       # fewer pixels than this is not a measurement
+
+# Iris body selection, in COLOUR space rather than by brightness (§3).
+# The pupil and the sclera are both achromatic, so a saturation floor
+# excludes them by construction; the luma window then drops the black
+# lash below and the specular catchlight above. Verified on all four
+# eyes of the two characters: 1000–1400 px survive per eye and the
+# medians agree to within a few units — (100,40,21), (94,42,25),
+# (104,44,9), (113,52,13) — i.e. a stable warm brown, not ink.
+IRIS_SAT_MIN = 25.0      # max(RGB)−min(RGB) at or above this is chromatic
+IRIS_LUM_MIN = 24.0      # below this is lash/pupil ink, not iris colour
+IRIS_LUM_MAX = 190.0     # above this is sclera or the catchlight
+
+# Lash / lid-line ink, by the same colour-space separation: ink is dark
+# AND near-achromatic, while shaded eyelid skin stays warm and saturated.
+LASH_LUM_MAX = 90.0      # ink is no brighter than this
+LASH_SAT_MAX = 45.0      # …and no more saturated than this
+# A closed lid is painted with `skin` + a `lash` line, and the blink gate
+# passes only when no iris colour survives. Both must therefore be
+# separable from the iris in the SAME metric the gate uses (Chebyshev).
+LASH_IRIS_SEP = 56.0
+SKIN_IRIS_SEP = 56.0
+SEP_MAX_STEPS = 48       # bounded ⇒ deterministic
 
 
 class EyeMeasureError(RuntimeError):
@@ -235,6 +258,38 @@ def _trimmed_median(px: np.ndarray, lo: float, hi: float
         return None
     med = np.median(keep, axis=0)
     return (int(round(med[0])), int(round(med[1])), int(round(med[2])))
+
+
+def _cheb(a: Sequence[float], b: Sequence[float]) -> float:
+    """Chebyshev RGB distance — the metric the QC colour masks use, so
+    "separated here" means "separable there"."""
+    return float(max(abs(int(x) - int(y)) for x, y in zip(a, b, strict=True)))
+
+
+def _darken_rgb(c: Sequence[float], k: float) -> Tuple[int, int, int]:
+    return tuple(int(round(max(0.0, min(255.0, float(v) * k))))
+                 for v in c)  # type: ignore[return-value]
+
+
+def _push_from(color: Sequence[float], ref: Sequence[float],
+               min_sep: float) -> Tuple[int, int, int]:
+    """Darken `color` until it is at least `min_sep` from `ref`.
+
+    Only does anything when the artwork genuinely gives the lid line and
+    the iris the same value. Some separation is then required, not
+    optional: the renderer paints a closed lid with this colour and the
+    blink gate verifies closure by looking for surviving iris pixels, so
+    a lid that reads as an iris makes closure unverifiable — and a blink
+    that never registers is exactly the broken-looking eye being fixed.
+    """
+    r, g, b = (float(v) for v in color)
+    for _ in range(SEP_MAX_STEPS):
+        if _cheb((r, g, b), ref) >= min_sep:
+            break
+        r, g, b = r * 0.86, g * 0.86, b * 0.86
+        if max(r, g, b) < 1.0:
+            break
+    return _darken_rgb((r, g, b), 1.0)
 
 
 def _contour_poly(mask: np.ndarray, offset: Tuple[int, int],
@@ -398,13 +453,38 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
     else:
         colors["iris"], colors["pupil"] = (92, 62, 44), (22, 16, 14)
 
-    # Lash: the darkest ring just OUTSIDE the aperture (the painted lash
-    # line sits on the aperture's rim). Sampled outside so it cannot be
-    # confused with the pupil.
-    rim = (cv2.dilate(ap, np.ones((5, 5), np.uint8)) - ap) > 0
-    rim_px = roi[rim]
-    ls = _trimmed_median(rim_px, 0.0, 0.80)
-    colors["lash"] = ls if ls is not None else (34, 24, 22)
+    # Lash: the painted INK line on the aperture's rim.
+    #
+    # "Darkest 20% of a ring around the aperture" is not enough. That ring
+    # is mostly eyelid SKIN, and where the segmented aperture already
+    # excludes the lash (or a glasses frame sits nearby, as on chintu) its
+    # dark tail is merely shaded skin — measured (123,59,33) and
+    # (127,60,16), a warm mid-brown only Δ=34 from the iris. The renderer
+    # paints a closed lid with `skin` + a `lash` line and the blink gate
+    # then asks "is any iris colour still visible", so a lash that reads
+    # as an iris makes a fully closed eye indistinguishable from an open
+    # one — the exact failure being chased.
+    #
+    # Ink is separable the same way the iris was: it is dark AND
+    # (near-)achromatic, whereas shaded skin stays warm and saturated.
+    # Search a wider band on both sides of the rim so the line is found
+    # whether it falls just inside or just outside the aperture.
+    band = (cv2.dilate(ap, np.ones((9, 9), np.uint8))
+            - cv2.erode(ap, np.ones((3, 3), np.uint8))) > 0
+    band_px = roi[band]
+    ls = None
+    if len(band_px) >= SAMPLE_MIN_PX:
+        b_lum = band_px @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+        b_sat = band_px.max(axis=1) - band_px.min(axis=1)
+        ink = band_px[(b_lum <= LASH_LUM_MAX) & (b_sat <= LASH_SAT_MAX)]
+        if len(ink) >= SAMPLE_MIN_PX:
+            ls = _trimmed_median(ink, 0.0, 0.10)
+    if ls is None:
+        # No ink line in this art (soft-shaded eye). Derive the lid line
+        # from the pupil, which IS this artwork's darkest ink, so the
+        # separation the blink gate needs holds by construction.
+        ls = _darken_rgb(colors["pupil"], 1.0)
+    colors["lash"] = _push_from(ls, colors["iris"], LASH_IRIS_SEP)
 
     return ArtEye(
         aperture=_contour_poly(ap, (x0, y0)),
@@ -414,6 +494,53 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
         iris_r=r_eq,
         colors=colors,
     )
+
+
+def eyeball_sprite(art: np.ndarray, eye: "ArtEye",
+                   feather: float = 1.2
+                   ) -> Tuple[np.ndarray, Tuple[int, int]]:
+    """Cut the EYEBALL THE ARTIST DREW out of the plate as an RGBA sprite.
+
+    This is what makes the eye look hand-drawn instead of vector. The
+    renderer used to synthesize the eye every frame — flat sclera fill,
+    flat iris oval, limbal ring, catchlight — which discards the artist's
+    soft shading, the lash overlap and the highlight, and reads as
+    harder, darker and duller than the surrounding art. Worse, filling
+    the whole aperture with `sclera` paints eye-white the artist never
+    drew: on this art the eye is almost entirely iris, so the fill showed
+    as bright crescents either side of a too-small iris.
+
+    Cutting the drawn eyeball out and MOVING it keeps every one of those
+    painted details, so a resting frame is pixel-identical to the art and
+    gaze becomes a translation of real artwork.
+
+    Returns (RGBA sprite, (x0, y0) origin in plate space). The alpha is
+    the iris ellipse, feathered by `feather` px so the sprite's rim
+    blends into the sclera behind it rather than showing a cut edge.
+    """
+    cv2 = _require_cv2()
+    h, w = art.shape[:2]
+    ax, ay = eye.iris_axes
+    ax = max(ax, 2.0) + feather * 2.0
+    ay = max(ay, 2.0) + feather * 2.0
+    cx, cy = eye.iris_c
+    pad = int(math.ceil(max(ax, ay))) + 2
+    x0 = max(0, int(math.floor(cx)) - pad)
+    y0 = max(0, int(math.floor(cy)) - pad)
+    x1 = min(w, int(math.ceil(cx)) + pad)
+    y1 = min(h, int(math.ceil(cy)) + pad)
+    if x1 - x0 < 3 or y1 - y0 < 3:
+        raise EyeMeasureError("eyeball sprite box collapsed")
+
+    crop = art[y0:y1, x0:x1, :3].astype(np.uint8)
+    mask = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+    cv2.ellipse(mask, (int(round(cx - x0)), int(round(cy - y0))),
+                (int(round(ax)), int(round(ay))),
+                float(eye.iris_angle), 0, 360, 255, -1)
+    if feather > 0:
+        k = max(3, int(feather * 2) | 1)
+        mask = cv2.GaussianBlur(mask, (k, k), feather)
+    return np.dstack([crop, mask]), (x0, y0)
 
 
 def measure_pair(art: np.ndarray, seed_l: Tuple[float, float],

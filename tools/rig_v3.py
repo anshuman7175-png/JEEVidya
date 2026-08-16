@@ -44,7 +44,7 @@ from config import settings
 from engine.registration import (RegistrationError, SimilarityTransform,
                                  register_pose)
 from engine.rig import HeadGeometry, PoseEntry, Rig, N_LANDMARKS, rig_dir
-from tools.art_eyes import EyeMeasureError, measure_pair
+from tools.art_eyes import EyeMeasureError, eyeball_sprite, measure_pair
 
 # ═══════════════════════════════════════════
 # MediaPipe canonical landmark index sets
@@ -826,6 +826,18 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
             f"character '{rig.character}': could not measure the drawn "
             f"eyes — {exc}") from exc
     art_eye_l, art_eye_r = art_l.to_dict(), art_r.to_dict()
+
+    # Cut the DRAWN eyeball out as a sprite the renderer can translate.
+    # Synthesizing the eye from flat colour every frame threw away the
+    # artist's shading, lash overlap and highlight, and painted eye-white
+    # the art never had. Moving real pixels keeps all of it.
+    for _side, _eye, _key in ((art_l, art_l, "art_eye_l"),
+                              (art_r, art_r, "art_eye_r")):
+        _spr, _org = eyeball_sprite(crop_arr, _eye)
+        _fn = f"eyeball_{'l' if _key.endswith('_l') else 'r'}.png"
+        Image.fromarray(_spr, "RGBA").save(os.path.join(d, _fn))
+        (art_eye_l if _key.endswith("_l") else art_eye_r).update(
+            {"eyeball": _fn, "eyeball_origin": [int(_org[0]), int(_org[1])]})
     print(f"  [RigV3] {rig.character}: art eyes measured — "
           f"iris r={art_l.iris_r:.1f}/{art_r.iris_r:.1f}px "
           f"(MediaPipe said {iris_mp(plate_lms, IRIS_L, fh)[2]:.1f}/"
@@ -855,10 +867,43 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     # Measured eye colours win over the landmark-sampled ones: they were
     # taken from inside the segmented iris/sclera, so they cannot pick up
     # hair, a glasses frame or the lash line.
-    for _k in ("sclera", "iris", "pupil", "lash"):
-        _v = art_l.colors.get(_k) or art_r.colors.get(_k)
-        if _v:
-            palette[_k] = tuple(int(c) for c in _v)
+    #
+    # The two eyes are measured independently, so prefer the better
+    # sample per role rather than always trusting the left eye: chintu's
+    # right eye sits behind a glasses lens, which pulls its "sclera" to a
+    # grey (156,147,146) that is not eye-white. Eye white is the BRIGHTER
+    # of the two measurements; the inks are the DARKER.
+    def _lum(c) -> float:
+        return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+
+    for _k, _prefer in (("sclera", max), ("iris", None),
+                        ("pupil", min), ("lash", min)):
+        _cands = [c for c in (art_l.colors.get(_k), art_r.colors.get(_k))
+                  if c]
+        if not _cands:
+            continue
+        if _prefer is None or len(_cands) == 1:
+            _v = _cands[0]
+        else:
+            _v = _prefer(_cands, key=_lum)
+        palette[_k] = tuple(int(c) for c in _v)
+
+    # Re-enforce the separations the renderer and the gates depend on.
+    # extract_palette() established them, but the measured values above
+    # replaced the very entries it had corrected, silently discarding the
+    # guarantee. A closed lid is painted with `skin` plus a `lash` line
+    # and blink closure is verified by the absence of iris-coloured
+    # pixels, so BOTH must stay clear of the iris or a fully closed eye
+    # is indistinguishable from an open one.
+    palette["lash"] = _push_dark(palette["lash"], palette["iris"],
+                                 IRIS_LASH_SEP)
+    if _cheb(palette["skin"], palette["iris"]) < IRIS_LASH_SEP:
+        # Vanishingly rare (an iris the same value as the face), but if it
+        # happens the iris is what must move: skin is the face's identity.
+        palette["iris"] = _push_dark(palette["iris"], palette["skin"],
+                                     IRIS_LASH_SEP)
+        palette["lash"] = _push_dark(palette["lash"], palette["iris"],
+                                     IRIS_LASH_SEP)
 
     rig.head = HeadGeometry(
         plate="head_plate.png",
