@@ -34,7 +34,7 @@ from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 # ═══════════════════════════════════════════
 # Coupling gains (Part V, D10)
@@ -434,12 +434,27 @@ class EyeRasterizer:
 
     def __init__(self, geo: EyeGeometry, palette: Dict[str, Tuple[int, int, int]],
                  cache_size: int = 512,
-                 sprite: Optional[Image.Image] = None):
+                 sprite: Optional[Image.Image] = None,
+                 socket: Optional[Image.Image] = None,
+                 lid: Optional[Image.Image] = None):
         self.geo = geo
         # §3.5b — the artist's eyeball. When present, gaze TRANSLATES these
         # pixels; the synthetic sclera/iris/catchlight path below is the
         # fallback for rigs baked before the measurement existed.
         self.sprite = sprite
+        # §3.5b — the two layers that let the eye animate with NO flat
+        # palette fill anywhere inside it:
+        #   socket : the drawn eye with its iris inpainted out, so a gaze
+        #            shift uncovers the artist's own eye white and shading
+        #            instead of one sampled `sclera` colour (which measured
+        #            a grey shadow on one of chintu's eyes and a white on
+        #            the other, making his two eyes different colours).
+        #   lid    : the strip of face the artist painted just above the
+        #            aperture. Sliding it down closes the eye with real
+        #            skin carrying the real crease and lash, replacing the
+        #            flat `skin` ellipse that read as a punched hole.
+        self.socket = socket
+        self.lid = lid
         # Measured, in-region eye colours beat the landmark-sampled
         # palette: they were taken from inside the segmented iris and
         # sclera, so they cannot be the lash line or a glasses frame.
@@ -538,28 +553,42 @@ class EyeRasterizer:
             if outline is not None:
                 img_draw.line(pts + pts[:1], fill=outline, width=max(1, width))
 
+        def art_layer(src: Image.Image, origin: Tuple[float, float],
+                      shift: Tuple[float, float] = (0.0, 0.0)) -> Image.Image:
+            """`src` upscaled to the supersampled grid and placed at its
+            baked plate-space origin plus `shift`, on a transparent layer
+            the size of the patch. Placing every art layer through one
+            function is what keeps the eyeball, the socket behind it and
+            the lid over it in register at any render scale."""
+            layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            up = src.resize((max(1, int(round(src.width * S))),
+                            max(1, int(round(src.height * S)))),
+                           Image.LANCZOS)
+            # paste (not alpha_composite) because it clips out-of-bounds
+            # boxes instead of raising; `layer` is empty, so the two agree.
+            layer.paste(up, (int(round((origin[0] + shift[0] - self._x0) * S)),
+                             int(round((origin[1] + shift[1] - self._y0) * S))),
+                        up)
+            return layer
+
+        if self.socket is not None:
+            # ART BACKDROP — the drawn eye with its iris inpainted out.
+            # Its own alpha is the aperture, so it cannot reach the cheek.
+            img.alpha_composite(art_layer(self.socket, geo.socket_origin))
+        elif self.sprite is not None:
+            # No baked socket: repaint only the FOOTPRINT the eyeball
+            # vacates, never the whole aperture — this art is almost all
+            # iris, so flooding the aperture with `sclera` paints eye-white
+            # the artist never drew. 1.12× covers the largest excursion.
+            _oval(draw, 1.12, 1.12, fill=sclera_rgb + (255,), center=rest)
+
         if self.sprite is not None:
             # ART PATH — move the artist's pixels. At gaze 0 the sprite
             # lands exactly where it was cut from, so a resting frame is
             # the artwork: its shading, lash overlap and highlight all
             # survive, which synthesis threw away.
-            #
-            # Repaint only the FOOTPRINT the eyeball vacates, never the
-            # whole aperture: this art is almost all iris, so flooding the
-            # aperture with `sclera` painted eye-white the artist never
-            # drew. 1.12× covers the largest gaze excursion.
-            _oval(draw, 1.12, 1.12, fill=sclera_rgb + (255,), center=rest)
-            sw = max(1, int(round(self.sprite.width * S)))
-            sh = max(1, int(round(self.sprite.height * S)))
-            spr = self.sprite.resize((sw, sh), Image.LANCZOS)
-            # paste (not alpha_composite) because it clips out-of-bounds
-            # boxes instead of raising; `ball` is empty, so the two agree.
-            ball.paste(spr,
-                       (int(round((geo.eyeball_origin[0] + gaze[0]
-                                   - self._x0) * S)),
-                        int(round((geo.eyeball_origin[1] + gaze[1]
-                                   - self._y0) * S))),
-                       spr)
+            ball.alpha_composite(art_layer(self.sprite, geo.eyeball_origin,
+                                           (gaze[0], gaze[1])))
             # Pupil dilation is deliberately NOT applied here: the pupil
             # is part of the drawing, and redrawing it flat would undo the
             # very shading this path exists to keep.
@@ -605,12 +634,40 @@ class EyeRasterizer:
         # the aperture mask decides where it actually lands.
         cap = lid.copy()
         cap[:, 1] -= (self._y1 - self._y0) + max(geo.iris_r, 2.0)
-        draw.polygon(T(np.vstack([lid, cap[::-1]])), fill=skin + (255,))
-        # Crease + lash line on the leading edge
-        crease = self._color("lip_shadow", (150, 100, 84))
-        draw.line(T(lid), fill=crease + (160,), width=max(1, int(S * 0.9)))
-        lash = self._color("lash", (38, 26, 24))
-        draw.line(T(lid), fill=lash + (255,), width=max(1, int(S * 1.6)))
+
+        if self.lid is not None:
+            # ART LID — the artist's own eyelid skin, slid down over the
+            # eye. Two things are combined, and both are needed:
+            #
+            #   pixels : the baked strip, shifted down by `closure` × the
+            #            aperture's height. It was cut from just above the
+            #            aperture, so at closure 1 it lands exactly on the
+            #            opening, and the skin arriving at the leading edge
+            #            is the crease and lash the artist actually drew.
+            #   shape  : the region above the CURVED `_lid_path` margin.
+            #            The strip's own bottom edge is a straight row, and
+            #            a straight-edged lid at half closure is the single
+            #            most obvious tell that a blink is fake. Masking by
+            #            the margin gives the closing edge the drawn eye's
+            #            own curvature, and at closure 1 that margin IS the
+            #            aperture's lower rim — so the eye is fully covered
+            #            by geometric identity, not by a tuned offset.
+            ap_np = np.asarray(geo.clip, dtype=np.float64)
+            travel = float(ap_np[:, 1].max() - ap_np[:, 1].min()) * closure
+            lid_layer = art_layer(self.lid, geo.lid_origin, (0.0, travel))
+            shape = Image.new("L", img.size, 0)
+            ImageDraw.Draw(shape).polygon(T(np.vstack([lid, cap[::-1]])),
+                                          fill=255)
+            lid_layer.putalpha(ImageChops.multiply(lid_layer.split()[3], shape))
+            img.alpha_composite(lid_layer)
+        else:
+            # SYNTHETIC FALLBACK — flat skin, for rigs with no baked lid.
+            draw.polygon(T(np.vstack([lid, cap[::-1]])), fill=skin + (255,))
+            # Crease + lash line on the leading edge
+            crease = self._color("lip_shadow", (150, 100, 84))
+            draw.line(T(lid), fill=crease + (160,), width=max(1, int(S * 0.9)))
+            lash = self._color("lash", (38, 26, 24))
+            draw.line(T(lid), fill=lash + (255,), width=max(1, int(S * 1.6)))
 
         # 4 · Clip to the aperture, then downsample.
         # Applied at supersampled resolution so the boundary is
@@ -639,9 +696,15 @@ class EyePair:
                  palette: Dict[str, Tuple[int, int, int]],
                  seed: str, fps: int,
                  sprite_l: Optional[Image.Image] = None,
-                 sprite_r: Optional[Image.Image] = None):
-        self.left = EyeRasterizer(geo_l, palette, sprite=sprite_l)
-        self.right = EyeRasterizer(geo_r, palette, sprite=sprite_r)
+                 sprite_r: Optional[Image.Image] = None,
+                 socket_l: Optional[Image.Image] = None,
+                 socket_r: Optional[Image.Image] = None,
+                 lid_l: Optional[Image.Image] = None,
+                 lid_r: Optional[Image.Image] = None):
+        self.left = EyeRasterizer(geo_l, palette, sprite=sprite_l,
+                                  socket=socket_l, lid=lid_l)
+        self.right = EyeRasterizer(geo_r, palette, sprite=sprite_r,
+                                   socket=socket_r, lid=lid_r)
         self.blinks = BlinkScheduler(seed, fps)
         self.gaze = GazeEngine(seed)
 

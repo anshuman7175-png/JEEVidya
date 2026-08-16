@@ -103,12 +103,21 @@ class HeadAssembly:
         self.mouth = MouthRasterizer(self._pts(geo.lip_outer), pal, shading)
         geo_l = EyeGeometry.from_rig_dict(self._scaled_eye(geo.eye_dict(True)))
         geo_r = EyeGeometry.from_rig_dict(self._scaled_eye(geo.eye_dict(False)))
-        # The eyeball sprites are loaded HERE, through the same `_load`
-        # that scales the plate, so sprite pixels and eye geometry are
-        # always in one space. `_scaled_eye` scaled their origins to match.
+        # The eye's THREE art layers are loaded HERE, through the same
+        # `_load` that scales the plate, so their pixels and the eye
+        # geometry are always in one space (`_scaled_eye` scaled the
+        # matching origins). Together they remove every flat palette fill
+        # from inside the eye: the eyeball is the artist's drawn iris, the
+        # socket is what gaze uncovers behind it, and the lid is the
+        # artist's own eyelid skin that slides down to blink.
         self.eyes = EyePair(
             geo_l, geo_r, palette=pal, seed=seed or rig.character, fps=fps,
-            sprite_l=self._eyeball(d, geo_l), sprite_r=self._eyeball(d, geo_r))
+            sprite_l=self._eye_img(d, geo_l.eyeball),
+            sprite_r=self._eye_img(d, geo_r.eyeball),
+            socket_l=self._eye_img(d, geo_l.socket_img),
+            socket_r=self._eye_img(d, geo_r.socket_img),
+            lid_l=self._eye_img(d, geo_l.lid_img),
+            lid_r=self._eye_img(d, geo_r.lid_img))
 
         # Brow polylines in plate space (warped, never patch-pasted: a
         # feathered ellipse patch was how brow ghosting reached the eyes)
@@ -166,22 +175,25 @@ class HeadAssembly:
     def _pts(self, pts) -> list:
         return [(p[0] * self.scale, p[1] * self.scale) for p in pts]
 
-    def _eyeball(self, d: str, geo: EyeGeometry) -> Optional[Image.Image]:
-        """The artwork's own eyeball sprite for one eye, if the rig baked one.
+    def _eye_img(self, d: str, fname: str) -> Optional[Image.Image]:
+        """One baked eye asset (eyeball / socket backdrop / lid strip).
+
+        All three go through `_load`, so their pixels land in the same
+        space as the eye geometry whose origins `_scaled_eye` scaled.
 
         Missing pixels are not fatal: the rasterizer falls back to the
         synthetic eye, which is worse-looking but correct. A hard failure
         here would take down a render for a cosmetic asset.
         """
-        if not geo.eyeball:
+        if not fname:
             return None
-        p = os.path.join(d, geo.eyeball)
+        p = os.path.join(d, fname)
         if not os.path.exists(p):
             return None
         try:
             return self._load(p)
         except Exception as e:
-            print(f"  [HeadAssembly] eyeball sprite {geo.eyeball} unusable: {e}")
+            print(f"  [HeadAssembly] eye asset {fname} unusable: {e}")
             return None
 
     def _scaled_eye(self, d: dict) -> dict:
@@ -350,7 +362,7 @@ class HeadAssembly:
         xb = self.rig.pose_xform(to_pose)
         xf = self._rescale(xa.lerp(xb, max(0.0, min(1.0, blend_t))))
         # Fold the plate origin INTO the pose similarity. Plate space +
-        # offset IS canonical body space, and P(x + o) = sR·x + (sR·o + t)
+        # offset IS canonical body space, and P(x + o) = sR·x + (sR��o + t)
         # is still a similarity — so the composed affine maps plate
         # pixels straight to canvas pixels with no second translate to
         # get wrong. Adding the offset AFTER the rotation (the obvious
