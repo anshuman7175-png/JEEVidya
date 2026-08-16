@@ -298,12 +298,6 @@ class HeadGeometry:
                 "socket_origin": _pt(art.get("socket_origin")),
                 "lid_img": str(art.get("lid_img") or ""),
                 "lid_origin": _pt(art.get("lid_origin")),
-                # How far the eyeball may travel before its rim reaches the
-                # drawn opening, measured from the artwork's own sclera
-                # margin. Dropping this here is what made the renderer fall
-                # back to a generic 0.55·iris_r excursion and slide the iris
-                # onto the lash on art whose iris nearly fills the eye.
-                "gaze_range": _pt(art.get("gaze_range")),
             }
 
         socket = upper + list(reversed(lower))
