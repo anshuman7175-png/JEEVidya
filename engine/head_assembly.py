@@ -212,7 +212,9 @@ class HeadAssembly:
             if k == "iris":
                 cx, cy, r = v
                 out[k] = [cx * s, cy * s, r * s]
-            elif k == "iris_axes":
+            elif k in ("iris_axes", "gaze_range"):
+                # Both are LENGTH pairs (semi-axes / a travel budget in px),
+                # not points, but they scale identically with the render.
                 out[k] = [float(v[0]) * s, float(v[1]) * s]
             elif k in ("iris_angle",):
                 out[k] = float(v)
