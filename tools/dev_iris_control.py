@@ -91,6 +91,49 @@ def control(character: str) -> None:
                       f"dy={fy-cy:+.1f})   [arc fit]  "
                       f"detected=({fx:.1f},{fy:.1f})")
 
+        # ── variant: the whole EYEBALL, not just its brown ring ──
+        # The brown reads as a bottom crescent only because the centre of
+        # the eyeball is a near-black PUPIL and the upper outer quadrant a
+        # white highlight. Iris ∪ pupil should therefore be a near-full
+        # disc, and a disc needs no arc fitting at all.
+        #
+        # The risk is specific and must be measured, not assumed: pupil
+        # (1,0,0) and lash (36,9,3) are both near-black, so at IRIS_TOL the
+        # pupil mask may also match the LASH that arcs over the eye's top —
+        # which would drag the centre up and be worse than the crescent.
+        # The lash-bleed row below is what decides it.
+        cols = eye["colors"]
+        m_iris = color_mask(crop, tuple(cols["iris"]), tol=IRIS_TOL)
+        m_pupil = color_mask(crop, tuple(cols["pupil"]), tol=IRIS_TOL)
+        m_lash = color_mask(crop, tuple(cols["lash"]), tol=IRIS_TOL)
+        bleed = int((m_pupil & m_lash).sum())
+        union = m_iris | m_pupil
+        lab, n = label_components(union)
+        if n:
+            counts = np.bincount(lab.ravel())
+            counts[0] = 0
+            top = int(np.argmax(counts))
+            blob = lab == top
+            ys, xs = np.nonzero(blob)
+            dcx, dcy = float(xs.mean()) + x0, float(ys.mean()) + y0
+            err = ((dcx - cx) ** 2 + (dcy - cy) ** 2) ** 0.5
+            area = np.pi * ax * ay
+            print(f"  eye_{side} [eyeball] iris|pupil  "
+                  f"lash∩pupil bleed={bleed}px")
+            print(f"      visible area={int(blob.sum())}px "
+                  f"({blob.sum()/area*100:.0f}% of the iris)  "
+                  f"bbox={int(xs.max()-xs.min())+1}×"
+                  f"{int(ys.max()-ys.min())+1}px")
+            print(f"      ERROR {err:.1f}px  (dx={dcx-cx:+.1f}, "
+                  f"dy={dcy-cy:+.1f})   [centroid]")
+            fit = fit_fixed_axes_ellipse(blob, (ax, ay),
+                                         float(eye.get("iris_angle") or 0.0))
+            if fit is not None:
+                fx, fy = fit[0] + x0, fit[1] + y0
+                ferr = ((fx - cx) ** 2 + (fy - cy) ** 2) ** 0.5
+                print(f"      ERROR {ferr:.1f}px  (dx={fx-cx:+.1f}, "
+                      f"dy={fy-cy:+.1f})   [arc fit]")
+
 
 def main() -> None:
     for c in ("chintu", "gudiya"):
