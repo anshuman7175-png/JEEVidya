@@ -380,18 +380,27 @@ def run_sweep(character: str, out_dir: str,
                               "eye footprint measured from the render"))
 
     mid_x = int((pred["iris_l"][0] + pred["iris_r"][0]) / 2.0)
+    m_iris = color_mask(open_frame, iris_rgb, tol=IRIS_TOL)
+    if eye_roi is not None:
+        m_iris = m_iris & eye_roi
     for eye in ("iris_l", "iris_r"):
-        m = color_mask(open_frame, iris_rgb, tol=IRIS_TOL)
-        if eye_roi is not None:
-            m = m & eye_roi
-        # Split by the canvas midline between the two eyes, then take
-        # each side's largest body of iris colour as that iris.
-        side = np.zeros_like(m)
-        if eye == "iris_l":
-            side[:, :mid_x] = m[:, :mid_x]
+        # Split by the canvas midline between the two eyes, then take that
+        # side's largest body of iris colour as this iris.
+        #
+        # Which side of the midline an eye falls on is read from ITS OWN
+        # PREDICTION, never inferred from the name. `iris_l` is the
+        # CHARACTER's left eye, so it renders on the viewer's RIGHT —
+        # hardcoding `iris_l → left half` scored each eye against the
+        # other eye's prediction and reported ~150 px of error on a render
+        # whose irises were within a pixel or two of correct. A mirrored
+        # character, or one drawn in three-quarter view, would flip the
+        # sides again; the prediction is the only honest source.
+        m = np.zeros_like(m_iris)
+        if pred[eye][0] < mid_x:
+            m[:, :mid_x] = m_iris[:, :mid_x]
         else:
-            side[:, mid_x:] = m[:, mid_x:]
-        det = mask_centroid(largest_component(side))
+            m[:, mid_x:] = m_iris[:, mid_x:]
+        det = _iris_center(m, iris_axes.get(eye))
         g = gate_registration(pred[eye], det, face_h, eye)
         report.add(g)
         if not g.passed:
