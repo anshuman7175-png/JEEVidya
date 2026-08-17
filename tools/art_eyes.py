@@ -106,6 +106,45 @@ SAMPLE_MIN_PX = 24       # fewer pixels than this is not a measurement
 # lash-contaminated fit this guards against measured 18–34%.
 IRIS_SPILL_MAX = 0.01
 
+# The containment test is taken against the opening dilated by this much,
+# because that is what the tolerance above is *for*: a smooth ellipse
+# rasterized against a hand-drawn, antialiased rim disagrees along a
+# one-pixel seam. Measured on the corrected fits, spill against the raw
+# aperture is 0.5–2.3% (a 1px rim on a ~50px disc is ~2% of its area, i.e.
+# the seam alone can exceed the budget) while spill against the 1px-dilated
+# aperture collapses to 0.00–0.14%. So the seam is charged to rasterization,
+# where it belongs, and IRIS_SPILL_MAX stays at 1% for REAL overflow — the
+# lash-contaminated fits still measure 18–34% and still fail.
+IRIS_RASTER_TOL_PX = 1
+
+# ── eyeball CORE extraction (§2) ───────────────────────────────────────
+#
+# The eyeball is separated from the painted lash by SHAPE, not by tone.
+# Measured on this art (.tmp/shape.py): inside the opening, "not sclera"
+# is one region = a thick round iris disc plus a thin full-width lash band
+# welded to its top rim (gudiya eye_l: 12 lash rows above a disc of
+# inscribed diameter 53). A morphological opening with a disc kernel
+# deletes anything thinner than the kernel and — by the definition of
+# opening — cannot erode a region that contains it, so the iris survives
+# untouched while the lash is removed. Verified: the core's inscribed
+# radius equals the full region's to 1.000 on all four eyes.
+#
+# The radius is stated as a fraction of the region's own inscribed radius
+# so it scales with the art. A SEARCHED radius ("stop when area stops
+# changing") was implemented and REJECTED by measurement: the area curve
+# is locally flat well before the lash detaches (gudiya eye_l 3488→3446→
+# 3423 at r=1,2,3 versus the real cliff at r=7), so the search halted at
+# r=3 and kept the lash. This fraction lands past the cliff on all four
+# eyes, and IRIS_CORE_IOU_MIN below proves it did on any new art.
+IRIS_CORE_THIN = 0.30
+
+# The fitted ellipse must actually describe the core it was fitted to.
+# This is what makes the estimator self-checking: a lash-contaminated or
+# crescent region cannot be summarised by an ellipse, so the agreement
+# collapses. Measured 0.937–0.972 on the correct fits; the crescent-hull
+# fit that shipped the broken rig scores far below this floor.
+IRIS_CORE_IOU_MIN = 0.90
+
 IRIS_SAT_MIN = 25.0      # max(RGB)−min(RGB) at or above this is chromatic
 IRIS_LUM_MIN = 24.0      # below this is lash/pupil ink, not iris colour
 IRIS_LUM_MAX = 190.0     # above this is sclera or the catchlight
@@ -739,6 +778,45 @@ def _segment_opening(roi: np.ndarray, V: np.ndarray, S: np.ndarray,
     return ap, sclera_like
 
 
+def _eyeball_core(ap: np.ndarray, sclera_like: np.ndarray,
+                  seed_local: Tuple[float, float]
+                  ) -> Tuple[np.ndarray, int, float]:
+    """The drawn eyeball inside `ap`, with the painted lash removed by shape.
+
+    Returns (core, radius_used, inscribed_radius). See IRIS_CORE_THIN for
+    why an opening is the right operator and why its radius is derived from
+    the region's own inscribed radius rather than searched.
+
+    This is deliberately a STRUCTURAL measurement — aperture minus eye
+    white — with no tone thresholds in it. The previous version fitted the
+    eyeball to a chroma-gated mask, which made the rig's GEOMETRY depend on
+    absolute brightness/saturation levels; on a uniformly tinted eye
+    (chintu's right, gain 0.608) the gates carved the disc into a broken
+    ring, and the convex hull of a ring-with-gaps is a wedge. Geometry now
+    comes from geometry; tone is used only to pick COLOURS further down.
+    """
+    cv2 = _require_cv2()
+    region = _fill_holes(((ap > 0) & (~sclera_like)).astype(np.uint8))
+    region = cv2.morphologyEx(region, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    region = _fill_holes(_largest_near(region, seed_local))
+    if region.sum() == 0:
+        return region, 0, 0.0
+
+    dist = cv2.distanceTransform(region, cv2.DIST_L2, 5)
+    r_ins = float(dist.max())
+    cy, cx = np.unravel_index(int(np.argmax(dist)), dist.shape)
+    r = max(2, int(round(IRIS_CORE_THIN * r_ins)))
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1,) * 2)
+    core = cv2.morphologyEx(region, cv2.MORPH_OPEN, k)
+    if core.sum() == 0:            # nothing thick enough survived
+        return core, r, r_ins
+    # Seed from the thickest point of the region, not the landmark: the
+    # landmark centroid can sit on the lash, and the disc is by definition
+    # where the inscribed circle is largest.
+    core = _fill_holes(_largest_near(core, (float(cx), float(cy))))
+    return core, r, r_ins
+
+
 # ═══════════════════════════════════════════
 # The measurement
 # ═══════════════════════════════════════════
@@ -828,46 +906,34 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
     # of bounds at its very first probe and returned 0.0 travel, and the
     # lid band was measured against an opening its own "iris" overflowed.
     #
-    # Ink and iris differ in KIND, not in brightness — the separation this
-    # module already trusts for the iris body colour (IRIS_SAT_MIN et al)
-    # and for the lash colour (`_ink`). So fit to the CHROMATIC pixels of
-    # the opening: that drops the achromatic lash AND the achromatic pupil,
-    # and the CONVEX HULL of what remains is the eyeball's outer boundary —
-    # the pupil is interior to it, while a lash overlapping the eyeball's
-    # top is simply absent instead of dragging the fit upward. Hulling
-    # rather than contour-fitting also stops a ring broken by the pupil or
-    # the catchlight from fitting a lens shape.
-    inner = cv2.erode(ap, np.ones((3, 3), np.uint8))
-    roi_sat = roi.max(axis=2) - roi.min(axis=2)
-    roi_lum = _luma(roi)
-    # Scaled by the eye's own gain: a tint multiplies both saturation and
-    # luma, so an unscaled IRIS_SAT_MIN drops the shaded side of a tinted
-    # eyeball and an unscaled `_ink` bound claims it as lash. That is what
-    # left a crescent instead of a disc for the hull to fit, and a crescent's
-    # hull is not a disc's — it fitted 1.53× small and failed the radius band.
-    chroma = ((roi_sat >= IRIS_SAT_MIN * gain)
-              & (roi_lum >= IRIS_LUM_MIN * gain)
-              & (roi_lum <= IRIS_LUM_MAX * gain))
-    iris_m = ((inner > 0) & (~sclera_like) & chroma & (~_ink(roi, gain))
-              ).astype(np.uint8)
-    iris_m = cv2.morphologyEx(iris_m, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
-    iris_m = cv2.morphologyEx(iris_m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    # The eyeball is separated from the lash by SHAPE (`_eyeball_core`): the
+    # lash is thin, the eyeball is thick, and a morphological opening tells
+    # them apart without consulting a single brightness threshold. Fitting
+    # to a chroma-gated mask was tried and is what shipped the broken rig —
+    # on a tinted eye the gates punched the disc into a broken ring, and a
+    # ring-with-gaps hulls to a wedge (chintu eye_r: hull 892px, bbox 40×36
+    # for a real disc of 1733px, 51×50).
+    iris_m, core_r, core_r_ins = _eyeball_core(ap, sclera_like, seed_local)
     if iris_m.sum() < MIN_COMPONENT:
         raise EyeMeasureError(
-            f"{label}: no chromatic iris inside the measured aperture — the "
-            f"opening reads as eye white and ink only. Gaze would have "
-            f"nothing to move.")
+            f"{label}: no eyeball inside the measured aperture — the opening "
+            f"reads as eye white and a thin ink line only (largest round "
+            f"structure survived an r={core_r}px opening with "
+            f"{int(iris_m.sum())}px). Gaze would have nothing to move.")
 
-    # Every surviving pixel is already inside the opening, so the hull over
-    # ALL of them is the eyeball. No nearest-component pick is needed, and
-    # a ring split in two by a large pupil cannot bias the fit.
-    ys, xs = np.nonzero(iris_m)
-    hull = cv2.convexHull(
-        np.stack([xs, ys], axis=1).astype(np.int32).reshape(-1, 1, 2))
-    if len(hull) >= 5:
-        (ecx, ecy), (ew, eh), ang = cv2.fitEllipse(hull)
+    # Fit the ellipse to the core's OUTLINE. Contour-fitting beats hulling
+    # here by measurement (IoU 0.937–0.972 vs 0.925–0.964, spill 0.00–0.14%
+    # vs 0.20–0.84%, on all four eyes): the core is already a solid,
+    # hole-filled disc, so there are no gaps for a hull to bridge, and the
+    # hull's straight bridging edges only inflate the fit. The moment
+    # estimator was also measured and is worse than both.
+    cs, _ = cv2.findContours(iris_m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    cs = [c for c in cs if len(c) >= 5]
+    if cs:
+        (ecx, ecy), (ew, eh), ang = cv2.fitEllipse(max(cs, key=cv2.contourArea))
         a, b_ = ew / 2.0, eh / 2.0
-    else:                       # degenerate hull: fall back to the disc
+    else:                       # degenerate outline: fall back to the disc
+        ys, xs = np.nonzero(iris_m)
         ecx, ecy = float(xs.mean()), float(ys.mean())
         a = b_ = float(np.sqrt(iris_m.sum() / np.pi))
         ang = 0.0
@@ -891,7 +957,36 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
     # sub-percent sliver at worst.
     ell = _ellipse_mask(ap.shape, (ecx, ecy), (a, b_), float(ang))
     ell_area = max(1, int((ell > 0).sum()))
-    spill = int(((ell > 0) & (ap == 0)).sum())
+
+    # 2b-i · the ellipse must DESCRIBE the core it was fitted to. This is
+    # the estimator checking its own premise: an ellipse is only a valid
+    # summary of a round region, so a crescent, a wedge or a lash-welded
+    # blob cannot score well here no matter how the axes come out. The
+    # radius-band and containment tests below both passed for fits that were
+    # visibly wrong, because "plausible size" and "inside the opening" are
+    # satisfied by a small wedge; agreement with the measured shape is not.
+    iou = (int(((ell > 0) & (iris_m > 0)).sum())
+           / max(1, int(((ell > 0) | (iris_m > 0)).sum())))
+    if iou < IRIS_CORE_IOU_MIN:
+        raise EyeMeasureError(
+            f"{label}: fitted eyeball {2 * a:.0f}×{2 * b_:.0f}px agrees with "
+            f"the measured eyeball region only IoU={iou:.3f} (needs "
+            f"≥{IRIS_CORE_IOU_MIN}). The region is not ellipse-shaped, so it "
+            f"is not the drawn eyeball — it is a crescent or a lash-welded "
+            f"blob, and every gaze/lid number derived from it would be "
+            f"fiction. Region {int(iris_m.sum())}px, opening radius "
+            f"r={core_r}px of inscribed {core_r_ins:.1f}px, tone gain "
+            f"{gain:.3f}.")
+
+    # 2b-ii · containment, measured against the opening plus a ONE-PIXEL
+    # rasterization seam (IRIS_RASTER_TOL_PX). The budget itself is
+    # unchanged; what is corrected is where it is charged. A smooth ellipse
+    # and a hand-drawn antialiased rim disagree along their shared edge, and
+    # on a ~50px disc that seam alone is ~2% of the area — so charging it to
+    # "overflow" would either fail a correct fit or force the budget up.
+    ap_tol = cv2.dilate(
+        ap, np.ones((IRIS_RASTER_TOL_PX * 2 + 1,) * 2, np.uint8))
+    spill = int(((ell > 0) & (ap_tol == 0)).sum())
     if spill > IRIS_SPILL_MAX * ell_area:
         ah = int((ap > 0).any(axis=1).sum())
         aw = int((ap > 0).any(axis=0).sum())
