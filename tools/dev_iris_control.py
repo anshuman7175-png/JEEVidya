@@ -19,7 +19,8 @@ import os
 import numpy as np
 from PIL import Image
 
-from tools.face_qc import color_mask, label_components
+from tools.face_qc import (color_mask, fit_fixed_axes_ellipse,
+                           label_components)
 from tools.verify_face import IRIS_TOL
 
 
@@ -74,7 +75,21 @@ def control(character: str) -> None:
                   f"rows {by0}..{by1} (iris spans "
                   f"{cy-ay:.0f}..{cy+ay:.0f})")
             print(f"      ERROR {err:.1f}px  (dx={dcx-cx:+.1f}, "
-                  f"dy={dcy-cy:+.1f})")
+                  f"dy={dcy-cy:+.1f})   [centroid]")
+
+            # The estimator the gate now uses: fit the KNOWN axes to the
+            # visible rim arc. Truth here is `iris_c`, measured from this
+            # very artwork, so the number printed is pure detector error.
+            fit = fit_fixed_axes_ellipse(lab == top, (ax, ay),
+                                         float(eye.get("iris_angle") or 0.0))
+            if fit is None:
+                print("      arc fit: NOT MEASURABLE (rim arc too short)")
+            else:
+                fx, fy = fit[0] + x0, fit[1] + y0
+                ferr = ((fx - cx) ** 2 + (fy - cy) ** 2) ** 0.5
+                print(f"      ERROR {ferr:.1f}px  (dx={fx-cx:+.1f}, "
+                      f"dy={fy-cy:+.1f})   [arc fit]  "
+                      f"detected=({fx:.1f},{fy:.1f})")
 
 
 def main() -> None:
