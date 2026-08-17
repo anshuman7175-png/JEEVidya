@@ -212,10 +212,15 @@ class HeadAssembly:
             if k == "iris":
                 cx, cy, r = v
                 out[k] = [cx * s, cy * s, r * s]
-            elif k in ("iris_axes", "gaze_range"):
-                # Both are LENGTH pairs (semi-axes / a travel budget in px),
-                # not points, but they scale identically with the render.
+            elif k == "iris_axes":
+                # A LENGTH pair (semi-axes in px), not a point, but it scales
+                # identically with the render.
                 out[k] = [float(v[0]) * s, float(v[1]) * s]
+            elif k == "gaze_box":
+                # Four LENGTHS — (left, right, up, down) travel budget in px.
+                # It must be matched by name: the fallback branch below would
+                # try to unpack each float as an (x, y) point and raise.
+                out[k] = [float(t) * s for t in v]
             elif k in ("iris_angle",):
                 out[k] = float(v)
             elif k == "colors":
@@ -450,10 +455,15 @@ class HeadAssembly:
         mcx, mcy = self.mouth.predicted_centroid(ch.mouth)
         il = self.eyes.left.geo
         ir = self.eyes.right.geo
-        gaze_l = (il.iris_c[0] + ch.eyes.eye_dx * il.iris_r * 0.55,
-                  il.iris_c[1] + ch.eyes.eye_dy * il.iris_r * 0.55)
-        gaze_r = (ir.iris_c[0] + ch.eyes.eye_dx * ir.iris_r * 0.55,
-                  ir.iris_c[1] + ch.eyes.eye_dy * ir.iris_r * 0.55)
+        # The excursion MUST come from the same `gaze_offset` the renderer
+        # uses. Re-deriving it here as `iris_r * 0.55` duplicated the legacy
+        # guess in the gate itself, so the prediction and the pixels could
+        # only ever agree while both were wrong, and the gate would have
+        # certified a measured renderer as broken.
+        dxl, dyl = il.gaze_offset(ch.eyes.eye_dx, ch.eyes.eye_dy)
+        dxr, dyr = ir.gaze_offset(ch.eyes.eye_dx, ch.eyes.eye_dy)
+        gaze_l = (il.iris_c[0] + dxl, il.iris_c[1] + dyl)
+        gaze_r = (ir.iris_c[0] + dxr, ir.iris_c[1] + dyr)
         return {"mouth": feat(mcx, mcy),
                 "iris_l": feat(*gaze_l),
                 "iris_r": feat(*gaze_r)}
