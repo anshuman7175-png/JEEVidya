@@ -118,7 +118,7 @@ def probe(name: str) -> None:
         _row(tiles).save(dest)
         print(f"{name} eye_{side}: aperture {x1 - x0}x{y1 - y0} "
               f"iris_axes={tuple(round(float(a), 1) for a in axes)} "
-              f"gaze={geo.get('gaze_range')} → {dest}")
+              f"gaze_box={geo.get('gaze_box')} → {dest}")
 
 
 if __name__ == "__main__":
