@@ -28,6 +28,7 @@ discipline as engine/mouth_model.py.
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
@@ -35,6 +36,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
+
+_log = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════
 # Coupling gains (Part V, D10)
@@ -139,13 +142,37 @@ class EyeGeometry:
     def travel(self) -> Tuple[float, float]:
         """Px the eyeball may move for a gaze of ±1, per axis.
 
-        Prefers the MEASURED margin. Falls back to the legacy fraction of
-        the iris radius only for rigs baked before the margin existed, so
-        an old rig still animates instead of freezing its eyes open.
+        Uses the MEASURED margin. The legacy fraction survives only for rigs
+        baked before that margin existed (`measured` is False), so an old rig
+        still animates instead of freezing its eyes open.
+
+        Two things here were load-bearing bugs and are deliberately not
+        restored:
+
+        • The test was `dx > 0 or dy > 0`, so a half-measured range — a real
+          horizontal margin with a zero vertical one — was returned verbatim
+          and the eye simply could not look up or down, silently. Both axes
+          must now be present for the measurement to be believed.
+
+        • A MEASURED rig reporting zero is a bake defect, not an old rig.
+          Quietly substituting 0.55·iris_r (~18 px on this art, against a
+          true margin of a few px) is what drove the iris onto the painted
+          lash and forced the socket inpaint that smeared brown behind the
+          eye. A measured rig with no margin now raises, because the rig is
+          wrong and must be re-baked rather than animated wrongly.
         """
         dx, dy = self.gaze_range
-        if dx > 0.0 or dy > 0.0:
+        if dx > 0.0 and dy > 0.0:
             return (float(dx), float(dy))
+        if self.measured:
+            raise ValueError(
+                f"eye was measured from artwork but carries gaze_range "
+                f"{self.gaze_range} — re-bake the rig; refusing to guess an "
+                f"excursion that would paint the iris over the lash.")
+        _log.warning(
+            "[eye_model] legacy rig: no measured gaze margin, falling back "
+            "to %.2f x iris_r (%.1f px). Re-bake for art-accurate gaze.",
+            LEGACY_GAZE_FRAC, self.iris_r * LEGACY_GAZE_FRAC)
         r = self.iris_r * LEGACY_GAZE_FRAC
         return (r, r)
 
@@ -348,7 +375,7 @@ class GazeEngine:
         return 1.0 + PUPIL_EMPHASIS_GAIN * max(0.0, min(1.0, emphasis))
 
 
-# ═══════════════════════════════════════════
+# ═══════════════════════════════════════��═══
 # Coupled state — applies the D10 gains
 # ═══════════════════════════════════════════
 
