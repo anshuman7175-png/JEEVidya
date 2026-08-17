@@ -489,8 +489,8 @@ def run_sweep(character: str, out_dir: str,
         ax, ay = geo.iris_axes
         if ax > 0.0 and ay > 0.0:
             iris_axes[eye] = (float(ax), float(ay), float(geo.iris_angle))
-        art = arts.get(eye) or {}
-        d = _iris_datum(plate, art) if plate is not None else None
+        eye_art = arts.get(eye) or {}
+        d = _iris_datum(plate, eye_art) if plate is not None else None
         if d is None:
             # Without a datum the two sides of the gate measure
             # differently, and the gate would be scoring an estimator
@@ -503,7 +503,7 @@ def run_sweep(character: str, out_dir: str,
             continue
         # Cap in the same (plate) space the datum was measured in.
         cap = IRIS_DATUM_FRAC * min(
-            float(v) for v in (art.get("iris_axes") or (1.0, 1.0)))
+            float(v) for v in (eye_art.get("iris_axes") or (1.0, 1.0)))
         mag = math.hypot(d[0], d[1])
         report.add(GateResult(
             f"iris_datum[{eye}]", mag <= cap, mag, cap,
