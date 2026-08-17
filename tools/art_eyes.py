@@ -110,6 +110,48 @@ IRIS_SAT_MIN = 25.0      # max(RGB)−min(RGB) at or above this is chromatic
 IRIS_LUM_MIN = 24.0      # below this is lash/pupil ink, not iris colour
 IRIS_LUM_MAX = 190.0     # above this is sclera or the catchlight
 
+# ── per-eye TONE GAIN ──────────────────────────────────────────────────
+#
+# Every threshold above is an ABSOLUTE level on 0…255, calibrated against
+# an eye drawn in open light. An eye drawn behind a TINTED GLASSES LENS is
+# the same eye multiplied by a constant < 1, so those levels land in the
+# wrong place on it — and chintu wears glasses over his right eye only,
+# which makes the two eyes of one face measure differently.
+#
+# Measured on chintu, with gudiya as the no-glasses control:
+#
+#     eye            white level   sat p90   sclera px   chroma px
+#     chintu  left       254          80        1408        1384
+#     chintu  right      155          51         265         830
+#     gudiya  left       245          96         997        1558
+#     gudiya  right      238          94         754        1289
+#
+# chintu's right eye is a UNIFORMLY DARKER copy of his left: brightness
+# ×0.61 and saturation ×0.64, i.e. one gain, not a different drawing.
+# gudiya's two eyes sit at ×0.97 — so this is the lens, not the artist.
+#
+# Under those absolute gates the tinted eye lost 81% of its sclera and
+# read as "not sclera" almost everywhere, while the chroma test kept only
+# a thin lit crescent of the iris (hull 892px vs 2139px on the open eye,
+# bbox 40×36 vs 57×50). The hull of a crescent is not the hull of a disc,
+# so the fitted eyeball came out 1.53× smaller on the right than the left
+# and fell out of the plausible-radius band entirely.
+#
+# The fix is to make the measurement INVARIANT to that multiplication:
+# read each eye's own white level and scale the absolute gates by it.
+# Then the same drawing measures the same behind glass as in open air.
+#
+# Only true LEVEL gates are scaled. `SKIN_DELTA` is a distance from a
+# local reference rather than a level, and scaling it was measured to
+# change nothing on any of the four eyes, so it is left alone.
+# `SCLERA_S_MAX` is an upper bound on "how grey is it", and a tint scales
+# saturation DOWN, so a desaturated white stays desaturated without help.
+TONE_REF_WHITE = 255.0   # the white level the absolute gates assume
+TONE_WHITE_PCTL = 97.0   # percentile of V inside the opening = its "white"
+# Never exceed 1.0: a gain above one would LOOSEN the calibrated gates.
+# The floor stops a near-black ROI from collapsing every gate to zero.
+TONE_GAIN_MIN = 0.35
+
 # Lash / lid-line ink, by the same colour-space separation: ink is dark
 # AND near-achromatic, while shaded eyelid skin stays warm and saturated.
 LASH_LUM_MAX = 90.0      # ink is no brighter than this
@@ -476,6 +518,60 @@ def _ellipse_mask(shape: Tuple[int, int], c: Tuple[float, float],
     return m
 
 
+def _repair_rim(ap: np.ndarray, max_depth: float) -> np.ndarray:
+    """Fill SHALLOW bites in the aperture's rim; leave deep concavities alone.
+
+    The eye-like test is `not_skin AND (bright-desaturated OR dark)`, which
+    leaves a mid-luma band (HSV V in 110…150) that neither clause claims. On
+    this art the iris shades straight through it, so the segmented opening
+    comes out with a chunk missing from its lower rim — measured here as
+    185–679 px at (125,55,29) / (134,126,128) / (144,62,12), each ≥99%
+    "not skin" and 0% ink, i.e. unambiguously eye and unambiguously dropped.
+    That bite is what the fitted eyeball then spills through, failing the
+    containment invariant and refusing the whole v3 bake.
+
+    Widening the tone test is not the fix — `not_skin` compares against the
+    ROI border median, which holds hair on chintu, so admitting the mid band
+    globally makes the aperture swallow the entire ROI.
+
+    So the repair is GEOMETRIC and local. A drawn eye opening is a smooth,
+    near-convex almond, so a shallow dent in its rim is a threshold artifact,
+    while a deep concavity is real shape (an eye corner) or a leak and must
+    survive untouched. Each convex-hull deficiency is therefore filled only
+    when its OWN maximum depth is under `max_depth`.
+
+    Depth is the deficiency's distance-to-the-aperture maximum: a bite is
+    enclosed by real eye on three sides, so this measures how far the missing
+    region reaches away from the rim that surrounds it. Measured 7.0–11.6 px
+    against a 13.8–15.4 px bound on this art, so the genuine bites are
+    repaired with margin and nothing else in the frame qualifies.
+
+    Deterministic: same mask in, same mask out.
+    """
+    cv2 = _require_cv2()
+    cont, _ = cv2.findContours(ap, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not cont:
+        return ap
+    c = max(cont, key=cv2.contourArea)
+    hull = np.zeros_like(ap)
+    cv2.fillPoly(hull, [cv2.convexHull(c)], 1)
+    deficiency = ((hull > 0) & (ap == 0)).astype(np.uint8)
+    if deficiency.sum() == 0:
+        return ap
+
+    # Distance from every non-aperture pixel to the nearest aperture pixel.
+    # Computed once on the whole ROI so each component is measured in the
+    # same field, never relative to its own bounding box.
+    dist = cv2.distanceTransform((ap == 0).astype(np.uint8), cv2.DIST_L2, 5)
+    n, lab = cv2.connectedComponents(deficiency, 8)[:2]
+    out = ap.copy()
+    for i in range(1, n):
+        comp = lab == i
+        if float(dist[comp].max()) <= max_depth:
+            out[comp] = 1
+    return _fill_holes(out)
+
+
 def _gaze_margin(ap: np.ndarray, iris_c: Tuple[float, float],
                  iris_axes: Tuple[float, float], iris_angle: float,
                  cap: float) -> Tuple[float, float]:
@@ -554,6 +650,9 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
             f"gaze or blink and must be re-exported.")
     ap = cv2.morphologyEx(ap, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
     ap = _fill_holes(ap)
+    # Repair the mid-luma bites the tone test leaves in the rim, BEFORE the
+    # area check, so `frac` and every consumer see one final aperture.
+    ap = _repair_rim(ap, APERTURE_CONCAVE_MAX * face_h)
 
     roi_area = float(ap.shape[0] * ap.shape[1])
     frac = ap.sum() / roi_area
@@ -912,16 +1011,23 @@ def _luma(px: np.ndarray) -> np.ndarray:
     return px @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
 
 
-def _ink(px: np.ndarray) -> np.ndarray:
+def _ink(px: np.ndarray, gain: float = 1.0) -> np.ndarray:
     """Dark AND near-achromatic pixels: a lash, a brow, a glasses rim.
 
     Reference-free by design. It is the one lid test that can be trusted
     before any tone has been established, which is why the walk uses it to
     find the lash before it decides what the eyelid's skin even looks like.
+
+    `gain` is the eye's own tone gain (see TONE_REF_WHITE). At the default
+    1.0 this is exactly the historical test. Below 1.0 the bounds scale
+    with the signal, which keeps ink separable from a merely TINTED iris:
+    under a lens the iris darkens toward the unscaled ink bound and starts
+    reading as ink, which is what erased the shaded rim of chintu's right
+    eyeball and left a crescent for the hull to fit.
     """
     lum = _luma(px)
     sat = px.max(axis=-1) - px.min(axis=-1)
-    return (lum <= LASH_LUM_MAX) & (sat <= LASH_SAT_MAX)
+    return (lum <= LASH_LUM_MAX * gain) & (sat <= LASH_SAT_MAX * gain)
 
 
 def _row_tone(row: np.ndarray) -> Optional[np.ndarray]:
