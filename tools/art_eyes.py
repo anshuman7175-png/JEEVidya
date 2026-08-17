@@ -317,6 +317,12 @@ class ArtEye:
                  reaches the drawn opening. This is the artwork's own
                  sclera margin, so a gaze of ±1 is the largest look the
                  drawing can hold rather than a guessed fraction.
+    tone_gain  : this eye's own brightness scale relative to the level the
+                 absolute tone gates are calibrated against (1.0 = drawn in
+                 open light, 0.61 = measured behind chintu's tinted lens).
+                 Carried on the record because the lid band is sampled in a
+                 SECOND pass (`lid_sprite`) that must judge ink and skin by
+                 the same scaled bounds the opening was measured with.
     """
     aperture: Tuple[Tuple[float, float], ...]
     iris_c: Tuple[float, float]
@@ -325,6 +331,7 @@ class ArtEye:
     iris_r: float
     colors: Dict[str, Tuple[int, int, int]]
     gaze_range: Tuple[float, float] = (0.0, 0.0)
+    tone_gain: float = 1.0
 
     def to_dict(self) -> dict:
         return {
@@ -335,6 +342,7 @@ class ArtEye:
             "iris_r": self.iris_r,
             "colors": {k: list(v) for k, v in self.colors.items()},
             "gaze_range": list(self.gaze_range),
+            "tone_gain": self.tone_gain,
         }
 
     @staticmethod
@@ -605,6 +613,73 @@ def _gaze_margin(ap: np.ndarray, iris_c: Tuple[float, float],
     return float(dx), float(dy)
 
 
+def _tone_gain(V: np.ndarray, ap: np.ndarray, label: str) -> float:
+    """This eye's own brightness scale, read off the eye itself.
+
+    The absolute tone gates (`SCLERA_V_MIN`, `DARK_V_MAX`, `IRIS_LUM_*`,
+    `_ink`) are levels on 0…255 calibrated against an eye drawn in open
+    light. A tinted lens multiplies the whole eye by a constant, which moves
+    every one of those levels to the wrong place on that eye — see the TONE
+    GAIN note above for the measurement that proves chintu's right eye is
+    his left eye ×0.61, not a different drawing.
+
+    The eye's white level is the honest scale factor: an eye opening always
+    contains its brightest paint (sclera, or a catchlight), so a high
+    percentile of V inside the opening tracks the multiplication directly. A
+    percentile rather than the max because a single blown pixel is noise.
+
+    Clamped on both sides, and each bound is load-bearing:
+      • never above 1.0 — a gain over one would LOOSEN calibrated gates and
+        let skin, hair or a frame into the aperture.
+      • never below TONE_GAIN_MIN — a near-black ROI (a bad seed landing off
+        the face) would otherwise collapse every gate to zero and "succeed"
+        by matching everything.
+    """
+    vals = V[ap > 0]
+    if vals.size == 0:
+        raise EyeMeasureError(
+            f"{label}: cannot read a tone level — the provisional eye "
+            f"opening is empty.")
+    white = float(np.percentile(vals, TONE_WHITE_PCTL))
+    return float(min(1.0, max(TONE_GAIN_MIN, white / TONE_REF_WHITE)))
+
+
+def _segment_opening(roi: np.ndarray, V: np.ndarray, S: np.ndarray,
+                     skin: np.ndarray, seed_local: Tuple[float, float],
+                     face_h: float, gain: float
+                     ) -> Tuple[np.ndarray, np.ndarray]:
+    """The drawn eye opening at a given tone gain.
+
+    Shared by both measurement passes so the provisional opening that
+    ESTABLISHES the gain and the final opening MEASURED at that gain cannot
+    drift apart. Returns (aperture mask, sclera_like mask); the caller owns
+    every invariant, because pass 1 must tolerate a rough answer while pass
+    2 must not.
+
+    `SCLERA_S_MAX` and `SKIN_DELTA` are deliberately NOT scaled: the first
+    is an upper bound on "how grey is it" and a tint only desaturates, the
+    second is a distance from a local reference rather than a level, and
+    scaling it was measured to change nothing on any of the four eyes.
+    """
+    cv2 = _require_cv2()
+    not_skin = np.abs(roi - skin).max(axis=2) > SKIN_DELTA
+    sclera_like = (V > SCLERA_V_MIN * gain) & (S < SCLERA_S_MAX)
+    dark_like = V < DARK_V_MAX * gain
+
+    eye = (not_skin & (sclera_like | dark_like)).astype(np.uint8)
+    eye = cv2.morphologyEx(eye, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    eye = cv2.morphologyEx(eye, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    ap = _largest_near(eye, seed_local)
+    if ap.sum() == 0:
+        return ap, sclera_like
+    ap = cv2.morphologyEx(ap, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
+    ap = _fill_holes(ap)
+    # Repair the mid-luma bites the tone test leaves in the rim, BEFORE any
+    # area check, so `frac` and every consumer see one final aperture.
+    ap = _repair_rim(ap, APERTURE_CONCAVE_MAX * face_h)
+    return ap, sclera_like
+
+
 # ═══════════════════════════════════════════
 # The measurement
 # ═══════════════════════════════════════════
@@ -633,26 +708,40 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
     roi = rgb[y0:y1, x0:x1]
     V, S = _hsv(roi)
     skin = _border_median(roi)
-    not_skin = np.abs(roi - skin).max(axis=2) > SKIN_DELTA
-    sclera_like = (V > SCLERA_V_MIN) & (S < SCLERA_S_MAX)
-    dark_like = V < DARK_V_MAX
+    seed_local = (seed[0] - x0, seed[1] - y0)
 
-    # ── 1 · aperture: the drawn eye opening ──
-    eye = (not_skin & (sclera_like | dark_like)).astype(np.uint8)
-    eye = cv2.morphologyEx(eye, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    eye = cv2.morphologyEx(eye, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    ap = _largest_near(eye, (seed[0] - x0, seed[1] - y0))
-    if ap.sum() == 0:
+    # ── 1 · aperture: the drawn eye opening, measured at its OWN tone ──
+    #
+    # Two passes, because the gain and the opening define each other: the
+    # gain is the eye's white level, which can only be read INSIDE the
+    # opening, and the opening is found with gates that need the gain.
+    #
+    # Pass 1 runs at unit gain purely to locate the eye. It is allowed to be
+    # wrong about the eye's EXTENT — on the tinted eye it recovers only the
+    # lit crescent — because all it has to do is land inside the opening well
+    # enough for a high percentile of V to see that eye's brightest paint.
+    # No invariant is enforced on it; every one of them belongs to pass 2.
+    ap0, sclera0 = _segment_opening(roi, V, S, skin, seed_local, face_h, 1.0)
+    if ap0.sum() == 0:
         raise EyeMeasureError(
             f"{label}: found no eye-like region near {seed}. The art may "
             f"not show an open eye there, or the eye is drawn in skin "
             f"tones (no sclera and no dark iris) — such art cannot drive "
             f"gaze or blink and must be re-exported.")
-    ap = cv2.morphologyEx(ap, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
-    ap = _fill_holes(ap)
-    # Repair the mid-luma bites the tone test leaves in the rim, BEFORE the
-    # area check, so `frac` and every consumer see one final aperture.
-    ap = _repair_rim(ap, APERTURE_CONCAVE_MAX * face_h)
+
+    gain = _tone_gain(V, ap0, label)
+
+    # Pass 2 is the measurement. At gain 1.0 it is bit-identical to pass 1,
+    # so an eye drawn in open light is unaffected by any of this.
+    if gain >= 1.0:
+        ap, sclera_like = ap0, sclera0
+    else:
+        ap, sclera_like = _segment_opening(
+            roi, V, S, skin, seed_local, face_h, gain)
+    if ap.sum() == 0:
+        raise EyeMeasureError(
+            f"{label}: the eye opening vanished when re-measured at its own "
+            f"tone gain {gain:.3f}. The ROI is too dark to segment.")
 
     roi_area = float(ap.shape[0] * ap.shape[1])
     frac = ap.sum() / roi_area
@@ -692,10 +781,15 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
     inner = cv2.erode(ap, np.ones((3, 3), np.uint8))
     roi_sat = roi.max(axis=2) - roi.min(axis=2)
     roi_lum = _luma(roi)
-    chroma = ((roi_sat >= IRIS_SAT_MIN)
-              & (roi_lum >= IRIS_LUM_MIN)
-              & (roi_lum <= IRIS_LUM_MAX))
-    iris_m = ((inner > 0) & (~sclera_like) & chroma & (~_ink(roi))
+    # Scaled by the eye's own gain: a tint multiplies both saturation and
+    # luma, so an unscaled IRIS_SAT_MIN drops the shaded side of a tinted
+    # eyeball and an unscaled `_ink` bound claims it as lash. That is what
+    # left a crescent instead of a disc for the hull to fit, and a crescent's
+    # hull is not a disc's — it fitted 1.53× small and failed the radius band.
+    chroma = ((roi_sat >= IRIS_SAT_MIN * gain)
+              & (roi_lum >= IRIS_LUM_MIN * gain)
+              & (roi_lum <= IRIS_LUM_MAX * gain))
+    iris_m = ((inner > 0) & (~sclera_like) & chroma & (~_ink(roi, gain))
               ).astype(np.uint8)
     iris_m = cv2.morphologyEx(iris_m, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
     iris_m = cv2.morphologyEx(iris_m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
@@ -781,9 +875,9 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
     # 1000–1400 px per eye — the colour a human calls "her eye colour".
     if len(iris_px) >= SAMPLE_MIN_PX:
         iris_sat = iris_px.max(axis=1) - iris_px.min(axis=1)
-        chromatic = ((iris_sat >= IRIS_SAT_MIN)
-                     & (iris_lum >= IRIS_LUM_MIN)
-                     & (iris_lum <= IRIS_LUM_MAX))
+        chromatic = ((iris_sat >= IRIS_SAT_MIN * gain)
+                     & (iris_lum >= IRIS_LUM_MIN * gain)
+                     & (iris_lum <= IRIS_LUM_MAX * gain))
         body = iris_px[chromatic]
         ib = (_trimmed_median(body, 0.10, 0.10) if len(body) >= SAMPLE_MIN_PX
               else None)
@@ -797,8 +891,8 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
         colors["iris"] = ib if ib is not None else (92, 62, 44)
 
         # Pupil: the achromatic dark core, by the same separation.
-        pupil_sel = iris_px[(iris_sat < IRIS_SAT_MIN)
-                            & (iris_lum <= max(IRIS_LUM_MIN, 60.0))]
+        pupil_sel = iris_px[(iris_sat < IRIS_SAT_MIN * gain)
+                            & (iris_lum <= max(IRIS_LUM_MIN, 60.0) * gain)]
         pp = _trimmed_median(pupil_sel, 0.0, 0.25) if len(pupil_sel) else None
         if pp is None:
             pp = _trimmed_median(
@@ -829,9 +923,7 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
     band_px = roi[band]
     ls = None
     if len(band_px) >= SAMPLE_MIN_PX:
-        b_lum = band_px @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
-        b_sat = band_px.max(axis=1) - band_px.min(axis=1)
-        ink = band_px[(b_lum <= LASH_LUM_MAX) & (b_sat <= LASH_SAT_MAX)]
+        ink = band_px[_ink(band_px, gain)]
         if len(ink) >= SAMPLE_MIN_PX:
             ls = _trimmed_median(ink, 0.0, 0.10)
     if ls is None:
@@ -866,6 +958,7 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
         iris_r=r_eq,
         colors=colors,
         gaze_range=(gx, gy),
+        tone_gain=gain,
     )
 
 
@@ -1030,20 +1123,25 @@ def _ink(px: np.ndarray, gain: float = 1.0) -> np.ndarray:
     return (lum <= LASH_LUM_MAX * gain) & (sat <= LASH_SAT_MAX * gain)
 
 
-def _row_tone(row: np.ndarray) -> Optional[np.ndarray]:
+def _row_tone(row: np.ndarray, gain: float = 1.0) -> Optional[np.ndarray]:
     """A row's own skin tone: the median of its NON-INK pixels.
 
     Excluding the ink is what makes the tone comparable from row to row —
     include it and a row holding the lash's tip reads as a tone step, so the
     walk stops one row into a lid it should have kept walking up.
+
+    `gain` scales that ink test to the eye's own tone: behind a tinted lens
+    the eyelid itself is darkened, and an unscaled bound calls the whole row
+    ink, returns None, and ends the walk at the first genuine lid row.
     """
-    keep = row[~_ink(row)]
+    keep = row[~_ink(row, gain)]
     if len(keep) < max(3, row.shape[0] // 4):
         return None
     return np.median(keep, axis=0)
 
 
-def _dirty(px: np.ndarray, skin: np.ndarray) -> np.ndarray:
+def _dirty(px: np.ndarray, skin: np.ndarray,
+           gain: float = 1.0) -> np.ndarray:
     """Pixels that are not clean eyelid skin: ink, or far from `skin`.
 
     Ink (brow, lash, a glasses rim) is dark AND near-achromatic — the same
@@ -1052,11 +1150,8 @@ def _dirty(px: np.ndarray, skin: np.ndarray) -> np.ndarray:
     strand, a bright frame highlight, the sclera) is caught by distance
     from the local reference.
     """
-    lum = _luma(px)
-    sat = px.max(axis=-1) - px.min(axis=-1)
-    ink = (lum <= LASH_LUM_MAX) & (sat <= LASH_SAT_MAX)
     far = np.abs(px - skin).max(axis=-1) > LID_SKIN_DELTA
-    return ink | far
+    return _ink(px, gain) | far
 
 
 def lid_sprite(art: np.ndarray, eye: "ArtEye"
@@ -1115,6 +1210,10 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
     rgb = art[..., :3].astype(np.float32)
     ap_h = max(3, bot - top)
     cap = max(LID_BAND_MIN, int(round(ap_h * LID_BAND_FRAC)))
+    # The lid is sampled from the same paint the opening was measured in, so
+    # it is judged at the same tone. Without this the lash walk and every row
+    # test run open-light bounds over a lens-shaded lid.
+    gain = float(eye.tone_gain)
 
     # 1 · Walk past the lash.
     #
@@ -1126,7 +1225,7 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
     lid_bot = top
     while lid_bot > 0 and (top - lid_bot) < skip_cap:
         row = rgb[lid_bot - 1, x0:x1]
-        if float(np.mean(_ink(row))) <= LID_ROW_INK_MAX:
+        if float(np.mean(_ink(row, gain))) <= LID_ROW_INK_MAX:
             break
         lid_bot -= 1
 
@@ -1141,14 +1240,14 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
         yy = lid_bot - 1 - i
         if yy < 0:
             break
-        t = _row_tone(rgb[yy, x0:x1])
+        t = _row_tone(rgb[yy, x0:x1], gain)
         if t is not None:
             seed.append(t)
     if seed:
         skin = np.median(np.stack(seed), axis=0)
     else:                                   # the lid is entirely ink
         blk = rgb[max(0, top - ap_h):top, x0:x1].reshape(-1, 3)
-        keep = blk[~_ink(blk)]
+        keep = blk[~_ink(blk, gain)]
         skin = (np.median(keep, axis=0) if len(keep) >= SAMPLE_MIN_PX
                 else np.median(blk, axis=0))
 
@@ -1162,9 +1261,9 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
     y = lid_bot
     while y > 0 and (lid_bot - y) < cap:
         row = rgb[y - 1, x0:x1]
-        tone = _row_tone(row)
+        tone = _row_tone(row, gain)
         if (tone is None                                  # all ink
-                or float(np.mean(_ink(row))) > LID_ROW_INK_MAX
+                or float(np.mean(_ink(row, gain))) > LID_ROW_INK_MAX
                 or float(np.abs(tone - ref).max()) > LID_SKIN_DELTA
                 # …and against the seed, so small steps cannot add up
                 or float(np.abs(tone - skin).max()) > LID_SEED_DRIFT_MAX):
@@ -1193,11 +1292,11 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
         # neighbourhood, which is exactly what a stray lash tip or hair strand
         # is.
         for r in range(band.shape[0]):
-            tone = _row_tone(band[r])
+            tone = _row_tone(band[r], gain)
             if tone is None:
                 band[r] = skin
                 continue
-            bad = _dirty(band[r], tone)
+            bad = _dirty(band[r], tone, gain)
             if not bad.any():
                 continue
             good = band[r][~bad]
