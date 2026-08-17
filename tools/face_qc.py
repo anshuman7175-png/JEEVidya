@@ -358,6 +358,38 @@ ARC_R_LO, ARC_R_HI = 0.80, 1.20   # |r| window that counts as "on the rim"
 ARC_MIN_POINTS = 16               # below this an arc cannot fix a centre
 ARC_ITERS = 24
 
+# ── why an arc's ANGULAR SPAN, not just its residual, decides ──
+# A fixed-axes fit has two free parameters (cx, cy), and an arc constrains
+# the centre only along the directions it actually curves through. A
+# ONE-SIDED arc — all its rim points below the ellipse's equator, say — is
+# therefore ill-conditioned along the perpendicular axis: the centre can
+# slide several pixels that way while the residual barely moves, so a small
+# rim error is NOT evidence of a well-located centre.
+#
+# Measured, renderer uninvolved (tools/dev_diag_iris6): chintu's rendered
+# right eye keeps only a bottom arc (normalised v spans +0.40 … +1.05, no
+# point above the equator) because the lid and glasses composite over the
+# eyeball's top, while its LEFT eye keeps a top arc (v −1.09 … +0.25). The
+# two fits are biased in OPPOSITE vertical directions by different amounts
+# (−4.5 px vs −3.9 px), and the same eye measured on the untouched plate,
+# where the arc is fuller (v −0.34 … +1.05), reads −1.58 px. That is why
+# subtracting a plate-measured datum cannot cancel a render-side bias: the
+# bias is a function of WHICH arc survived, and the two sides of the gate
+# do not see the same arc.
+#
+# So the fit reports its own conditioning and the caller refuses to treat
+# an under-determined arc as a measurement. `ARC_MIN_SPAN_FRAC` is the
+# fraction of each normalised axis the retained rim must straddle: an arc
+# that reaches at least this far to BOTH sides of the centre in u and in v
+# pins the centre in both directions. It is a property of ellipse geometry,
+# not a tuned constant — below it the normal matrix is singular in one
+# direction and any centre it reports is a guess dressed as a number.
+ARC_MIN_SPAN_FRAC = 0.35
+# Conditioning ceiling on the Gauss-Newton normal matrix itself: the ratio
+# of its extreme eigenvalues. Catches the same defect coordinate-free,
+# including arcs that straddle in u and v yet still curve too little.
+ARC_MAX_COND = 60.0
+
 
 def boundary_points(mask: np.ndarray) -> np.ndarray:
     """The mask's edge pixels as an (N, 2) array of (x, y).
@@ -395,14 +427,17 @@ def _arc_residual(pts: np.ndarray, c: Tuple[float, float],
     return np.sqrt(u * u + v * v)
 
 
-def fit_fixed_axes_ellipse_ex(mask: np.ndarray,
-                              axes: Tuple[float, float],
-                              angle_deg: float = 0.0,
-                              ) -> Optional[Tuple[Tuple[float, float], float, int]]:
+def fit_fixed_axes_ellipse_ex(
+        mask: np.ndarray,
+        axes: Tuple[float, float],
+        angle_deg: float = 0.0,
+) -> Optional[Tuple[Tuple[float, float], float, int,
+                    Tuple[float, float]]]:
     """As `fit_fixed_axes_ellipse`, but also returns the fit's own RIM
-    RESIDUAL and the number of boundary points that supported it:
+    RESIDUAL, the number of boundary points that supported it, and how far
+    that arc reaches to either side of the centre on each axis:
 
-        ((cx, cy), rim_err, n_rim)
+        ((cx, cy), rim_err, n_rim, (reach_u, reach_v))
 
     `rim_err` is the mean |r − 1| of the retained boundary points, i.e. a
     dimensionless measure of how well this mask's edge actually IS an arc
@@ -487,7 +522,33 @@ def fit_fixed_axes_ellipse_ex(mask: np.ndarray,
     if keep.sum() < ARC_MIN_POINTS:
         return None
     rim_err = float(np.mean(np.abs(r[keep] - 1.0)))
-    return ((float(cx), float(cy)), rim_err, int(keep.sum()))
+
+    # ── how well-determined this centre is, per axis ──
+    # Reported, not enforced here. An arc lying entirely on one side of the
+    # ellipse leaves the centre free to slide along the perpendicular axis,
+    # so its small residual is not by itself evidence of a correct centre.
+    # `reach_*` is how far the retained rim gets to EITHER side of the
+    # centre along each normalised axis: 0 means the arc never crosses that
+    # axis and cannot pin the centre along it (see ARC_MIN_SPAN_FRAC).
+    #
+    # Measured on this art, ALL FOUR eyes come back reach_v ≈ 0 (the lid
+    # and, on chintu, the glasses composite over the eyeball's top), so
+    # refusing every under-determined arc would leave the iris gate unable
+    # to measure anything at all. The vertical bias it produces is instead
+    # cancelled by a datum measured through this same estimator — which is
+    # only valid when both sides see a SIMILARLY clipped arc, hence
+    # `arc_reach` is returned for the caller to compare.
+    p = pts[keep]
+    dx = p[:, 0] - cx
+    dy = p[:, 1] - cy
+    u = (dx * ct + dy * st) / ax
+    v = (-dx * st + dy * ct) / ay
+    reach_u = min(abs(float(u.max())), abs(float(u.min()))) \
+        if (u.max() > 0.0 > u.min()) else 0.0
+    reach_v = min(abs(float(v.max())), abs(float(v.min()))) \
+        if (v.max() > 0.0 > v.min()) else 0.0
+    return ((float(cx), float(cy)), rim_err, int(keep.sum()),
+            (reach_u, reach_v))
 
 
 def fit_fixed_axes_ellipse(mask: np.ndarray,
@@ -524,19 +585,28 @@ CAND_AREA_HI_FRAC = 1.60
 CAND_MAX = 8
 
 
-def fit_ellipse_best_component(mask: np.ndarray,
-                               axes: Tuple[float, float],
-                               angle_deg: float = 0.0,
-                               min_px: int = MIN_COMPONENT_PX,
-                               ) -> Optional[Tuple[Tuple[float, float], float, int]]:
+def fit_ellipse_best_component(
+        mask: np.ndarray,
+        axes: Tuple[float, float],
+        angle_deg: float = 0.0,
+        min_px: int = MIN_COMPONENT_PX,
+) -> Optional[Tuple[Tuple[float, float], float, int,
+                    Tuple[float, float]]]:
     """Fit the fixed-axes ellipse to each plausible component of `mask` and
-    return the BEST one as ((cx, cy), rim_err, area), or None.
+    return the BEST one as ((cx, cy), rim_err, area, (reach_u, reach_v)),
+    or None.
 
     "Best" is least rim residual, not largest area — see
     `fit_fixed_axes_ellipse_ex` for the measurement that forced this. Only
     components whose area falls inside the window a real eyeball of these
     axes can occupy are considered, which is what stops a 12-px speck of
     matching paint from winning on a meaninglessly small "rim".
+
+    `reach_*` travels with the answer so the caller can check that the two
+    sides of a like-for-like comparison were fitted to SIMILARLY clipped
+    arcs. A bottom-only arc and a full ring both fit these axes, but their
+    centres are biased differently, so comparing one against the other
+    charges an estimator artefact to the renderer.
     """
     ax, ay = float(axes[0]), float(axes[1])
     if ax <= 0.0 or ay <= 0.0:
@@ -550,7 +620,8 @@ def fit_ellipse_best_component(mask: np.ndarray,
     lo = max(float(min_px), CAND_AREA_LO_FRAC * ell_area)
     hi = CAND_AREA_HI_FRAC * ell_area
     order = np.argsort(counts)[::-1]
-    best: Optional[Tuple[Tuple[float, float], float, int]] = None
+    best: Optional[Tuple[Tuple[float, float], float, int,
+                         Tuple[float, float]]] = None
     tried = 0
     for lb in order:
         area = float(counts[lb])
@@ -561,7 +632,7 @@ def fit_ellipse_best_component(mask: np.ndarray,
         got = fit_fixed_axes_ellipse_ex(lab == lb, (ax, ay), angle_deg)
         tried += 1
         if got is not None and (best is None or got[1] < best[1]):
-            best = (got[0], got[1], int(area))
+            best = (got[0], got[1], int(area), got[3])
         if tried >= CAND_MAX:
             break
     if best is None or best[1] > RIM_ERR_MAX:
