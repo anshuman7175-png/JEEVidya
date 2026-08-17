@@ -45,14 +45,14 @@ from PIL import Image
 
 from config import settings
 from engine.bone_engine import BoneEngine, PuppetPose
-from engine.rig import Rig
+from engine.rig import Rig, rig_dir
 from tools.face_qc import (GateResult, QCReport, at_phone_scale, color_mask,
-                           dilate_mask, gate_av_sync, gate_blink_closure,
-                           gate_discriminability, gate_registration,
-                           gate_rig_sanity, gate_single_face,
-                           gate_sync_confidence, gate_temporal,
-                           largest_component, mask_centroid, variation_mask,
-                           PHONE_SCALE_PX)
+                           dilate_mask, fit_fixed_axes_ellipse, gate_av_sync,
+                           gate_blink_closure, gate_discriminability,
+                           gate_registration, gate_rig_sanity,
+                           gate_single_face, gate_sync_confidence,
+                           gate_temporal, largest_component, mask_centroid,
+                           variation_mask, PHONE_SCALE_PX)
 
 # Sweep design constants — durations in SECONDS (frame counts are always
 # derived from the live fps; never a literal frame count).
@@ -90,6 +90,94 @@ def _mouth_blob(frame: Image.Image, lip_rgb: Tuple[int, int, int],
     still judges the leftovers, so nothing is swept under the rug.
     """
     return largest_component(_lip_mask(frame, lip_rgb, shadow_rgb, region))
+
+
+# ── locating a rendered iris ────────────────────────────────
+# Cap on the detector datum below, as a fraction of the eyeball's
+# semi-minor axis. The datum corrects a soft-edge disagreement of a
+# pixel or two; anything larger is a real defect and must fail rather
+# than be calibrated away.
+IRIS_DATUM_FRAC = 0.20
+
+
+def _iris_center(mask: np.ndarray,
+                 axes: Optional[Tuple[float, float, float]]
+                 ) -> Optional[Tuple[float, float]]:
+    """The centre of the eyeball whose visible pixels are in `mask`.
+
+    NOT the centroid of `mask`. On this art the eyeball is a brown ring
+    around a near-black pupil with a white highlight in the upper outer
+    quadrant, so the iris-coloured pixels form a BOTTOM CRESCENT whose
+    centroid sits ~14 px below the true centre on all four eyes, against
+    a ~1.8 px budget (measured, renderer uninvolved: tools/
+    dev_iris_control). The crescent's outer edge is however a true arc of
+    the eyeball ellipse, and the bake measured that ellipse's axes from
+    the same artwork, so the centre is recovered by fitting the known
+    axes to the arc.
+    """
+    if axes is None:
+        return None
+    blob = largest_component(mask)
+    if not blob.any():
+        return None
+    return fit_fixed_axes_ellipse(blob, (axes[0], axes[1]), axes[2])
+
+
+def _iris_datum(plate: Image.Image, art: Dict[str, object],
+                tol: int = IRIS_TOL) -> Optional[Tuple[float, float]]:
+    """How far `_iris_center` reads from the baked eyeball centre on the
+    UNTOUCHED head plate, in PLATE pixels.
+
+    Takes the raw `rig.head.art_eye_*` dict, not the assembly's
+    EyeGeometry: `HeadAssembly._scaled_eye` pre-multiplies the assembly's
+    copy into CANVAS space, so using it here would measure a plate with
+    canvas-space coordinates. That mistake is invisible on a character
+    whose scale is exactly 1.0 (gudiya) and shifts every reading by ~17 px
+    on one whose scale is not (chintu, 0.957) — so the two spaces are kept
+    strictly apart: this function is plate-space only, and its caller
+    scales the result once.
+
+    Two estimators of one hand-painted edge do not agree to zero. The
+    bake fits the eyeball's full ellipse; the gate sees only the pixels
+    that survive a colour tolerance, and antialiasing against the sclera
+    and lash insets that crescent inward by a pixel or two — which, fitted
+    with fixed axes, biases the centre consistently upward (measured
+    dy = -1.7 … -3.3 px on the four eyes, dx within ±2).
+    
+    Both sides of the gate must therefore measure the SAME way. This is
+    the detector's own reading at rest, with the renderer not involved, so
+    subtracting it cancels the estimator disagreement while leaving the
+    1.76 px budget untouched — a real misplacement still scores in full,
+    because this constant is fixed by the source art and does not move
+    when the renderer puts an iris in the wrong place.
+    
+    Deliberately NOT solved by masking iris ∪ pupil to get a fuller disc:
+    the pupil (1,0,0) and the lash (36,9,3) are both near-black and
+    inseparable at any usable tolerance, so the union swallows the lash
+    arcing over the eye — measured at 242% of the iris area with 19.8 px
+    of centroid error on chintu's right eye. Rejected on measurement.
+    """
+    try:
+        ax, ay = (float(v) for v in (art.get("iris_axes") or ()))
+        cx, cy = (float(v) for v in (art.get("iris_c") or ()))
+    except (TypeError, ValueError):
+        return None
+    if ax <= 0.0 or ay <= 0.0:
+        return None
+    rgb = (art.get("colors") or {}).get("iris")
+    if rgb is None:
+        return None
+    angle = float(art.get("iris_angle") or 0.0)
+    # A generous box around the known iris, so that "largest component"
+    # cannot be won by some other feature of the face.
+    pad = int(max(ax, ay) * 2.2)
+    x0, y0 = max(0, int(cx - pad)), max(0, int(cy - pad))
+    crop = plate.crop((x0, y0, int(cx + pad), int(cy + pad)))
+    fit = _iris_center(color_mask(crop, tuple(rgb), tol=tol),
+                       (ax, ay, angle))
+    if fit is None:
+        return None
+    return (fit[0] + x0 - float(cx), fit[1] + y0 - float(cy))
 
 
 def _roi_from_variation(frames: List[Image.Image], face_h: float
@@ -379,6 +467,51 @@ def run_sweep(character: str, out_dir: str,
         report.add(GateResult("eye_motion", True, float(eye_roi.sum()), 1.0,
                               "eye footprint measured from the render"))
 
+    # The eyeball geometry the RENDERER uses. `HeadAssembly._scaled_eye`
+    # has already mapped these into CANVAS pixels, so they are used
+    # verbatim — multiplying by `engine.scale` again double-scales them.
+    # The ellipse's angle needs no mapping here because every iris gate
+    # below renders the neutral pose, where the head carries no rotation.
+    S = float(engine.scale)
+    geos = {"iris_l": engine.assembly.eyes.left.geo,
+            "iris_r": engine.assembly.eyes.right.geo}
+    # …while the datum is measured on the head PLATE, which is canonical
+    # space. Hence the raw `art_eye_*` dicts for that side of the
+    # measurement, scaled into canvas space exactly once, below.
+    arts = {"iris_l": rig.head.art_eye_l, "iris_r": rig.head.art_eye_r}
+    plate_path = os.path.join(rig_dir(character), "head_canonical.png")
+    plate = Image.open(plate_path).convert("RGBA") \
+        if os.path.exists(plate_path) else None
+
+    iris_axes: Dict[str, Tuple[float, float, float]] = {}
+    iris_datum: Dict[str, Tuple[float, float]] = {}
+    for eye, geo in geos.items():
+        ax, ay = geo.iris_axes
+        if ax > 0.0 and ay > 0.0:
+            iris_axes[eye] = (float(ax), float(ay), float(geo.iris_angle))
+        art = arts.get(eye) or {}
+        d = _iris_datum(plate, art) if plate is not None else None
+        if d is None:
+            # Without a datum the two sides of the gate measure
+            # differently, and the gate would be scoring an estimator
+            # disagreement as a renderer defect. Refuse to guess.
+            report.add(GateResult(
+                f"iris_datum[{eye}]", False, 0.0, 1.0,
+                "could not locate the eyeball on the untouched head "
+                "plate — the iris gate has no like-for-like reference "
+                "(check art_eye_*.iris_axes / colors.iris in rig.json)"))
+            continue
+        # Cap in the same (plate) space the datum was measured in.
+        cap = IRIS_DATUM_FRAC * min(
+            float(v) for v in (art.get("iris_axes") or (1.0, 1.0)))
+        mag = math.hypot(d[0], d[1])
+        report.add(GateResult(
+            f"iris_datum[{eye}]", mag <= cap, mag, cap,
+            f"detector reads {mag:.2f}px from the baked centre on the "
+            f"untouched plate (dx={d[0]:+.2f}, dy={d[1]:+.2f}) — a "
+            f"soft-edge estimator offset, cancelled on both sides"))
+        iris_datum[eye] = (d[0] * S, d[1] * S)
+
     mid_x = int((pred["iris_l"][0] + pred["iris_r"][0]) / 2.0)
     m_iris = color_mask(open_frame, iris_rgb, tol=IRIS_TOL)
     if eye_roi is not None:
@@ -401,7 +534,14 @@ def run_sweep(character: str, out_dir: str,
         else:
             m[:, mid_x:] = m_iris[:, mid_x:]
         det = _iris_center(m, iris_axes.get(eye))
-        g = gate_registration(pred[eye], det, face_h, eye)
+        # Compare like with like: the prediction is where the eyeball's
+        # CENTRE must land, and `det` is where this detector reads that
+        # centre, so the prediction carries the detector's own measured
+        # offset. Without it the gate charges a 2 px soft-edge
+        # disagreement to the renderer.
+        dat = iris_datum.get(eye, (0.0, 0.0))
+        expect = (pred[eye][0] + dat[0], pred[eye][1] + dat[1])
+        g = gate_registration(expect, det, face_h, eye)
         report.add(g)
         if not g.passed:
             art.save(open_frame, f"registration_{eye}")

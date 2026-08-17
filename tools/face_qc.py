@@ -329,6 +329,151 @@ def mask_centroid(mask: np.ndarray) -> Optional[Tuple[float, float]]:
     return float(xs.mean()), float(ys.mean())
 
 
+# ── locating a painted eyeball ──────────────────────────────
+# An iris CANNOT be located by the centroid of its own colour, and the
+# reason is in the artwork, not in the code. Measured on the untouched
+# head plate (tools/dev_iris_control, tools/dev_iris_anatomy), the
+# eyeball of this art is painted as a warm brown ring around a large
+# near-black PUPIL, with a white specular highlight in the upper outer
+# quadrant and the upper inner quadrant in shade — so the brown reads as
+# only 17–24% of the ellipse's area, occupying a BOTTOM CRESCENT at full
+# ellipse width but a third of its height. Its centroid therefore sits
+# ~14 px BELOW the true centre on every one of the four eyes, against a
+# ~1.8 px budget: a systematic detector bias, reproducible with the
+# renderer entirely uninvolved, and the residual cause of the "iris
+# registration off by 150 px" report once the side-assignment bug was
+# fixed. Loosening the budget to absorb 14 px would have made the gate
+# blind to a real 10 px misplacement.
+#
+# What the crescent DOES give is honest: its outer edge is a true arc of
+# the eyeball ellipse (the ring is the eyeball's rim), and the bake
+# already measured that ellipse's AXES from the same artwork. An arc
+# plus known axes determines the centre, so the centre is recovered by
+# fitting rather than averaged into a wrong answer.
+#
+# Points on the inner edge — where the ring meets the pupil — are NOT on
+# the ellipse, so they are trimmed by normalised radius instead of being
+# allowed to drag the fit inward.
+ARC_R_LO, ARC_R_HI = 0.80, 1.20   # |r| window that counts as "on the rim"
+ARC_MIN_POINTS = 16               # below this an arc cannot fix a centre
+ARC_ITERS = 24
+
+
+def boundary_points(mask: np.ndarray) -> np.ndarray:
+    """The mask's edge pixels as an (N, 2) array of (x, y).
+
+    A pixel is on the edge when it is set and at least one 4-neighbour is
+    not, which for a ring yields BOTH its outer rim (on the ellipse) and
+    its inner rim (against the pupil, well inside the ellipse). Telling
+    those apart is the fit's job, not this function's.
+    """
+    m = mask.astype(bool)
+    if not m.any():
+        return np.zeros((0, 2), dtype=np.float64)
+    edge = np.zeros_like(m)
+    edge[:-1, :] |= m[:-1, :] & ~m[1:, :]
+    edge[1:, :] |= m[1:, :] & ~m[:-1, :]
+    edge[:, :-1] |= m[:, :-1] & ~m[:, 1:]
+    edge[:, 1:] |= m[:, 1:] & ~m[:, :-1]
+    # The frame border truncates a feature rather than bounding it, so a
+    # pixel against the border is an edge of the CANVAS, not of the mask.
+    edge[0, :] |= m[0, :]
+    edge[-1, :] |= m[-1, :]
+    edge[:, 0] |= m[:, 0]
+    edge[:, -1] |= m[:, -1]
+    ys, xs = np.nonzero(edge)
+    return np.stack([xs.astype(np.float64), ys.astype(np.float64)], axis=1)
+
+
+def _arc_residual(pts: np.ndarray, c: Tuple[float, float],
+                  ax: float, ay: float, ct: float, st: float) -> np.ndarray:
+    """Normalised radius of each point about centre `c` (1.0 = on rim)."""
+    dx = pts[:, 0] - c[0]
+    dy = pts[:, 1] - c[1]
+    u = (dx * ct + dy * st) / ax
+    v = (-dx * st + dy * ct) / ay
+    return np.sqrt(u * u + v * v)
+
+
+def fit_fixed_axes_ellipse(mask: np.ndarray,
+                           axes: Tuple[float, float],
+                           angle_deg: float = 0.0,
+                           ) -> Optional[Tuple[float, float]]:
+    """Centre of an ellipse of KNOWN `axes` whose rim is partly visible in
+    `mask`, or None when the visible arc cannot determine one.
+
+    `axes` are SEMI-axes in the same pixel space as `mask`, taken from the
+    geometry the renderer itself uses, so the only free parameters are the
+    two centre coordinates. Gauss-Newton on r² − 1, re-trimming to the rim
+    window each iteration so the pupil-side edge drops out.
+
+    Returns None rather than a guess when the arc is too short — a gate
+    must report "not measurable" instead of scoring against a fabricated
+    centre.
+    """
+    ax, ay = float(axes[0]), float(axes[1])
+    if ax <= 0.0 or ay <= 0.0:
+        return None
+    pts = boundary_points(mask)
+    if len(pts) < ARC_MIN_POINTS:
+        return None
+    th = math.radians(float(angle_deg))
+    ct, st = math.cos(th), math.sin(th)
+
+    xs, ys = pts[:, 0], pts[:, 1]
+    # Three seeds, because which part of the rim survives the paint
+    # differs per eye: tangent-below (a bottom crescent, this art),
+    # tangent-above (a top-lit eye) and the plain bbox centre (a full
+    # ring). The seed with the least rim error wins, so no single
+    # assumption about WHICH arc is visible is baked in.
+    mid_x = 0.5 * (float(xs.min()) + float(xs.max()))
+    seeds = [(mid_x, float(ys.max()) - ay),
+             (mid_x, float(ys.min()) + ay),
+             (mid_x, 0.5 * (float(ys.min()) + float(ys.max())))]
+
+    def cost(c: Tuple[float, float]) -> float:
+        r = _arc_residual(pts, c, ax, ay, ct, st)
+        keep = (r >= ARC_R_LO) & (r <= ARC_R_HI)
+        if keep.sum() < ARC_MIN_POINTS:
+            return math.inf
+        return float(np.mean(np.abs(r[keep] - 1.0)))
+
+    best = min(seeds, key=cost)
+    if not math.isfinite(cost(best)):
+        return None
+
+    cx, cy = best
+    for _ in range(ARC_ITERS):
+        r = _arc_residual(pts, (cx, cy), ax, ay, ct, st)
+        keep = (r >= ARC_R_LO) & (r <= ARC_R_HI)
+        if keep.sum() < ARC_MIN_POINTS:
+            return None
+        p = pts[keep]
+        dx = p[:, 0] - cx
+        dy = p[:, 1] - cy
+        u = (dx * ct + dy * st) / ax
+        v = (-dx * st + dy * ct) / ay
+        f = u * u + v * v - 1.0
+        # ∂f/∂cx and ∂f/∂cy of r² − 1 about the centre.
+        jx = 2.0 * (u * (-ct / ax) + v * (st / ay))
+        jy = 2.0 * (u * (-st / ax) + v * (-ct / ay))
+        a11 = float(np.dot(jx, jx))
+        a12 = float(np.dot(jx, jy))
+        a22 = float(np.dot(jy, jy))
+        b1 = -float(np.dot(jx, f))
+        b2 = -float(np.dot(jy, f))
+        det = a11 * a22 - a12 * a12
+        if abs(det) < 1e-12:
+            break
+        sx = (b1 * a22 - b2 * a12) / det
+        sy = (b2 * a11 - b1 * a12) / det
+        cx += sx
+        cy += sy
+        if abs(sx) < 1e-4 and abs(sy) < 1e-4:
+            break
+    return (float(cx), float(cy))
+
+
 # ═══════════════════════════════════════════
 # Gates
 # ═══════════════════════════════════════════
