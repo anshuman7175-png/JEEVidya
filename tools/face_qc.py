@@ -395,21 +395,32 @@ def _arc_residual(pts: np.ndarray, c: Tuple[float, float],
     return np.sqrt(u * u + v * v)
 
 
-def fit_fixed_axes_ellipse(mask: np.ndarray,
-                           axes: Tuple[float, float],
-                           angle_deg: float = 0.0,
-                           ) -> Optional[Tuple[float, float]]:
-    """Centre of an ellipse of KNOWN `axes` whose rim is partly visible in
-    `mask`, or None when the visible arc cannot determine one.
+def fit_fixed_axes_ellipse_ex(mask: np.ndarray,
+                              axes: Tuple[float, float],
+                              angle_deg: float = 0.0,
+                              ) -> Optional[Tuple[Tuple[float, float], float, int]]:
+    """As `fit_fixed_axes_ellipse`, but also returns the fit's own RIM
+    RESIDUAL and the number of boundary points that supported it:
 
-    `axes` are SEMI-axes in the same pixel space as `mask`, taken from the
-    geometry the renderer itself uses, so the only free parameters are the
-    two centre coordinates. Gauss-Newton on r² − 1, re-trimming to the rim
-    window each iteration so the pupil-side edge drops out.
+        ((cx, cy), rim_err, n_rim)
 
-    Returns None rather than a guess when the arc is too short — a gate
-    must report "not measurable" instead of scoring against a fabricated
-    centre.
+    `rim_err` is the mean |r − 1| of the retained boundary points, i.e. a
+    dimensionless measure of how well this mask's edge actually IS an arc
+    of the given ellipse — 0 for a perfect rim, and growing without bound
+    for a blob that merely happens to be near one.
+
+    That number is the honest way to pick WHICH blob of eye-coloured paint
+    is the eyeball. Picking the biggest one is not: on chintu's right eye
+    the largest iris-coloured component is a 697 px, 94×66 body that fuses
+    the iris with the brow shadow above it, while the true eyeball is a
+    540 px, 43×47 component — the same size and shape as the left eye's.
+    Area chose the fused blob and put the centre 29 px out; the rim
+    residual separates them by an order of magnitude, because a fused blob
+    has an edge that is not an arc of the eyeball anywhere along its top.
+
+    It is also independent of `predict()`: nothing here consults where the
+    renderer THINKS the iris is, so selecting on it keeps the registration
+    gate a measurement rather than a tautology.
     """
     ax, ay = float(axes[0]), float(axes[1])
     if ax <= 0.0 or ay <= 0.0:
@@ -471,7 +482,91 @@ def fit_fixed_axes_ellipse(mask: np.ndarray,
         cy += sy
         if abs(sx) < 1e-4 and abs(sy) < 1e-4:
             break
-    return (float(cx), float(cy))
+    r = _arc_residual(pts, (cx, cy), ax, ay, ct, st)
+    keep = (r >= ARC_R_LO) & (r <= ARC_R_HI)
+    if keep.sum() < ARC_MIN_POINTS:
+        return None
+    rim_err = float(np.mean(np.abs(r[keep] - 1.0)))
+    return ((float(cx), float(cy)), rim_err, int(keep.sum()))
+
+
+def fit_fixed_axes_ellipse(mask: np.ndarray,
+                           axes: Tuple[float, float],
+                           angle_deg: float = 0.0,
+                           ) -> Optional[Tuple[float, float]]:
+    """Centre of an ellipse of KNOWN `axes` whose rim is partly visible in
+    `mask`, or None when the visible arc cannot determine one.
+
+    `axes` are SEMI-axes in the same pixel space as `mask`, taken from the
+    geometry the renderer itself uses, so the only free parameters are the
+    two centre coordinates. Gauss-Newton on r² − 1, re-trimming to the rim
+    window each iteration so the pupil-side edge drops out.
+
+    Returns None rather than a guess when the arc is too short — a gate
+    must report "not measurable" instead of scoring against a fabricated
+    centre.
+    """
+    got = fit_fixed_axes_ellipse_ex(mask, axes, angle_deg)
+    return None if got is None else got[0]
+
+
+# ── choosing WHICH blob is the eyeball ─────────────────────
+# Rim-residual ceiling for a component to be considered an eyeball rim at
+# all, and the area window (as a fraction of the full ellipse's area) a
+# candidate must fall in. Both are shape facts about an ellipse, not tuned
+# constants: a mask cannot be a rim arc of an ellipse if its retained edge
+# points sit 20% of a semi-axis off it, and the painted eyeball of this art
+# measures 17–24% of its ellipse's area, so a body many times the ellipse
+# is something else fused to it.
+RIM_ERR_MAX = 0.20
+CAND_AREA_LO_FRAC = 0.04
+CAND_AREA_HI_FRAC = 1.60
+CAND_MAX = 8
+
+
+def fit_ellipse_best_component(mask: np.ndarray,
+                               axes: Tuple[float, float],
+                               angle_deg: float = 0.0,
+                               min_px: int = MIN_COMPONENT_PX,
+                               ) -> Optional[Tuple[Tuple[float, float], float, int]]:
+    """Fit the fixed-axes ellipse to each plausible component of `mask` and
+    return the BEST one as ((cx, cy), rim_err, area), or None.
+
+    "Best" is least rim residual, not largest area — see
+    `fit_fixed_axes_ellipse_ex` for the measurement that forced this. Only
+    components whose area falls inside the window a real eyeball of these
+    axes can occupy are considered, which is what stops a 12-px speck of
+    matching paint from winning on a meaninglessly small "rim".
+    """
+    ax, ay = float(axes[0]), float(axes[1])
+    if ax <= 0.0 or ay <= 0.0:
+        return None
+    lab, n = label_components(mask)
+    if n == 0:
+        return None
+    counts = np.bincount(lab.ravel())
+    counts[0] = 0
+    ell_area = math.pi * ax * ay
+    lo = max(float(min_px), CAND_AREA_LO_FRAC * ell_area)
+    hi = CAND_AREA_HI_FRAC * ell_area
+    order = np.argsort(counts)[::-1]
+    best: Optional[Tuple[Tuple[float, float], float, int]] = None
+    tried = 0
+    for lb in order:
+        area = float(counts[lb])
+        if area <= 0.0:
+            break
+        if area < lo or area > hi:
+            continue
+        got = fit_fixed_axes_ellipse_ex(lab == lb, (ax, ay), angle_deg)
+        tried += 1
+        if got is not None and (best is None or got[1] < best[1]):
+            best = (got[0], got[1], int(area))
+        if tried >= CAND_MAX:
+            break
+    if best is None or best[1] > RIM_ERR_MAX:
+        return None
+    return best
 
 
 # ═══════════════════════════════════════════
@@ -775,6 +870,9 @@ __all__ = ["QCReport", "GateResult", "gate_registration", "gate_single_face",
            "gate_sync_confidence", "gate_discriminability", "gate_seam",
            "gate_rig_sanity", "at_phone_scale", "color_mask",
            "connected_components", "component_sizes", "label_components",
-           "largest_component",
+           "largest_component", "boundary_points",
+           "fit_fixed_axes_ellipse", "fit_fixed_axes_ellipse_ex",
+           "fit_ellipse_best_component",
            "dilate_mask", "variation_mask", "eyeball_mask", "mask_centroid",
-           "PHONE_SCALE_PX", "MIN_COMPONENT_PX", "BLINK_RESIDUAL_FRAC"]
+           "PHONE_SCALE_PX", "MIN_COMPONENT_PX", "BLINK_RESIDUAL_FRAC",
+           "RIM_ERR_MAX"]
