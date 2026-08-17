@@ -34,10 +34,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.bone_engine import BoneEngine, PuppetPose
 from engine.rig import Rig, rig_dir
-from tools.face_qc import (color_mask, fit_fixed_axes_ellipse_ex,
-                           label_components)
-from tools.verify_face import (IRIS_TOL, REG_POS_TOL_FRAC, _iris_center,
-                               _roi_from_variation)
+from tools.face_qc import (REG_POS_TOL_FRAC, color_mask,
+                           fit_fixed_axes_ellipse_ex, label_components)
+from tools.verify_face import IRIS_TOL, _iris_center, _roi_from_variation
 
 
 def _census(mask: np.ndarray, axes, label: str, top: int = 4) -> None:
