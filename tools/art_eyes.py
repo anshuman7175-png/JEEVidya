@@ -236,6 +236,12 @@ APERTURE_CONCAVE_MAX = 0.05   # ×face_h, deepest rim bite treated as artifact
 # sclera, which is the case inpainting handles well.
 GAZE_MARGIN_SAFETY = 1.0     # px kept between the iris rim and the lash
 GAZE_MAX_FRAC = 0.45         # ×iris_r, hard cap on measured travel
+GAZE_STEP = 0.5              # px per probe; the instrument must resolve this
+
+# Fractional bits for fixed-point ellipse rasterisation (see _ellipse_mask).
+# 3 bits = 1/8 px, comfortably finer than GAZE_STEP, which is the whole point:
+# an integer-rounded ellipse cannot measure a margin of a few px.
+_SUBPIX_BITS = 3
 
 # ── The lid strip is SAMPLED ART, so what it samples must be validated ──
 #
@@ -516,13 +522,35 @@ def _contour_poly(mask: np.ndarray, offset: Tuple[int, int],
 def _ellipse_mask(shape: Tuple[int, int], c: Tuple[float, float],
                   axes: Tuple[float, float], angle: float,
                   grow: float = 0.0) -> np.ndarray:
-    """Filled ellipse mask, drawn with sub-pixel centre rounding."""
+    """Filled ellipse mask, rasterised at TRUE sub-pixel precision.
+
+    `cv2.ellipse` takes integer coordinates, so the obvious call has to round
+    the centre to a whole pixel. That rounding silently destroyed the gaze
+    measurement: `_gaze_margin` walks the eyeball outward in 0.5 px steps,
+    but a rounded centre only moves when the accumulated offset crosses 0.5,
+    so the walk rasterised 1 px jumps and reported the SAME spill for d=0.5
+    and d=1.0 (measured 1.42% at both on gudiya's left eye). A margin of a
+    few px — which is all this art affords, because the iris nearly fills the
+    opening — cannot be resolved by an instrument quantised to 1 px.
+
+    OpenCV's `shift` argument is the fix: it interprets the centre and axes
+    as fixed-point with `shift` fractional bits, so the ellipse is rasterised
+    against the sub-pixel geometry it was actually fitted to. `_SUBPIX_BITS`
+    of 3 gives eighth-pixel resolution — well under the 0.5 px step — while
+    staying far from any integer overflow.
+
+    Strictly more accurate for every caller, including the containment
+    invariant, which previously judged a rounded ellipse against the rim.
+    """
     cv2 = _require_cv2()
     m = np.zeros(shape, np.uint8)
-    cv2.ellipse(m, (int(round(c[0])), int(round(c[1]))),
-                (max(1, int(round(axes[0] + grow))),
-                 max(1, int(round(axes[1] + grow))),
-                 ), angle, 0, 360, 1, -1)
+    s = _SUBPIX_BITS
+    k = float(1 << s)
+    cv2.ellipse(m,
+                (int(round(c[0] * k)), int(round(c[1] * k))),
+                (max(1, int(round((axes[0] + grow) * k))),
+                 max(1, int(round((axes[1] + grow) * k)))),
+                angle, 0, 360, 1, -1, shift=s)
     return m
 
 
@@ -590,22 +618,53 @@ def _gaze_margin(ap: np.ndarray, iris_c: Tuple[float, float],
     aperture — a fixed fraction of `iris_r` cannot, because how much
     sclera a drawing affords is a property of the drawing. Both signs are
     tested and the smaller kept, so gaze stays symmetric around rest.
+
+    REFERENCE: containment is judged against the aperture UNION THE IRIS AT
+    REST, not the aperture alone, and the reason is measurable. The iris is
+    an ellipse fitted to a hand-drawn disc and then rasterised, so even at
+    rest — where the artist unambiguously drew it inside the opening — it
+    reports 2…16 px outside the segmented rim (0.10…0.43% of its area).
+    A test that asks "any pixel outside the aperture" therefore fails at the
+    very first step for every eye on this art, breaks the loop, and returns
+    0.0 travel. That is exactly the zero this function used to emit, and it
+    is why `EyeGeometry.travel` was silently falling back to a guessed
+    fraction of `iris_r`.
+
+    Taking rest as the reference removes that fitting artifact WITHOUT
+    loosening anything: the iris is permitted only where it already
+    legitimately sits, and every pixel of NEW overhang is still counted.
+    At d=0 the spill is 0 by construction, so the walk starts from a true
+    zero and each half-pixel step is judged on its own merit.
+
+    The surviving tolerance is `IRIS_SPILL_MAX`, deliberately the SAME
+    budget the bake's containment invariant enforces. Two predicates that
+    disagree about what "inside" means is the defect being repaired here;
+    one rounded boundary pixel must not mean two different verdicts in two
+    different places.
+
+    `GAZE_MARGIN_SAFETY` still inflates the travelling ellipse, so the
+    eyeball is held a real margin clear of the painted lash rather than
+    being allowed to graze it.
     """
     safety = GAZE_MARGIN_SAFETY
     axes = (iris_axes[0] + safety, iris_axes[1] + safety)
-    inside = ap > 0
+    rest = _ellipse_mask(ap.shape, iris_c, axes, iris_angle)
+    allowed = (ap > 0) | (rest > 0)
+    budget = IRIS_SPILL_MAX
 
     def travel(ux: float, uy: float) -> float:
         best = 0.0
-        d = 0.5
+        d = GAZE_STEP
         while d <= cap:
             m = _ellipse_mask(ap.shape,
                               (iris_c[0] + ux * d, iris_c[1] + uy * d),
                               axes, iris_angle)
-            if np.any((m > 0) & ~inside):
+            area = max(1, int((m > 0).sum()))
+            spill = int(((m > 0) & ~allowed).sum())
+            if spill / area > budget:
                 break
             best = d
-            d += 0.5
+            d += GAZE_STEP
         return best
 
     dx = min(travel(-1.0, 0.0), travel(1.0, 0.0))
@@ -949,6 +1008,19 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
     # artist drew the lash, not the padded clip.
     gx, gy = _gaze_margin(ap, (ecx, ecy), (a, b_), float(ang),
                           cap=GAZE_MAX_FRAC * r_eq)
+    # A zero margin is a MEASUREMENT FAILURE, never a usable answer. Every
+    # drawn open eye affords some sclera, so a 0.0 here means the geometry
+    # feeding this function is wrong (that is precisely how the tinted-eye
+    # bug reached the renderer). Raising keeps it from being laundered into
+    # `EyeGeometry.travel`'s guessed fraction and shipped as working gaze.
+    if gx <= 0.0 or gy <= 0.0:
+        raise EyeMeasureError(
+            f"{label}: measured gaze range is ({gx:.2f}, {gy:.2f}) px — the "
+            f"fitted eyeball cannot move inside the drawn opening at all. "
+            f"The iris/aperture measurement is wrong, not the artwork; check "
+            f"the tone gain ({gain:.3f}) and the fitted axes "
+            f"({a:.1f}, {b_:.1f}) against an aperture of "
+            f"{int(ap.sum())} px.")
 
     return ArtEye(
         aperture=_contour_poly(ap_clip, (x0, y0), smooth=APERTURE_SMOOTH),
