@@ -716,8 +716,9 @@ def _gaze_margin(ap: np.ndarray, iris_c: Tuple[float, float],
     A test that asks "any pixel outside the aperture" therefore fails at the
     very first step for every eye on this art, breaks the loop, and returns
     0.0 travel. That is exactly the zero this function used to emit, and it
-    is why `EyeGeometry.travel` was silently falling back to a guessed
-    fraction of `iris_r`.
+    is why `EyeGeometry.gaze_offset` was silently falling back to a guessed
+    fraction of `iris_r`. That fallback now raises for a measured rig, so a
+    zero emitted here is a loud bake failure rather than a wrong animation.
 
     Taking rest as the reference removes that fitting artifact WITHOUT
     loosening anything: the iris is permitted only where it already
