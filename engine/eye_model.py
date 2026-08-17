@@ -61,8 +61,8 @@ MICROSACCADE_AMP = (0.015, 0.045)   # amplitude as fraction of iris radius ×3
 PUPIL_EMPHASIS_GAIN = 0.08          # up to +8% dilation on emphasis
 
 # Gaze travel for LEGACY rigs only (no measured sclera margin baked).
-# A v3 rig carries `gaze_range` measured from the artwork, and that always
-# wins — see EyeGeometry.travel. This fraction is retained purely so a rig
+# A v3 rig carries `gaze_box` measured from the artwork, and that always
+# wins — see EyeGeometry.gaze_offset. This fraction is retained purely so a rig
 # baked before the measurement still moves its eyes; applying it to this
 # art is what slid the iris onto the painted lash.
 LEGACY_GAZE_FRAC = 0.55
@@ -130,29 +130,42 @@ class EyeGeometry:
     socket_origin: Tuple[float, float] = (0.0, 0.0)
     lid_img: str = ""
     lid_origin: Tuple[float, float] = (0.0, 0.0)
-    # (dx, dy) px the eyeball may travel before its rim reaches the drawn
-    # opening — the artwork's OWN sclera margin, measured in art_eyes. On
-    # this art the iris nearly fills the eye, so the true margin is a few
-    # px; the generic 0.55·iris_r excursion used before was ~18 px, which
-    # drove the iris onto the lash and forced `socket_backdrop` to inpaint
-    # the whole ellipse, producing the brown radial smear behind the eye.
-    gaze_range: Tuple[float, float] = (0.0, 0.0)
+    # (left, right, up, down) px the eyeball may travel before its rim
+    # reaches the drawn opening — the artwork's OWN sclera margin, measured
+    # in art_eyes. On this art the iris nearly fills the eye, so the true
+    # margin is a few px; the generic 0.55·iris_r excursion used before was
+    # ~18 px, which drove the iris onto the lash and forced
+    # `socket_backdrop` to inpaint the whole ellipse, producing the brown
+    # radial smear behind the eye.
+    #
+    # FOUR values, not a symmetric pair: measured on this art, every eye is
+    # drawn with the eyeball hard against one corner of its opening (both
+    # characters look off to one side), so the sclera margin is 19–29 px on
+    # one side and 1–4 px on the other. A symmetric budget is min() of those
+    # and therefore ~0, which is why this used to measure as "frozen".
+    gaze_box: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
 
-    @property
-    def travel(self) -> Tuple[float, float]:
-        """Px the eyeball may move for a gaze of ±1, per axis.
+    def gaze_offset(self, gx: float, gy: float) -> Tuple[float, float]:
+        """Px the eyeball moves for a gaze of (gx, gy), each in [-1, 1].
 
-        Uses the MEASURED margin. The legacy fraction survives only for rigs
-        baked before that margin existed (`measured` is False), so an old rig
-        still animates instead of freezing its eyes open.
+        Resolves the gaze against the MEASURED per-direction margin, picking
+        the budget for the direction actually being looked in. The legacy
+        fraction survives only for rigs baked before that margin existed
+        (`measured` is False), so an old rig still animates instead of
+        freezing its eyes open.
 
-        Two things here were load-bearing bugs and are deliberately not
+        Three things here were load-bearing bugs and are deliberately not
         restored:
+
+        • The budget was symmetric — `min(left, right)` per axis — which on
+          this art is ~0, because every eye is drawn with its eyeball hard
+          against one corner of the opening. Correct artwork measured as a
+          frozen eye. Each direction now carries its own budget.
 
         • The test was `dx > 0 or dy > 0`, so a half-measured range — a real
           horizontal margin with a zero vertical one — was returned verbatim
           and the eye simply could not look up or down, silently. Both axes
-          must now be present for the measurement to be believed.
+          must be present for the measurement to be believed.
 
         • A MEASURED rig reporting zero is a bake defect, not an old rig.
           Quietly substituting 0.55·iris_r (~18 px on this art, against a
@@ -161,20 +174,26 @@ class EyeGeometry:
           eye. A measured rig with no margin now raises, because the rig is
           wrong and must be re-baked rather than animated wrongly.
         """
-        dx, dy = self.gaze_range
-        if dx > 0.0 and dy > 0.0:
-            return (float(dx), float(dy))
+        left, right, up, down = self.gaze_box
+        # Horizontal and vertical spans, not individual directions: a drawn
+        # eye legitimately affords zero travel toward the corner its eyeball
+        # already touches, so requiring every direction to be non-zero would
+        # reject correct art. What it cannot be is frozen on an AXIS.
+        if (left + right) > 0.0 and (up + down) > 0.0:
+            dx = float(gx) * (right if gx >= 0.0 else left)
+            dy = float(gy) * (down if gy >= 0.0 else up)
+            return (dx, dy)
         if self.measured:
             raise ValueError(
-                f"eye was measured from artwork but carries gaze_range "
-                f"{self.gaze_range} — re-bake the rig; refusing to guess an "
+                f"eye was measured from artwork but carries gaze_box "
+                f"{self.gaze_box} — re-bake the rig; refusing to guess an "
                 f"excursion that would paint the iris over the lash.")
         _log.warning(
             "[eye_model] legacy rig: no measured gaze margin, falling back "
             "to %.2f x iris_r (%.1f px). Re-bake for art-accurate gaze.",
             LEGACY_GAZE_FRAC, self.iris_r * LEGACY_GAZE_FRAC)
         r = self.iris_r * LEGACY_GAZE_FRAC
-        return (r, r)
+        return (float(gx) * r, float(gy) * r)
 
     @property
     def measured(self) -> bool:
@@ -214,7 +233,8 @@ class EyeGeometry:
             socket_origin=_pt2(d.get("socket_origin")),
             lid_img=str(d.get("lid_img") or ""),
             lid_origin=_pt2(d.get("lid_origin")),
-            gaze_range=_pt2(d.get("gaze_range")),
+            gaze_box=tuple(float(v) for v in
+                           (d.get("gaze_box") or (0.0, 0.0, 0.0, 0.0)))[:4],
         )
 
     @staticmethod
@@ -648,8 +668,15 @@ class EyeRasterizer:
         clip_mask = self._clip_mask
 
         # 1 · The eyeball, offset by gaze and clipped to the aperture.
-        # Gaze travels in iris radii, so it scales with the DRAWN eye.
-        gaze = np.array([state.eye_dx, state.eye_dy]) * geo.iris_r * 0.55
+        #
+        # The excursion is the MEASURED per-direction sclera margin. This
+        # line used to read `iris_r * 0.55` — the legacy guess, hardcoded
+        # here — which made the whole measured budget dead code: the bake
+        # computed it, the rig stored it, and the renderer ignored it and
+        # moved the iris ~18 px on art that affords a few. That is the smear
+        # behind the eye. `gaze_offset` resolves the sign per axis, because
+        # the margin is asymmetric on every eye of this art.
+        gaze = np.asarray(geo.gaze_offset(state.eye_dx, state.eye_dy))
         ic = np.asarray(geo.iris_c) + gaze
 
         ball = Image.new("RGBA", img.size, (0, 0, 0, 0))
