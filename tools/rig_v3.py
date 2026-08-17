@@ -79,6 +79,18 @@ FOREHEAD = 10
 # Bake tuning — all proportional to face height, never literal pixels.
 HEAD_DILATE = 0.02          # ×face_h, mask growth so hair is not clipped
 SEAM_BAND = 0.06            # ×face_h, complementary feather width
+# ×face_h, transparent breathing room kept around the head plate.
+#
+# HEAD_DILATE grows the MASK so hair is not clipped, but the crop used to
+# tighten straight back onto that grown mask's bbox — so hair landed on
+# row 0 with zero bleed room and engine/head_transform.py's single BICUBIC
+# resample (head bob, roll, 2.5D squash) sheared it off flat. The plate
+# must therefore be cropped LOOSER than the mask: the dilation itself,
+# plus room for the largest excursion the composed affine can produce.
+#
+# NB: distinct from the viseme-plate PLATE_MARGIN further down — one
+# module-level name for both would silently shadow this one.
+HEAD_PLATE_MARGIN = 0.05    # ×face_h, ≥ HEAD_DILATE + resample/rotation slack
 INPAINT_DILATE = 0.035      # ×face_h, feature-mask growth before inpaint
 OCCLUDER_RGB_DELTA = 26.0   # mean |ΔRGB| that counts as "different art"
 
@@ -224,6 +236,40 @@ def head_mask(lms: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     mask = _distance_blur(mask, HEAD_DILATE * fh)
     # A head mask may never claim transparent pixels.
     return (mask * (alpha > 0).astype(np.float32)).astype(np.float32)
+
+
+def crop_padded(arr: np.ndarray, x0: int, y0: int, x1: int, y1: int
+                ) -> np.ndarray:
+    """Crop [y0:y1, x0:x1] from an RGBA array, allowing the box to lie
+    partly OUTSIDE the source; anything outside is fully transparent.
+
+    Outside the source art there is nothing but transparency anyway, so a
+    box that overhangs is not an approximation — it is the exact answer,
+    and it lets the plate keep a real margin even when the character's
+    hair reaches the very top row of body.png.
+    """
+    h, w = arr.shape[:2]
+    out = np.zeros((y1 - y0, x1 - x0, arr.shape[2]), dtype=arr.dtype)
+    sx0, sy0 = max(0, x0), max(0, y0)
+    sx1, sy1 = min(w, x1), min(h, y1)
+    if sx1 > sx0 and sy1 > sy0:
+        out[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = arr[sy0:sy1, sx0:sx1]
+    return out
+
+
+def border_opaque_counts(arr: np.ndarray, thresh: int = 8
+                         ) -> Dict[str, int]:
+    """Opaque pixels touching each border of an RGBA plate.
+
+    Any non-zero count means the plate was cropped flush against real
+    art, so the resample in engine/head_transform.py has no pixels to
+    read past the edge and shears that art off — the "cut head".
+    """
+    a = arr[..., 3]
+    return {"top": int((a[0, :] > thresh).sum()),
+            "bottom": int((a[-1, :] > thresh).sum()),
+            "left": int((a[:, 0] > thresh).sum()),
+            "right": int((a[:, -1] > thresh).sum())}
 
 
 def complementary_ramps(mask: np.ndarray, seam_y: float, band_px: float
@@ -795,8 +841,13 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     ys, xs = np.nonzero(hmask > 0.01)
     if len(ys) == 0:
         raise BakeError(f"character '{rig.character}': empty head mask")
-    x0, x1 = int(xs.min()), int(xs.max()) + 1
-    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    # The crop is deliberately LOOSER than the mask by PLATE_MARGIN·face_h
+    # so the head transform has pixels to read past the art on every side.
+    # The box may overhang body.png; crop_padded() fills that with the
+    # transparency that is actually there.
+    margin = int(math.ceil(HEAD_PLATE_MARGIN * fh))
+    x0, x1 = int(xs.min()) - margin, int(xs.max()) + 1 + margin
+    y0, y1 = int(ys.min()) - margin, int(ys.max()) + 1 + margin
 
     seam_y = float(rig.joints.get("neck", (0.0, y1))[1])
     head_ramp, body_ramp = complementary_ramps(hmask, seam_y, SEAM_BAND * fh)
@@ -804,8 +855,17 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
 
     head_full = body_arr.copy().astype(np.float32)
     head_full[..., 3] = head_full[..., 3] * head_ramp
-    head_crop = Image.fromarray(
-        np.clip(head_full[y0:y1, x0:x1], 0, 255).astype(np.uint8))
+    head_arr = crop_padded(
+        np.clip(head_full, 0, 255).astype(np.uint8), x0, y0, x1, y1)
+    touch = border_opaque_counts(head_arr)
+    if any(touch.values()):
+        raise BakeError(
+            f"character '{rig.character}': head plate touches its own "
+            f"border ({touch}) even with a {margin}px margin — the head "
+            f"transform would shear that art off. The head mask is "
+            f"claiming pixels beyond the head (check clothing/limbs) or "
+            f"PLATE_MARGIN is too small for this artwork.")
+    head_crop = Image.fromarray(head_arr)
     head_crop.save(os.path.join(d, "head_canonical.png"))
 
     # landmarks in plate space
