@@ -373,6 +373,45 @@ LID_SEED_DRIFT_MAX = 30.0  # max|ΔRGB| the band may drift from its seed in
 LID_REF_ROWS = 3          # rows above the lash that seed the reference
 LID_REF_EMA = 0.35        # weight of a newly accepted row in the reference
 
+# ── Is the band SKIN at all? ─────────────────────────────────────────────
+#
+# Every bound above is RELATIVE — each row is compared to the rows already
+# accepted. That is what lets a real lid gradient through, but it is also
+# blind in one direction: if the walk STARTS on something that is not skin,
+# every later row agrees with it and the whole band is admitted. chintu is
+# exactly that case. His glasses rim crosses the face where the upper lid
+# would be, so the rows immediately above his opening are frame ink, the
+# seed is taken from that ink, and a band of it is accepted unanimously.
+#
+# The renderer then does the rest of the damage — and not by stretching, as
+# was assumed: `_lid_shear` runs at natural scale and CLAMPS, repeating the
+# strip's top row for the rest of the closure. Clamping a 10px ink strip
+# paints the whole lens with rim brown, which is the flat blob filling
+# chintu's glasses.
+#
+# So the walk needs one ABSOLUTE anchor, and the artwork already contains
+# the right one: the skin just BELOW the opening. It is the same face under
+# the same light and, for a character in glasses, behind the same lens — so
+# it carries the lens shading a forehead sample would miss, while being
+# unambiguously skin. Measured on the plate:
+#
+#            above the opening      below the opening
+#   chintu L (157, 88, 62)          (247,169,132)   ← lum ratio 0.56
+#   chintu R (105, 52, 36)          (157, 88, 62)   ← rim, then skin
+#   gudiya L (248,170,118)          (245,167,115)   ← lum ratio ~1.00
+#
+# gudiya's lid matches her cheek because it IS her lid; chintu's does not
+# because it is his frame. A row is therefore lid only while it stays
+# within these ratios of the below-eye reference, and the walk stops at the
+# first row that is not — so chintu keeps whatever genuine lens-shaded skin
+# lies between his lash and his frame, and stops at the frame.
+LID_SKIN_LUM_RATIO = 0.72     # a row this much darker than the cheek is not
+                              # eyelid skin — it is frame, brow or hair
+LID_SKIN_WARMTH_RATIO = 0.55  # nor is one this much less warm (R−B); ink is
+                              # dark AND desaturated, skin is neither
+LID_BELOW_SKIP_FRAC = 0.06    # ×ap_h, rows below the opening that are lower lash
+LID_BELOW_FRAC = 0.55         # ×ap_h, how far down the cheek reference reaches
+
 
 class EyeMeasureError(RuntimeError):
     """Measurement that cannot be trusted fails loudly (Law 1).
@@ -1379,6 +1418,68 @@ def _dirty(px: np.ndarray, skin: np.ndarray,
     return _ink(px, gain) | far
 
 
+def _lum1(t: Sequence[float]) -> float:
+    """Rec.601 luma of one RGB triple."""
+    return 0.299 * float(t[0]) + 0.587 * float(t[1]) + 0.114 * float(t[2])
+
+
+def _warmth(t: Sequence[float]) -> float:
+    """R−B. Skin is warm; frame ink, hair and shadow are not.
+
+    Paired with luma this separates lid from frame on chintu, where a
+    brightness test alone is marginal: his lens-shaded lid is dark but
+    stays warm, while the rim is dark AND neutral.
+    """
+    return float(t[0]) - float(t[2])
+
+
+def _lid_skin_below(rgb: np.ndarray, x0: int, x1: int, bot: int,
+                    ap_h: int, gain: float, label: str
+                    ) -> Tuple[np.ndarray, np.ndarray]:
+    """Real skin sampled BELOW the opening — the lower lid and cheek.
+
+    This is the absolute anchor the relative row bounds lack. It is taken
+    below the eye rather than above it because that is the one place on
+    this art guaranteed to be face skin: above the eye may be a brow, a
+    fringe or — on chintu — a glasses rim, and a reference taken there is
+    what let a band of frame ink be accepted as an eyelid.
+
+    Returns (rows, median) where `rows` are the clean sampled rows ordered
+    NEAREST-the-eye first, so a synthesized lid can keep the artist's
+    gradient by simply reversing them.
+    """
+    h = rgb.shape[0]
+    y0 = min(h, bot + max(1, int(round(ap_h * LID_BELOW_SKIP_FRAC))))
+    y1 = min(h, y0 + max(LID_BAND_MIN, int(round(ap_h * LID_BELOW_FRAC))))
+    rows: List[np.ndarray] = []
+    for yy in range(y0, y1):
+        row = rgb[yy, x0:x1]
+        if float(np.mean(_ink(row, gain))) > LID_ROW_INK_MAX:
+            continue
+        t = _row_tone(row, gain)
+        if t is not None:
+            rows.append(t)
+    if len(rows) < LID_BAND_MIN:
+        raise EyeMeasureError(
+            f"{label}: no clean skin below the eye opening (rows "
+            f"{y0}..{y1} are ink or transparent), so the lid has no "
+            f"reference tone to be judged against. The head crop is too "
+            f"tight below the eye, or the opening was mis-measured.")
+    return np.stack(rows), np.median(np.stack(rows), axis=0)
+
+
+def _lid_skin_like(tone: np.ndarray, ref: np.ndarray) -> bool:
+    """Is this row eyelid SKIN, judged against the below-eye reference?"""
+    ref_l, ref_w = _lum1(ref), _warmth(ref)
+    if ref_l <= 1.0:
+        return True                       # no usable reference; other bounds rule
+    if _lum1(tone) < LID_SKIN_LUM_RATIO * ref_l:
+        return False
+    if ref_w > 8.0 and _warmth(tone) < LID_SKIN_WARMTH_RATIO * ref_w:
+        return False
+    return True
+
+
 def lid_sprite(art: np.ndarray, eye: "ArtEye"
                ) -> Tuple[np.ndarray, Tuple[int, int]]:
     """The artist's own upper eyelid, as a strip that slides down to blink.
@@ -1460,21 +1561,26 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
     # cannot drag the seed dark, and the seed is the EYELID's tone — shaded
     # by whatever the artist put over it (a glasses lens, a fringe shadow) —
     # rather than the bright face skin further up.
+    # The below-eye skin is measured FIRST, because the seed itself has to be
+    # checked against it: on chintu the rows that would seed the reference
+    # are frame ink, and a seed taken from ink admits a band of ink.
+    below_rows, below_ref = _lid_skin_below(rgb, x0, x1, bot, ap_h, gain,
+                                           "lid sprite")
     seed: List[np.ndarray] = []
     for i in range(LID_REF_ROWS):
         yy = lid_bot - 1 - i
         if yy < 0:
             break
         t = _row_tone(rgb[yy, x0:x1], gain)
-        if t is not None:
+        if t is not None and _lid_skin_like(t, below_ref):
             seed.append(t)
     if seed:
         skin = np.median(np.stack(seed), axis=0)
-    else:                                   # the lid is entirely ink
-        blk = rgb[max(0, top - ap_h):top, x0:x1].reshape(-1, 3)
-        keep = blk[~_ink(blk, gain)]
-        skin = (np.median(keep, axis=0) if len(keep) >= SAMPLE_MIN_PX
-                else np.median(blk, axis=0))
+    else:
+        # Nothing above the lash is skin — the frame or brow sits straight on
+        # the eye. The honest reference is then the cheek's own tone, and the
+        # band below is synthesized from real sampled skin rather than ink.
+        skin = below_ref.copy()
 
     # 3 · Collect the band, the reference tracking what it accepts.
     #
@@ -1491,19 +1597,33 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
                 or float(np.mean(_ink(row, gain))) > LID_ROW_INK_MAX
                 or float(np.abs(tone - ref).max()) > LID_SKIN_DELTA
                 # …and against the seed, so small steps cannot add up
-                or float(np.abs(tone - skin).max()) > LID_SEED_DRIFT_MAX):
+                or float(np.abs(tone - skin).max()) > LID_SEED_DRIFT_MAX
+                # …and absolutely, against skin measured below the eye, so a
+                # walk that begins on a glasses rim cannot ratify itself
+                or not _lid_skin_like(tone, below_ref)):
             break
         ref = (1.0 - LID_REF_EMA) * ref + LID_REF_EMA * tone
         y -= 1
     if lid_bot - y < LID_BAND_MIN:
         # The brow, the frame or the hairline sits directly on the eye, so
-        # the artist drew no lid band to sample. The measured reference
-        # tone is still this eyelid's own skin, so a flat band of it is the
-        # honest answer — and it is bounded to LID_BAND_MIN rows, which the
-        # renderer edge-extends rather than stretching.
-        band = np.repeat(skin[None, None, :], LID_BAND_MIN, axis=0)
-        band = np.repeat(band, x1 - x0, axis=1)
-        src_y0 = max(0, lid_bot - LID_BAND_MIN)
+        # the artist drew no upper-lid band to sample. This is chintu: his
+        # glasses rim occupies the rows an eyelid would be cut from.
+        #
+        # The lid is therefore built from the skin BELOW the opening — his
+        # own lower lid and cheek, real sampled pixels carrying the real
+        # lens shading and the artist's own gradient, not a palette fill.
+        # The rows are reversed so the row that was nearest the eye ends up
+        # at the strip's BOTTOM, which is the leading edge: the skin that
+        # arrives at the closing edge is the skin that genuinely adjoins
+        # the opening, and the tone recedes away from it exactly as the
+        # artist painted it receding down the cheek.
+        #
+        # A flat fill was the old answer here, and it is why a closed eye
+        # read as a hole punched in the face: no gradient, no shading, one
+        # sampled tone stretched over the whole lens.
+        n = below_rows.shape[0]
+        band = np.repeat(below_rows[::-1][:, None, :], x1 - x0, axis=1)
+        src_y0 = max(0, lid_bot - n)
     else:
         band = rgb[y:lid_bot, x0:x1].copy()
         src_y0 = y
@@ -1527,6 +1647,28 @@ def lid_sprite(art: np.ndarray, eye: "ArtEye"
             good = band[r][~bad]
             fill = (np.median(good, axis=0) if len(good) >= 3 else tone)
             band[r][bad] = fill
+
+    # ── Invariant: the strip is SKIN ────────────────────────────────────
+    #
+    # The renderer clamps vertically, so the strip's TOP row is what fills a
+    # deep closure — one ink row there paints the entire eye with it. That
+    # is precisely how a 10px band of glasses rim became a flat brown blob
+    # over chintu's lenses while every gate still reported a pass. Both the
+    # top row and the band as a whole are therefore checked against the
+    # below-eye skin, and a failure stops the bake instead of shipping.
+    top_tone = _row_tone(band[0], gain)
+    if top_tone is None or not _lid_skin_like(top_tone, below_ref):
+        raise EyeMeasureError(
+            f"lid sprite top row is not skin (tone={None if top_tone is None else tuple(int(v) for v in top_tone)}, "
+            f"cheek reference={tuple(int(v) for v in below_ref)}). The "
+            f"renderer repeats this row for the whole closure, so it would "
+            f"paint the eye with it.")
+    ink_frac = float(np.mean(_ink(band.reshape(-1, 3), gain)))
+    if ink_frac > LID_ROW_DIRT_MAX:
+        raise EyeMeasureError(
+            f"lid sprite is {ink_frac * 100:.1f}% ink after de-inking "
+            f"(limit {LID_ROW_DIRT_MAX * 100:.0f}%) — the band is lash, "
+            f"brow or glasses frame, not eyelid skin.")
 
     strip = np.zeros((band.shape[0], x1 - x0, 4), dtype=np.uint8)
     strip[..., :3] = np.clip(band, 0, 255).astype(np.uint8)
