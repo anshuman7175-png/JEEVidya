@@ -277,6 +277,42 @@ GAZE_MARGIN_SAFETY = 1.0     # px kept between the iris rim and the lash
 GAZE_MAX_FRAC = 0.45         # ×iris_r, hard cap on measured travel
 GAZE_STEP = 0.5              # px per probe; the instrument must resolve this
 
+# ── Gaze travel is ASYMMETRIC, because the drawing is ────────────────────
+#
+# The margin used to be reduced to one number per axis with
+# `min(travel(-1), travel(+1))`, i.e. "how far can the eyeball move if it
+# must be able to move the same distance both ways". That assumes the
+# artist drew the eyeball CENTRED in its opening. Measured on this art, in
+# every one of the four eyes, they did not:
+#
+#     eye              slack left   slack right   (px of opening beyond
+#     chintu  eye_l        +3          +28         the fitted eyeball)
+#     chintu  eye_r       +29           +4
+#     gudiya  eye_l        +8          +19
+#     gudiya  eye_r       +27           +1
+#
+# Both characters are drawn LOOKING OFF TO ONE SIDE — the eyeball sits hard
+# against one corner with the whole sclera on the other side, which is
+# plainly visible in the artwork and is exactly how eyes are drawn. The
+# slack is on the outer canthus of each eye, mirrored between the pair.
+#
+# So the symmetric minimum is ~0 by construction: gudiya's eye_r can travel
+# 11.7 px toward the sclera and 0.0 px toward the corner it already touches,
+# and `min` reports 0.0. That single number then failed the bake for one
+# character and, before the guard existed, was laundered into a guessed
+# 0.55·iris_r excursion that drove the iris straight through the lash.
+#
+# The honest model is a per-direction budget: the eyeball may move as far as
+# the drawing affords in EACH direction, which for an eye already looking
+# right means a lot of room left and none right. Nothing is loosened — each
+# of the four numbers is the same containment walk that produced the pair.
+#
+# The bake still refuses a horizontally FROZEN eye, because that is a real
+# defect rather than a stylistic choice. Measured total horizontal span
+# (left+right) is 0.45–0.60×iris_r on all four eyes, so this floor sits ~3×
+# below every real measurement while a true zero still fails.
+GAZE_H_SPAN_MIN = 0.15       # ×iris_r, min (left+right) travel to be usable
+
 # Fractional bits for fixed-point ellipse rasterisation (see _ellipse_mask).
 # 3 bits = 1/8 px, comfortably finer than GAZE_STEP, which is the whole point:
 # an integer-rounded ellipse cannot measure a margin of a few px.
@@ -358,10 +394,13 @@ class ArtEye:
     iris_angle : ellipse rotation, degrees
     iris_r     : sqrt(a·b) — the single scale gaze/pupil maths uses
     colors     : sclera / iris / pupil / lash, each sampled in-region
-    gaze_range : (dx, dy) px the eyeball may travel before its rim
-                 reaches the drawn opening. This is the artwork's own
-                 sclera margin, so a gaze of ±1 is the largest look the
-                 drawing can hold rather than a guessed fraction.
+    gaze_box   : (left, right, up, down) px the eyeball may travel before
+                 its rim reaches the drawn opening. This is the artwork's
+                 own sclera margin, so a gaze of ±1 is the largest look the
+                 drawing can hold rather than a guessed fraction. Four
+                 numbers rather than two because the eyeball is drawn hard
+                 against one corner of its opening on every eye of this art
+                 (see GAZE_H_SPAN_MIN) — a symmetric budget is ~0 there.
     tone_gain  : this eye's own brightness scale relative to the level the
                  absolute tone gates are calibrated against (1.0 = drawn in
                  open light, 0.61 = measured behind chintu's tinted lens).
@@ -375,7 +414,7 @@ class ArtEye:
     iris_angle: float
     iris_r: float
     colors: Dict[str, Tuple[int, int, int]]
-    gaze_range: Tuple[float, float] = (0.0, 0.0)
+    gaze_box: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     tone_gain: float = 1.0
 
     def to_dict(self) -> dict:
@@ -386,7 +425,7 @@ class ArtEye:
             "iris_angle": self.iris_angle,
             "iris_r": self.iris_r,
             "colors": {k: list(v) for k, v in self.colors.items()},
-            "gaze_range": list(self.gaze_range),
+            "gaze_box": list(self.gaze_box),
             "tone_gain": self.tone_gain,
         }
 
@@ -400,6 +439,12 @@ class ArtEye:
             iris_r=float(d.get("iris_r", 0.0)),
             colors={k: tuple(int(c) for c in v)
                     for k, v in d.get("colors", {}).items()},
+            # Both of these were omitted, so a round-tripped record silently
+            # lost its measured gaze budget and its tone gain and reverted to
+            # the "unmeasured" defaults.
+            gaze_box=tuple(map(float, d.get("gaze_box",
+                                            (0.0, 0.0, 0.0, 0.0))))[:4],
+            tone_gain=float(d.get("tone_gain", 1.0)),
         )
 
 
@@ -649,14 +694,19 @@ def _repair_rim(ap: np.ndarray, max_depth: float) -> np.ndarray:
 
 def _gaze_margin(ap: np.ndarray, iris_c: Tuple[float, float],
                  iris_axes: Tuple[float, float], iris_angle: float,
-                 cap: float) -> Tuple[float, float]:
-    """Largest (dx, dy) the eyeball may travel and stay inside the opening.
+                 cap: float) -> Tuple[float, float, float, float]:
+    """Travel the eyeball may make in each direction: (left, right, up, down).
 
     Translating the iris ellipse and testing containment answers this
     directly from the art, and does so for the real, non-elliptical
     aperture — a fixed fraction of `iris_r` cannot, because how much
-    sclera a drawing affords is a property of the drawing. Both signs are
-    tested and the smaller kept, so gaze stays symmetric around rest.
+    sclera a drawing affords is a property of the drawing.
+
+    Each direction is reported SEPARATELY. Collapsing the four numbers into
+    a symmetric pair with `min` was a modelling error, not a safety margin:
+    this art draws both characters looking off to one side, so one direction
+    on each axis is legitimately ~0 and the minimum is therefore ~0 even
+    though 19–29 px of sclera sits on the other side. See GAZE_H_SPAN_MIN.
 
     REFERENCE: containment is judged against the aperture UNION THE IRIS AT
     REST, not the aperture alone, and the reason is measurable. The iris is
@@ -706,9 +756,8 @@ def _gaze_margin(ap: np.ndarray, iris_c: Tuple[float, float],
             d += GAZE_STEP
         return best
 
-    dx = min(travel(-1.0, 0.0), travel(1.0, 0.0))
-    dy = min(travel(0.0, -1.0), travel(0.0, 1.0))
-    return float(dx), float(dy)
+    return (float(travel(-1.0, 0.0)), float(travel(1.0, 0.0)),
+            float(travel(0.0, -1.0)), float(travel(0.0, 1.0)))
 
 
 def _tone_gain(V: np.ndarray, ap: np.ndarray, label: str) -> float:
@@ -1101,19 +1150,27 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
 
     # Gaze is bounded by the UNGROWN opening: travel must respect where the
     # artist drew the lash, not the padded clip.
-    gx, gy = _gaze_margin(ap, (ecx, ecy), (a, b_), float(ang),
-                          cap=GAZE_MAX_FRAC * r_eq)
-    # A zero margin is a MEASUREMENT FAILURE, never a usable answer. Every
-    # drawn open eye affords some sclera, so a 0.0 here means the geometry
-    # feeding this function is wrong (that is precisely how the tinted-eye
-    # bug reached the renderer). Raising keeps it from being laundered into
-    # `EyeGeometry.travel`'s guessed fraction and shipped as working gaze.
-    if gx <= 0.0 or gy <= 0.0:
+    g_l, g_r, g_u, g_d = _gaze_margin(ap, (ecx, ecy), (a, b_), float(ang),
+                                      cap=GAZE_MAX_FRAC * r_eq)
+    # A TOTALLY frozen eye is a measurement failure, never a usable answer,
+    # and it must not be laundered into a guessed fraction of iris_r — that
+    # is what drove the iris through the painted lash.
+    #
+    # But the test is on the SPAN, not on each direction. An eyeball drawn
+    # hard against one corner of its opening — which is how every eye in this
+    # art is drawn — genuinely affords 0 px toward that corner, and demanding
+    # travel in both directions would refuse correct artwork. What no drawn
+    # open eye can be is frozen on an axis: it must have sclera SOMEWHERE.
+    h_span, v_span = g_l + g_r, g_u + g_d
+    if h_span < GAZE_H_SPAN_MIN * r_eq or v_span <= 0.0:
         raise EyeMeasureError(
-            f"{label}: measured gaze range is ({gx:.2f}, {gy:.2f}) px — the "
-            f"fitted eyeball cannot move inside the drawn opening at all. "
-            f"The iris/aperture measurement is wrong, not the artwork; check "
-            f"the tone gain ({gain:.3f}) and the fitted axes "
+            f"{label}: measured gaze travel is left={g_l:.1f} right={g_r:.1f} "
+            f"up={g_u:.1f} down={g_d:.1f} px — horizontal span {h_span:.1f}px "
+            f"(needs ≥{GAZE_H_SPAN_MIN * r_eq:.1f}px = "
+            f"{GAZE_H_SPAN_MIN}×iris_r), vertical span {v_span:.1f}px (needs "
+            f">0). The fitted eyeball cannot move inside the drawn opening, "
+            f"so the iris/aperture measurement is wrong, not the artwork; "
+            f"check the tone gain ({gain:.3f}) and the fitted axes "
             f"({a:.1f}, {b_:.1f}) against an aperture of "
             f"{int(ap.sum())} px.")
 
@@ -1124,7 +1181,7 @@ def measure_eye(art: np.ndarray, seed: Tuple[float, float],
         iris_angle=float(ang),
         iris_r=r_eq,
         colors=colors,
-        gaze_range=(gx, gy),
+        gaze_box=(g_l, g_r, g_u, g_d),
         tone_gain=gain,
     )
 

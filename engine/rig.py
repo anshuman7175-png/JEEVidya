@@ -300,10 +300,15 @@ class HeadGeometry:
                 "lid_origin": _pt(art.get("lid_origin")),
                 # How far the eyeball may travel before its rim reaches the
                 # drawn opening, measured from the artwork's own sclera
-                # margin. Dropping this here is what made the renderer fall
-                # back to a generic 0.55·iris_r excursion and slide the iris
-                # onto the lash on art whose iris nearly fills the eye.
-                "gaze_range": _pt(art.get("gaze_range")),
+                # margin, as (left, right, up, down). Dropping this here is
+                # what made the renderer fall back to a generic 0.55·iris_r
+                # excursion and slide the iris onto the lash on art whose
+                # iris nearly fills the eye. Four values because the eyeball
+                # is drawn against one corner of the opening on this art, so
+                # a symmetric budget measures ~0 (see art_eyes
+                # GAZE_H_SPAN_MIN).
+                "gaze_box": [float(v) for v in
+                             (art.get("gaze_box") or (0.0, 0.0, 0.0, 0.0))],
             }
 
         socket = upper + list(reversed(lower))
