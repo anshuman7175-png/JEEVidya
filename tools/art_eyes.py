@@ -1451,20 +1451,50 @@ def _lid_skin_below(rgb: np.ndarray, x0: int, x1: int, bot: int,
     h = rgb.shape[0]
     y0 = min(h, bot + max(1, int(round(ap_h * LID_BELOW_SKIP_FRAC))))
     y1 = min(h, y0 + max(LID_BAND_MIN, int(round(ap_h * LID_BELOW_FRAC))))
+
+    # The run must be CONTIGUOUS from the eye outward, and every row in it
+    # must be skin.
+    #
+    # Taking every ink-free row in a fixed span instead is what broke this:
+    # chintu's span reaches his spectacle frame's lower rim and its metal
+    # highlight, which are not ink-heavy enough to be filtered by ink alone
+    # but are nowhere near skin. They were admitted, they dragged the
+    # reference dark, and — because the synthesized lid REVERSES these rows
+    # — the darkest of them became the strip's top row, i.e. the row the
+    # renderer repeats across a deep closure. That is the brown blob.
+    #
+    # Walking outward and stopping at the first non-skin row keeps exactly
+    # the artist's own lower-lid → cheek gradient and cannot cross onto the
+    # frame, the collar or the hair.
+    seed: List[np.ndarray] = []
+    for yy in range(y0, min(y1, y0 + LID_REF_ROWS)):
+        t = _row_tone(rgb[yy, x0:x1], gain)
+        if t is not None and float(np.mean(_ink(rgb[yy, x0:x1],
+                                               gain))) <= LID_ROW_INK_MAX:
+            seed.append(t)
+    if not seed:
+        raise EyeMeasureError(
+            f"{label}: the rows immediately below the eye opening "
+            f"({y0}..{y0 + LID_REF_ROWS}) are ink or transparent, so there "
+            f"is no lower-lid skin to anchor the lid against. The opening "
+            f"was mis-measured, or the crop is too tight below the eye.")
+    ref = np.median(np.stack(seed), axis=0)
+
     rows: List[np.ndarray] = []
     for yy in range(y0, y1):
         row = rgb[yy, x0:x1]
-        if float(np.mean(_ink(row, gain))) > LID_ROW_INK_MAX:
-            continue
         t = _row_tone(row, gain)
-        if t is not None:
-            rows.append(t)
+        if (t is None
+                or float(np.mean(_ink(row, gain))) > LID_ROW_INK_MAX
+                or not _lid_skin_like(t, ref)):
+            break
+        rows.append(t)
     if len(rows) < LID_BAND_MIN:
         raise EyeMeasureError(
-            f"{label}: no clean skin below the eye opening (rows "
-            f"{y0}..{y1} are ink or transparent), so the lid has no "
-            f"reference tone to be judged against. The head crop is too "
-            f"tight below the eye, or the opening was mis-measured.")
+            f"{label}: only {len(rows)} contiguous skin rows below the eye "
+            f"opening (searched {y0}..{y1}, need {LID_BAND_MIN}); the run "
+            f"stops on something that is not skin. The lid has no honest "
+            f"reference tone, so the bake stops rather than blink with ink.")
     return np.stack(rows), np.median(np.stack(rows), axis=0)
 
 
