@@ -47,7 +47,8 @@ from config import settings
 from engine.bone_engine import BoneEngine, PuppetPose
 from engine.rig import Rig, rig_dir
 from tools.face_qc import (GateResult, QCReport, at_phone_scale, color_mask,
-                           dilate_mask, fit_fixed_axes_ellipse, gate_av_sync,
+                           dilate_mask, fit_ellipse_best_component,
+                           gate_av_sync,
                            gate_blink_closure, gate_discriminability,
                            gate_registration, gate_rig_sanity,
                            gate_single_face, gate_sync_confidence,
@@ -114,13 +115,24 @@ def _iris_center(mask: np.ndarray,
     the eyeball ellipse, and the bake measured that ellipse's axes from
     the same artwork, so the centre is recovered by fitting the known
     axes to the arc.
+
+    Nor is it the LARGEST component's fit, which is what this used to be.
+    Measured on chintu's right eye (tools/dev_diag_iris5): the iris colour
+    also matches the shadow the brow casts just above the eye, and at the
+    render's tolerance the two touch, so the largest component is a 94×66
+    body fusing both while the true eyeball is the 43×47 component next to
+    it — the same size and shape as the left eye's, which has no such
+    shadow and passed all along. Area picked the fused blob and reported
+    ~30 px of "renderer error" for artwork the renderer had placed
+    correctly. Selection is therefore by RIM RESIDUAL: the component whose
+    edge really is an arc of an ellipse with these axes
+    (`fit_ellipse_best_component`), which is a property of the blob alone
+    and never consults the prediction being tested.
     """
     if axes is None:
         return None
-    blob = largest_component(mask)
-    if not blob.any():
-        return None
-    return fit_fixed_axes_ellipse(blob, (axes[0], axes[1]), axes[2])
+    got = fit_ellipse_best_component(mask, (axes[0], axes[1]), axes[2])
+    return None if got is None else got[0]
 
 
 def _iris_datum(plate: Image.Image, art: Dict[str, object],
