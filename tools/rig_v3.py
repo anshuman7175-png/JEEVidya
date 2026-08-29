@@ -208,21 +208,89 @@ def _box_blur(a: np.ndarray, k: int) -> np.ndarray:
     return a2[:a.shape[0], :a.shape[1]]
 
 
-def head_mask(lms: np.ndarray, alpha: np.ndarray) -> np.ndarray:
-    """§3.3 — head mask = convex hull of the face landmarks, extended UP
-    to the alpha silhouette top (so hair is included), then dilated by
-    0.02·face_h and softened with a distance ramp.
+def _flood_from_seed(region: np.ndarray, seed: np.ndarray,
+                     max_iter: int = 256) -> np.ndarray:
+    """Boolean flood fill of `region` from `seed` pixels.
 
-    Extending to the silhouette top rather than to the face oval is what
-    keeps a fringe or a topknot travelling with the head instead of being
-    left behind on the body.
+    Uses scipy connected-component labelling when available (exact,
+    fast); otherwise alternates full horizontal/vertical run-fills until
+    stable — the same deterministic, dependency-free scheme
+    tools/pose_stager.py uses for its border flood.
+    """
+    seed = seed & region
+    if not seed.any():
+        return seed
+    try:
+        from scipy.ndimage import label
+        lbl, n = label(region)
+        if n == 0:
+            return seed
+        hit = np.unique(lbl[seed])
+        hit = hit[hit > 0]
+        return np.isin(lbl, hit)
+    except Exception:
+        mask = seed.copy()
+
+        def _runs(m: np.ndarray, close: np.ndarray) -> np.ndarray:
+            h = close.shape[0]
+            run_id = np.cumsum(~close, axis=1)
+            out = m.copy()
+            for y in range(h):
+                rc = close[y]
+                if not rc.any():
+                    continue
+                rm = m[y] & rc
+                if not rm.any():
+                    continue
+                ids = run_id[y]
+                seeded = np.zeros(int(ids.max()) + 1, dtype=bool)
+                seeded[ids[rm]] = True
+                out[y] |= rc & seeded[ids]
+            return out
+
+        for _ in range(max_iter):
+            before = int(mask.sum())
+            mask = _runs(mask, region)
+            mask = _runs(mask.T, region.T).T
+            if int(mask.sum()) == before:
+                break
+        return mask
+
+
+def head_mask(lms: np.ndarray, alpha: np.ndarray,
+              seam_y: Optional[float] = None) -> np.ndarray:
+    """§3.3 / Perfection Plan Phase 1 — silhouette-connected head mask.
+
+    The face-landmark hull is correct as a SEED but wrong as a BOUNDARY:
+    a convex hull can never contain a ponytail, a hair spike, a bun or a
+    glasses arm, so those pixels stayed on the body and rendered as
+    orphan hair beside a moving head.
+
+    Construction:
+      • seed  = the face-oval hull (plus the silhouette-top extension,
+        which anchors the seed into the hair mass above the forehead)
+      • region = every non-transparent pixel ABOVE the neck seam
+      • mask  = flood fill of the region from the seed — every opaque
+        pixel connected to the face above the seam joins the head:
+        ponytails, spikes, buns, ears, glasses arms, all of it.
+
+    Silhouette edges stay HARD (the art's own antialiased alpha is the
+    edge); only the neck seam is feathered, later, by
+    `complementary_ramps` — feathering the silhouette here is what used
+    to halo the hair.
+
+    `seam_y` bounds the flood from below. Without it (legacy callers)
+    the flood runs over the whole silhouette, which is still strictly
+    more correct than the hull for hair, and the vertical ramp in
+    `complementary_ramps` remains the actual body/head split.
     """
     h, w = alpha.shape
     fh = face_height(lms)
     hull = convex_hull(_pick(lms, FACE_OVAL))
 
-    # Extend the hull upward to the silhouette top over the head's x-span
-    solid = alpha > 40
+    # Seed: face hull extended up to the silhouette top over the head's
+    # x-span, so the seed reaches into the hair mass above the forehead.
+    solid = alpha > 8
     rows = np.nonzero(solid.any(axis=1))[0]
     top_y = float(rows[0]) if len(rows) else 0.0
     x0, x1 = float(hull[:, 0].min()), float(hull[:, 0].max())
@@ -230,12 +298,20 @@ def head_mask(lms: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     extended = np.vstack([hull,
                           np.array([[x0 - pad_x, top_y],
                                     [x1 + pad_x, top_y]])])
-    hull = convex_hull(extended)
+    seed = polygon_mask(convex_hull(extended), (w, h)) > 0.5
 
-    mask = polygon_mask(hull, (w, h))
-    mask = _distance_blur(mask, HEAD_DILATE * fh)
-    # A head mask may never claim transparent pixels.
-    return (mask * (alpha > 0).astype(np.float32)).astype(np.float32)
+    # Region: opaque pixels above the neck seam. The seam bounds the
+    # flood so a head can never claim the torso through the neck.
+    region = solid.copy()
+    if seam_y is not None:
+        yy = np.arange(h)[:, None]
+        region &= yy < int(math.ceil(seam_y))
+
+    mask = _flood_from_seed(region, seed).astype(np.float32)
+    # A head mask may never claim transparent pixels — scale by the
+    # art's own alpha so the silhouette edge stays exactly as drawn.
+    return (mask * np.clip(alpha.astype(np.float32) / 255.0, 0.0, 1.0)
+            ).astype(np.float32)
 
 
 def crop_padded(arr: np.ndarray, x0: int, y0: int, x1: int, y1: int
