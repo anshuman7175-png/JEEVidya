@@ -93,6 +93,12 @@ SEAM_BAND = 0.06            # ×face_h, complementary feather width
 HEAD_PLATE_MARGIN = 0.05    # ×face_h, ≥ HEAD_DILATE + resample/rotation slack
 INPAINT_DILATE = 0.035      # ×face_h, feature-mask growth before inpaint
 OCCLUDER_RGB_DELTA = 26.0   # mean |ΔRGB| that counts as "different art"
+# Phase 1 orphan gate: alpha above this on a headless pose ABOVE the
+# neck seam band means head mass the flood failed to claim. 8 matches
+# the `solid` threshold in head_mask(), so the gate and the mask agree
+# on what counts as opaque — a stricter gate than mask would fail on
+# the art's own antialias fringe, a looser one would ship orphan hair.
+ORPHAN_ALPHA_THRESH = 8
 
 
 class BakeError(RuntimeError):
@@ -373,7 +379,7 @@ def seam_error(head_a: np.ndarray, body_a: np.ndarray) -> float:
     return float(np.max(np.abs(head_a + body_a - 1.0)))
 
 
-# ═══════════════════════════════════════════
+# ═══════���═══════════════════════════════════
 # §3.5 — head plate: crop + inpaint features out
 # ═══════════════════════════════════════════
 
@@ -913,7 +919,14 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     alpha = body_arr[..., 3]
 
     # ─── §3.5 head plate ──────────────────────────────────
-    hmask = head_mask(canon_lms, alpha)
+    # Perfection Plan Phase 1: the neck seam bounds the silhouette flood
+    # from below, so the head can never claim the torso through the neck.
+    # The joint exists before the mask (rig_builder derived it from the
+    # silhouette); only a rig with no neck joint at all falls back to an
+    # unbounded flood, where the vertical seam ramp remains the split.
+    _neck = rig.joints.get("neck")
+    hmask = head_mask(canon_lms, alpha,
+                      seam_y=float(_neck[1]) if _neck else None)
     ys, xs = np.nonzero(hmask > 0.01)
     if len(ys) == 0:
         raise BakeError(f"character '{rig.character}': empty head mask")
@@ -925,7 +938,7 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     x0, x1 = int(xs.min()) - margin, int(xs.max()) + 1 + margin
     y0, y1 = int(ys.min()) - margin, int(ys.max()) + 1 + margin
 
-    seam_y = float(rig.joints.get("neck", (0.0, y1))[1])
+    seam_y = float(_neck[1]) if _neck else float(y1)
     head_ramp, body_ramp = complementary_ramps(hmask, seam_y, SEAM_BAND * fh)
     report.seam_err = seam_error(head_ramp, body_ramp)
 
@@ -1155,14 +1168,38 @@ def _bake_pose(rig: Rig, name: str, img: Image.Image, pose_lms: np.ndarray,
                canon_seam_y: float, d: str) -> PoseEntry:
     """§3.3/§3.4 — headless body, head mask, and occluder for one pose."""
     arr = np.asarray(img.convert("RGBA"))
-    pmask = head_mask(pose_lms, arr[..., 3])
     # The seam follows the pose's own head: transforming the canonical
-    # seam keeps the band on the neck even when the pose leans.
+    # seam keeps the band on the neck even when the pose leans. It is
+    # computed BEFORE the mask so it can bound the silhouette flood
+    # (Phase 1) — an unbounded flood would claim the torso via the neck.
     seam_y = xform.apply_point(0.0, canon_seam_y)[1]
+    pmask = head_mask(pose_lms, arr[..., 3], seam_y=seam_y)
     head_ramp, body_ramp = complementary_ramps(pmask, seam_y, SEAM_BAND * fh)
 
     headless = arr.copy().astype(np.float32)
     headless[..., 3] = headless[..., 3] * body_ramp
+
+    # Phase 1 gate — zero orphan head pixels: above the seam band the
+    # body factor is exactly (1 − mask), so any opaque headless pixel up
+    # there is head mass the flood failed to claim (severed hair, a
+    # spike, a bun). That art would freeze in place while the head
+    # moves, which is precisely the "orphan hair" defect. Refuse to
+    # write the asset rather than ship it.
+    hl_a = np.clip(headless[..., 3], 0, 255)
+    gate_top = int(math.floor(seam_y - SEAM_BAND * fh))
+    if gate_top > 0:
+        orphan = int((hl_a[:gate_top, :] > ORPHAN_ALPHA_THRESH).sum())
+        if orphan:
+            oys, oxs = np.nonzero(hl_a[:gate_top, :] > ORPHAN_ALPHA_THRESH)
+            raise BakeError(
+                f"character '{rig.character}', pose '{name}': {orphan} "
+                f"opaque headless pixels above the neck seam "
+                f"(y<{gate_top}, bbox x[{oxs.min()},{oxs.max()}] "
+                f"y[{oys.min()},{oys.max()}]) — head mass the silhouette "
+                f"flood did not claim would render as orphan hair. The "
+                f"art above the seam is disconnected from the face "
+                f"silhouette (check for fully transparent gaps).")
+
     hl_rel = os.path.join("headless", f"{name}.png")
     Image.fromarray(np.clip(headless, 0, 255).astype(np.uint8)) \
         .save(os.path.join(d, hl_rel))
