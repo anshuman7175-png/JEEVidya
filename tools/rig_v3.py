@@ -313,11 +313,17 @@ def head_mask(lms: np.ndarray, alpha: np.ndarray,
         yy = np.arange(h)[:, None]
         region &= yy < int(math.ceil(seam_y))
 
-    mask = _flood_from_seed(region, seed).astype(np.float32)
-    # A head mask may never claim transparent pixels — scale by the
-    # art's own alpha so the silhouette edge stays exactly as drawn.
-    return (mask * np.clip(alpha.astype(np.float32) / 255.0, 0.0, 1.0)
-            ).astype(np.float32)
+    # The claim is BINARY: a flooded pixel belongs to the head entirely,
+    # its partner body factor (1 − mask) is exactly zero there. Scaling
+    # the claim by the art's alpha — the previous behaviour — split every
+    # ANTIALIASED silhouette pixel between the two layers: an edge pixel
+    # with α=200 kept headless alpha 200·(1−200/255)≈43, so the orphan
+    # gate correctly refused the whole silhouette fringe of every head.
+    # The plate still respects the art's transparency by construction,
+    # because compositing multiplies the ramp by the art's OWN alpha —
+    # a binary claim on an α=64 pixel yields a plate pixel of α=64,
+    # exactly as drawn, and a body pixel of α=0, exactly as required.
+    return _flood_from_seed(region, seed).astype(np.float32)
 
 
 def crop_padded(arr: np.ndarray, x0: int, y0: int, x1: int, y1: int
@@ -1179,26 +1185,41 @@ def _bake_pose(rig: Rig, name: str, img: Image.Image, pose_lms: np.ndarray,
     headless = arr.copy().astype(np.float32)
     headless[..., 3] = headless[..., 3] * body_ramp
 
-    # Phase 1 gate — zero orphan head pixels: above the seam band the
-    # body factor is exactly (1 − mask), so any opaque headless pixel up
-    # there is head mass the flood failed to claim (severed hair, a
-    # spike, a bun). That art would freeze in place while the head
-    # moves, which is precisely the "orphan hair" defect. Refuse to
-    # write the asset rather than ship it.
+    # Phase 1 gate — zero orphan head pixels. Above the seam band the
+    # body factor is exactly (1 − mask), so an opaque headless pixel up
+    # there is either:
+    #   • BODY mass that legitimately rises past the neck — a raised
+    #     hand, a pencil held beside the face (gudiya's neutral pose) —
+    #     which is CONNECTED down through the seam to the torso and
+    #     must stay on the headless body so it moves with the body, or
+    #   • ORPHAN head mass the silhouette flood failed to claim
+    #     (severed hair, a spike, a bun) — DISCONNECTED from everything
+    #     below the seam. That art would freeze in place while the head
+    #     moves, which is precisely the "orphan hair" defect.
+    # The two are separated by the same deterministic flood the mask
+    # uses: claim everything connected to the below-seam body; whatever
+    # opaque mass remains above the gate line is a true orphan. Refuse
+    # to write the asset rather than ship it.
     hl_a = np.clip(headless[..., 3], 0, 255)
     gate_top = int(math.floor(seam_y - SEAM_BAND * fh))
     if gate_top > 0:
-        orphan = int((hl_a[:gate_top, :] > ORPHAN_ALPHA_THRESH).sum())
+        opaque = hl_a > ORPHAN_ALPHA_THRESH
+        yy = np.arange(opaque.shape[0])[:, None]
+        body_seed = opaque & (yy >= gate_top)
+        body_connected = _flood_from_seed(opaque, body_seed)
+        orphan_mask = opaque & (yy < gate_top) & ~body_connected
+        orphan = int(orphan_mask.sum())
         if orphan:
-            oys, oxs = np.nonzero(hl_a[:gate_top, :] > ORPHAN_ALPHA_THRESH)
+            oys, oxs = np.nonzero(orphan_mask)
             raise BakeError(
                 f"character '{rig.character}', pose '{name}': {orphan} "
                 f"opaque headless pixels above the neck seam "
                 f"(y<{gate_top}, bbox x[{oxs.min()},{oxs.max()}] "
                 f"y[{oys.min()},{oys.max()}]) — head mass the silhouette "
-                f"flood did not claim would render as orphan hair. The "
-                f"art above the seam is disconnected from the face "
-                f"silhouette (check for fully transparent gaps).")
+                f"flood did not claim, disconnected from the body below "
+                f"the seam, would render as orphan hair. The art above "
+                f"the seam is disconnected from the face silhouette "
+                f"(check for fully transparent gaps).")
 
     hl_rel = os.path.join("headless", f"{name}.png")
     Image.fromarray(np.clip(headless, 0, 255).astype(np.uint8)) \
