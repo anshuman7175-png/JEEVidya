@@ -339,6 +339,14 @@ def matte_background(img: Image.Image, src_name: str = "?") -> Image.Image:
     (gradient backdrop), the gradient fallback re-mattes the frame.
     Both paths end with speck removal and a ~1 px feather."""
     rgba = np.asarray(img.convert("RGBA")).copy()
+
+    # Pre-matted fast path: if the frame is ALREADY transparent RGBA, preserve it
+    a = rgba[..., 3]
+    if (a <= 8).mean() >= MIN_BG_FRAC:
+        fx, fy = _bbox_frac_of_mask(a > 8)
+        if fx < FLAT_PASS_MAX_FRAC and fy < FLAT_PASS_MAX_FRAC:
+            return img.convert("RGBA")
+
     rgb = rgba[..., :3].astype(np.int16)
 
     background = _flat_background_mask(rgb)
@@ -464,7 +472,6 @@ def stage_character(name: str, manifest: dict) -> bool:
     visemes_out = os.path.join(char_dir, "visemes_src")
     os.makedirs(poses_out, exist_ok=True)
     os.makedirs(visemes_out, exist_ok=True)
-    _clean_pngs(poses_out)
     _clean_pngs(visemes_out)
 
     missing = [letter for letter in sorted(vmap)
@@ -490,14 +497,16 @@ def stage_character(name: str, manifest: dict) -> bool:
             out = out.resize(canvas_size, Image.LANCZOS)
         matted[letter] = out
 
-    # 1 · body.png + poses/neutral.png ← the single shared body pose
-    body = matted[pose_letter]
-    body.save(os.path.join(char_dir, "body.png"))
-    body.save(os.path.join(poses_out, "neutral.png"))
-    print(f"  [Stage] {name}: body.png + poses/neutral.png ← "
-          f"{pose_letter}.png (matted, bbox "
-          f"{alpha_bbox_fraction(body)[0] * 100:.0f}%×"
-          f"{alpha_bbox_fraction(body)[1] * 100:.0f}%)")
+    # 1 · body.png + poses/neutral.png ← only write if not already present
+    body_target = os.path.join(char_dir, "body.png")
+    neutral_target = os.path.join(poses_out, "neutral.png")
+    if not os.path.exists(body_target):
+        body = matted[pose_letter]
+        body.save(body_target)
+    if not os.path.exists(neutral_target):
+        body = matted[pose_letter]
+        body.save(neutral_target)
+    print(f"  [Stage] {name}: body.png + poses/neutral.png verified")
 
     # 2 · Viseme sources — NEVER staged as poses (they are mouths on one
     #     unchanged body; staging them as poses would flap the mouth on

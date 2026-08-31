@@ -16,9 +16,6 @@ __pycache__/
 *.gif
 output/
 
-assets/*
-!assets/mouth_art/
-!assets/mouth_art/**
 output/
 tests/golden/
 combined_code.txt
