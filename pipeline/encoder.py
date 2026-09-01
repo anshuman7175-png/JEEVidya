@@ -189,7 +189,7 @@ def concat_and_mux(segment_paths: list, audio_path: Optional[str],
     cmd += ["-c:v", "copy"]
     if has_audio:
         cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
-    cmd += ["-movflags", "+faststart", output_path]
+    cmd += [output_path]
 
     log_path = output_path + ".ffmpeg.log"
     with open(log_path, "wb") as log:

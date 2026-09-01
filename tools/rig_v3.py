@@ -78,7 +78,7 @@ FOREHEAD = 10
 
 # Bake tuning — all proportional to face height, never literal pixels.
 HEAD_DILATE = 0.02          # ×face_h, mask growth so hair is not clipped
-SEAM_BAND = 0.06            # ×face_h, complementary feather width
+SEAM_BAND = 0.14            # ×face_h, complementary feather width (smooth neck transition)
 # ×face_h, transparent breathing room kept around the head plate.
 #
 # HEAD_DILATE grows the MASK so hair is not clipped, but the crop used to
@@ -90,7 +90,7 @@ SEAM_BAND = 0.06            # ×face_h, complementary feather width
 #
 # NB: distinct from the viseme-plate PLATE_MARGIN further down — one
 # module-level name for both would silently shadow this one.
-HEAD_PLATE_MARGIN = 0.05    # ×face_h, ≥ HEAD_DILATE + resample/rotation slack
+HEAD_PLATE_MARGIN = 0.35    # ×face_h, ample margin for rotation and hair shear
 INPAINT_DILATE = 0.035      # ×face_h, feature-mask growth before inpaint
 OCCLUDER_RGB_DELTA = 26.0   # mean |ΔRGB| that counts as "different art"
 # Phase 1 orphan gate: alpha above this on a headless pose ABOVE the
@@ -391,33 +391,42 @@ def seam_error(head_a: np.ndarray, body_a: np.ndarray) -> float:
 
 def feature_mask(lms: np.ndarray, size: Tuple[int, int], fh: float,
                  eye_apertures: Optional[Sequence[Sequence[
-                     Tuple[float, float]]]] = None) -> np.ndarray:
+                     Tuple[float, float]]]] = None,
+                 img_arr: Optional[np.ndarray] = None) -> np.ndarray:
     """Binary mask of the painted features to remove before inpainting.
 
     The outer lip ring always comes out: leaving its ink outline behind
     is what produced ghost lips under the parametric mouth.
-
-    The EYES are only removed when `eye_apertures` is absent. With a
-    measured aperture we keep the artwork's eyes, because the artwork's
-    eye IS the resting eye (§3.5b) — big painted iris, sclera, lashes and
-    catchlight, all of it better than anything drawn procedurally. Only
-    the small region the gaze actually displaces gets replaced, at render
-    time, clipped to that aperture.
-
-    This also repairs a real defect: MediaPipe's lid hull is ~2.5× too
-    small on stylised art, so inpainting it did not remove the eye — it
-    smeared a grey blur across the top of an otherwise perfect iris while
-    leaving the rest of the eye visible underneath the procedural patch.
     """
     w, h = size
     m = np.zeros((h, w), dtype=np.float32)
-    m = np.maximum(m, polygon_mask(convex_hull(_pick(lms, LIP_OUTER)), (w, h)))
+    lip_pts = _pick(lms, LIP_OUTER)
+    m = np.maximum(m, polygon_mask(convex_hull(lip_pts), (w, h)))
+    
+    # Expand mouth coverage to capture wide anime smirks and dimples
+    min_x, max_x = float(lip_pts[:, 0].min()), float(lip_pts[:, 0].max())
+    min_y, max_y = float(lip_pts[:, 1].min()), float(lip_pts[:, 1].max())
+    cx, cy = (min_x + max_x) / 2.0, (min_y + max_y) / 2.0
+    
+    if img_arr is not None and img_arr.shape[:2] == (h, w):
+        x0 = max(0, int(cx - 0.22 * fh))
+        x1 = min(w, int(cx + 0.22 * fh))
+        y0 = max(0, int(min_y - 0.03 * fh))
+        y1 = min(h, int(max_y + 0.05 * fh))
+        roi = img_arr[y0:y1, x0:x1, :3].astype(np.float32)
+        luma = 0.299 * roi[..., 0] + 0.587 * roi[..., 1] + 0.114 * roi[..., 2]
+        corners = np.concatenate([luma[:3, :3].flatten(), luma[:3, -3:].flatten(),
+                                  luma[-3:, :3].flatten(), luma[-3:, -3:].flatten()])
+        skin_luma = np.median(corners) if len(corners) else 180.0
+        is_crease = luma < (skin_luma - 16.0)
+        m[y0:y1, x0:x1] = np.maximum(m[y0:y1, x0:x1], is_crease.astype(np.float32))
+
     if not eye_apertures:
         for idx in (LID_UPPER_L + LID_LOWER_L, LID_UPPER_R + LID_LOWER_R):
             m = np.maximum(m, polygon_mask(convex_hull(_pick(lms, idx)),
                                            (w, h)))
-    grown = _distance_blur(m, INPAINT_DILATE * fh)
-    return (grown > 0.35).astype(np.uint8)
+    grown = _distance_blur(m, max(INPAINT_DILATE * fh, 0.025 * fh))
+    return (grown > 0.25).astype(np.uint8)
 
 
 def inpaint(rgba: Image.Image, mask: np.ndarray) -> Image.Image:
@@ -1011,7 +1020,8 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
 
     # Eyes stay in the plate: the artwork's eye IS the resting eye.
     fmask = feature_mask(plate_lms, head_crop.size, fh,
-                         eye_apertures=(art_l.aperture, art_r.aperture))
+                         eye_apertures=(art_l.aperture, art_r.aperture),
+                         img_arr=crop_arr)
     plate = inpaint(head_crop, fmask)
     plate.save(os.path.join(d, "head_plate.png"))
 

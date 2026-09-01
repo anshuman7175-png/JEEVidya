@@ -292,7 +292,7 @@ class HeadAssembly:
         self.eyes.composite(plate, ch.eyes)
         art = self.art.get(ch.viseme_class)
         self.mouth.composite(plate, ch.mouth, ch.viseme_class,
-                             art=art, art_weight=0.55 if art else 0.0)
+                             art=art, art_weight=0.85 if art else 0.0)
         return plate
 
     def _draw_brows(self, plate: Image.Image, brow: float) -> None:
