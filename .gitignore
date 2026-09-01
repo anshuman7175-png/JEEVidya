@@ -19,3 +19,5 @@ output/
 output/
 tests/golden/
 combined_code.txt
+scratch/
+face_qc_report.json

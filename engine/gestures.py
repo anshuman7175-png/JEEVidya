@@ -87,76 +87,76 @@ GESTURES: Dict[str, Gesture] = {g.name: g for g in [
 
     # 1 · nod — emphatic agreement (double-dip)
     _g("nod", 700,
-       head_nod=[Key(0, 0), Key(0.22, 0.9, "back"), Key(0.45, -0.15),
-                 Key(0.68, 0.55), Key(1, 0, "sine")]),
+       head_nod=[Key(0, 0), Key(0.22, 0.45, "back"), Key(0.45, -0.08),
+                 Key(0.68, 0.28), Key(1, 0, "sine")]),
 
     # 2 · shake — disagreement (yaw wobble)
     _g("shake", 800,
-       head_yaw=[Key(0, 0), Key(0.2, -0.6, "sine"), Key(0.45, 0.55, "sine"),
-                 Key(0.7, -0.35, "sine"), Key(1, 0, "sine")]),
+       head_yaw=[Key(0, 0), Key(0.2, -0.35, "sine"), Key(0.45, 0.30, "sine"),
+                 Key(0.7, -0.18, "sine"), Key(1, 0, "sine")]),
 
-    # 3 · point — "dekho!" whole body drives toward the content
+    # 3 · point — "dekho!" body gently directs toward the content
     _g("point", 900,
-       lean=[Key(0, 0), Key(0.25, 7, "back"), Key(0.75, 6), Key(1, 0, "sine")],
-       head_yaw=[Key(0, 0), Key(0.25, 0.5, "back"), Key(0.75, 0.45), Key(1, 0)],
-       head_tilt=[Key(0, 0), Key(0.3, -4, "back"), Key(1, 0, "sine")],
-       brow=[Key(0, 0), Key(0.25, 0.7, "cubic"), Key(0.8, 0.6), Key(1, 0)]),
+       lean=[Key(0, 0), Key(0.25, 3.2, "back"), Key(0.75, 2.8), Key(1, 0, "sine")],
+       head_yaw=[Key(0, 0), Key(0.25, 0.25, "back"), Key(0.75, 0.22), Key(1, 0)],
+       head_tilt=[Key(0, 0), Key(0.3, -2.0, "back"), Key(1, 0, "sine")],
+       brow=[Key(0, 0), Key(0.25, 0.45, "cubic"), Key(0.8, 0.38), Key(1, 0)]),
 
-    # 4 · shrug — "pata nahi" pop up + tilt
+    # 4 · shrug — "pata nahi" subtle pop + tilt
     _g("shrug", 750,
-       bounce=[Key(0, 0), Key(0.3, -18, "back"), Key(0.7, -14), Key(1, 0, "sine")],
-       squash=[Key(0, 0), Key(0.3, 0.05, "back"), Key(1, 0, "sine")],
-       head_tilt=[Key(0, 0), Key(0.35, 9, "back"), Key(0.75, 8), Key(1, 0, "sine")],
-       brow=[Key(0, 0), Key(0.3, 1.0, "cubic"), Key(0.8, 0.9), Key(1, 0)]),
+       bounce=[Key(0, 0), Key(0.3, -7.0, "back"), Key(0.7, -5.0), Key(1, 0, "sine")],
+       squash=[Key(0, 0), Key(0.3, 0.02, "back"), Key(1, 0, "sine")],
+       head_tilt=[Key(0, 0), Key(0.35, 4.2, "back"), Key(0.75, 3.5), Key(1, 0, "sine")],
+       brow=[Key(0, 0), Key(0.3, 0.5, "cubic"), Key(0.8, 0.4), Key(1, 0)]),
 
     # 5 · lean_in — interest on questions
     _g("lean_in", 900,
-       lean=[Key(0, 0), Key(0.35, 6, "cubic"), Key(0.8, 5.5), Key(1, 0, "sine")],
-       head_nod=[Key(0, 0), Key(0.35, 0.3, "cubic"), Key(1, 0, "sine")]),
+       lean=[Key(0, 0), Key(0.35, 2.8, "cubic"), Key(0.8, 2.5), Key(1, 0, "sine")],
+       head_nod=[Key(0, 0), Key(0.35, 0.16, "cubic"), Key(1, 0, "sine")]),
 
-    # 6 · recoil — "arre!?" snap back then settle forward
+    # 6 · recoil — "arre!?" gentle take then settle
     _g("recoil", 850,
-       lean=[Key(0, 0), Key(0.15, -9, "back"), Key(0.55, -6),
+       lean=[Key(0, 0), Key(0.15, -3.5, "back"), Key(0.55, -2.2),
              Key(1, 0, "elastic")],
-       head_nod=[Key(0, 0), Key(0.15, -0.6, "back"), Key(1, 0, "elastic")],
-       brow=[Key(0, 0), Key(0.12, 1.0, "cubic"), Key(0.7, 0.9), Key(1, 0)],
-       squash=[Key(0, 0), Key(0.15, 0.04, "back"), Key(1, 0, "sine")]),
+       head_nod=[Key(0, 0), Key(0.15, -0.25, "back"), Key(1, 0, "elastic")],
+       brow=[Key(0, 0), Key(0.12, 0.55, "cubic"), Key(0.7, 0.45), Key(1, 0)],
+       squash=[Key(0, 0), Key(0.15, 0.015, "back"), Key(1, 0, "sine")]),
 
-    # 7 · facepalm — head drops, brows crash
+    # 7 · facepalm — head drops, brows soften
     _g("facepalm", 1100,
-       head_nod=[Key(0, 0), Key(0.3, 1.0, "cubic"), Key(0.8, 0.95),
+       head_nod=[Key(0, 0), Key(0.3, 0.45, "cubic"), Key(0.8, 0.40),
                  Key(1, 0, "sine")],
-       head_tilt=[Key(0, 0), Key(0.3, -6, "cubic"), Key(1, 0, "sine")],
-       brow=[Key(0, 0), Key(0.25, -1.0, "cubic"), Key(0.85, -0.9), Key(1, 0)],
-       lean=[Key(0, 0), Key(0.35, -3, "cubic"), Key(1, 0, "sine")]),
+       head_tilt=[Key(0, 0), Key(0.3, -2.8, "cubic"), Key(1, 0, "sine")],
+       brow=[Key(0, 0), Key(0.25, -0.5, "cubic"), Key(0.85, -0.45), Key(1, 0)],
+       lean=[Key(0, 0), Key(0.35, -1.5, "cubic"), Key(1, 0, "sine")]),
 
-    # 8 · jump — squash-anticipate → leap → land with overshoot
+    # 8 · jump — subtle hop with soft landing
     _g("jump", 900,
-       bounce=[Key(0, 0), Key(0.15, 8, "quad"), Key(0.45, -55, "back"),
-               Key(0.8, 4, "cubic"), Key(1, 0, "elastic")],
-       squash=[Key(0, 0), Key(0.15, -0.10, "quad"), Key(0.45, 0.08, "back"),
-               Key(0.8, -0.06, "cubic"), Key(1, 0, "elastic")],
-       brow=[Key(0, 0), Key(0.4, 0.8, "cubic"), Key(1, 0)]),
+       bounce=[Key(0, 0), Key(0.15, 3.5, "quad"), Key(0.45, -12.0, "back"),
+               Key(0.8, 1.8, "cubic"), Key(1, 0, "elastic")],
+       squash=[Key(0, 0), Key(0.15, -0.025, "quad"), Key(0.45, 0.02, "back"),
+               Key(0.8, -0.015, "cubic"), Key(1, 0, "elastic")],
+       brow=[Key(0, 0), Key(0.4, 0.45, "cubic"), Key(1, 0)]),
 
     # 9 · think_tilt — slow contemplative tilt, gaze drifts up
     _g("think_tilt", 1500,
-       head_tilt=[Key(0, 0), Key(0.3, 10, "sine"), Key(0.8, 9), Key(1, 0, "sine")],
-       head_yaw=[Key(0, 0), Key(0.35, -0.3, "sine"), Key(0.8, -0.25), Key(1, 0)],
-       head_nod=[Key(0, 0), Key(0.3, -0.25, "sine"), Key(1, 0, "sine")],
-       brow=[Key(0, 0), Key(0.3, 0.4, "sine"), Key(1, 0)]),
+       head_tilt=[Key(0, 0), Key(0.3, 4.5, "sine"), Key(0.8, 4.0), Key(1, 0, "sine")],
+       head_yaw=[Key(0, 0), Key(0.35, -0.16, "sine"), Key(0.8, -0.12), Key(1, 0)],
+       head_nod=[Key(0, 0), Key(0.3, -0.12, "sine"), Key(1, 0, "sine")],
+       brow=[Key(0, 0), Key(0.3, 0.25, "sine"), Key(1, 0)]),
 
-    # 10 · excited_bounce — two happy hops
+    # 10 · excited_bounce — two happy little hops
     _g("excited_bounce", 1000,
-       bounce=[Key(0, 0), Key(0.2, -26, "back"), Key(0.4, 0, "quad"),
-               Key(0.6, -20, "back"), Key(0.85, 0, "quad"), Key(1, 0)],
-       squash=[Key(0, 0), Key(0.2, 0.05, "back"), Key(0.4, -0.05, "quad"),
-               Key(0.6, 0.04, "back"), Key(1, 0, "sine")],
-       head_tilt=[Key(0, 0), Key(0.3, -5, "sine"), Key(0.7, 5, "sine"),
+       bounce=[Key(0, 0), Key(0.2, -8.0, "back"), Key(0.4, 0, "quad"),
+               Key(0.6, -6.0, "back"), Key(0.85, 0, "quad"), Key(1, 0)],
+       squash=[Key(0, 0), Key(0.2, 0.018, "back"), Key(0.4, -0.015, "quad"),
+               Key(0.6, 0.012, "back"), Key(1, 0, "sine")],
+       head_tilt=[Key(0, 0), Key(0.3, -2.2, "sine"), Key(0.7, 2.2, "sine"),
                   Key(1, 0, "sine")]),
 
     # micro_nod — tiny speech-beat bob (internal, amplitude-scaled)
     _g("micro_nod", 200,
-       head_nod=[Key(0, 0), Key(0.4, 0.22, "cubic"), Key(1, 0, "sine")]),
+       head_nod=[Key(0, 0), Key(0.4, 0.12, "cubic"), Key(1, 0, "sine")]),
 ]}
 
 # ═══════════════════════════════════════════
@@ -189,9 +189,8 @@ for _gname, _pname in GESTURE_POSE_MAP.items():
 # ═══════════════════════════════════════════
 
 KEYWORD_TRIGGERS: Dict[str, str] = {
-    # pointing / directing attention
-    "dekho": "point", "देखो": "point", "yeh": "point", "यह": "point",
-    "ये": "point", "iska": "point", "isko": "point", "look": "point",
+    # pointing / directing attention (major words only, NOT filler pronouns)
+    "dekho": "point", "देखो": "point",
     # amazement / surprise
     "arre": "recoil", "अरे": "recoil", "wow": "recoil", "waah": "recoil",
     "वाह": "recoil", "amazing": "recoil", "kya!": "recoil", "oho": "recoil",
@@ -204,14 +203,9 @@ KEYWORD_TRIGGERS: Dict[str, str] = {
     # thinking
     "socho": "think_tilt", "सोचो": "think_tilt", "hmm": "think_tilt",
     "shayad": "think_tilt", "शायद": "think_tilt",
-    # ease / dismissal
-    "easy": "shrug", "simple": "shrug", "bas": "shrug", "बस": "shrug",
     # excitement
     "mast": "excited_bounce", "superb": "excited_bounce",
     "jhakkas": "excited_bounce", "great": "excited_bounce",
-    # attention
-    "suno": "lean_in", "सुनो": "lean_in", "chalo": "lean_in", "चलो": "lean_in",
-    "batao": "lean_in", "बताओ": "lean_in",
     # impact words
     "boom": "jump", "dhamaka": "jump", "धमाका": "jump", "blast": "jump",
     # exasperation

@@ -78,7 +78,7 @@ FOREHEAD = 10
 
 # Bake tuning — all proportional to face height, never literal pixels.
 HEAD_DILATE = 0.02          # ×face_h, mask growth so hair is not clipped
-SEAM_BAND = 0.14            # ×face_h, complementary feather width (smooth neck transition)
+SEAM_BAND = 0.04            # ×face_h, tight neck collar feather (stays above chest/hoodie)
 # ×face_h, transparent breathing room kept around the head plate.
 #
 # HEAD_DILATE grows the MASK so hair is not clipped, but the crop used to
@@ -397,35 +397,30 @@ def feature_mask(lms: np.ndarray, size: Tuple[int, int], fh: float,
 
     The outer lip ring always comes out: leaving its ink outline behind
     is what produced ghost lips under the parametric mouth.
+    Chin shading, cheek blush, and philtrum are 100% preserved.
     """
     w, h = size
     m = np.zeros((h, w), dtype=np.float32)
     lip_pts = _pick(lms, LIP_OUTER)
     m = np.maximum(m, polygon_mask(convex_hull(lip_pts), (w, h)))
-    
-    # Expand mouth coverage to capture wide anime smirks and dimples
-    min_x, max_x = float(lip_pts[:, 0].min()), float(lip_pts[:, 0].max())
-    min_y, max_y = float(lip_pts[:, 1].min()), float(lip_pts[:, 1].max())
-    cx, cy = (min_x + max_x) / 2.0, (min_y + max_y) / 2.0
-    
-    if img_arr is not None and img_arr.shape[:2] == (h, w):
-        x0 = max(0, int(cx - 0.22 * fh))
-        x1 = min(w, int(cx + 0.22 * fh))
-        y0 = max(0, int(min_y - 0.03 * fh))
-        y1 = min(h, int(max_y + 0.05 * fh))
-        roi = img_arr[y0:y1, x0:x1, :3].astype(np.float32)
-        luma = 0.299 * roi[..., 0] + 0.587 * roi[..., 1] + 0.114 * roi[..., 2]
-        corners = np.concatenate([luma[:3, :3].flatten(), luma[:3, -3:].flatten(),
-                                  luma[-3:, :3].flatten(), luma[-3:, -3:].flatten()])
-        skin_luma = np.median(corners) if len(corners) else 180.0
-        is_crease = luma < (skin_luma - 16.0)
-        m[y0:y1, x0:x1] = np.maximum(m[y0:y1, x0:x1], is_crease.astype(np.float32))
+
+    # Erase resting mouth corners/dimples so smaller visemes don't leave dark holes on cheeks
+    # Left corner is 61, Right corner is 291
+    if len(lms) > 291:
+        pt_l = lms[61]
+        pt_r = lms[291]
+        r_corner = max(4.0, 0.055 * fh)
+        yy, xx = np.ogrid[:h, :w]
+        circ_l = ((xx - pt_l[0])**2 + (yy - pt_l[1])**2 <= r_corner**2).astype(np.float32)
+        circ_r = ((xx - pt_r[0])**2 + (yy - pt_r[1])**2 <= r_corner**2).astype(np.float32)
+        m = np.maximum(m, np.maximum(circ_l, circ_r))
 
     if not eye_apertures:
         for idx in (LID_UPPER_L + LID_LOWER_L, LID_UPPER_R + LID_LOWER_R):
             m = np.maximum(m, polygon_mask(convex_hull(_pick(lms, idx)),
                                            (w, h)))
-    grown = _distance_blur(m, max(INPAINT_DILATE * fh, 0.025 * fh))
+    # Tight dilation strictly over the lip boundary (0.015*fh) so chin crease & cheeks are 100% preserved
+    grown = _distance_blur(m, max(4.0, 0.015 * fh))
     return (grown > 0.25).astype(np.uint8)
 
 
@@ -1317,7 +1312,17 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
             continue
         path = os.path.join(src, fname)
         img = Image.open(path).convert("RGBA")
-        lms = detect(img)
+        iw, ih = img.size
+        # Head crop detection first: prevents MediaPipe from mistaking puckered lips for the nose
+        hc_x0, hc_x1 = int(0.12 * iw), int(0.88 * iw)
+        hc_y0, hc_y1 = int(0.0), int(0.68 * ih)
+        head_crop = img.crop((hc_x0, hc_y0, hc_x1, hc_y1))
+        lms_hc = detect(head_crop)
+        if lms_hc is not None and len(lms_hc) >= N_LANDMARKS:
+            lms = [(p[0] + hc_x0, p[1] + hc_y0) for p in lms_hc]
+        else:
+            lms = detect(img)
+
         if lms is None or len(lms) < N_LANDMARKS:
             raise BakeError(
                 f"character '{rig.character}': face detection FAILED on "
@@ -1341,41 +1346,51 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
         rig.mouth_targets[vis] = fit_mouth_target(outer_n, inner_n, seed)
         targets += 1
 
-        # ── the plate cut: full-fidelity artist mouth with smooth skin feather ──
+        # ── the plate cut: anatomical super-ellipse crop with smoothstep feather ──
         ratio = canon_fh / local_fh          # source px → canonical px
-        
-        # Mouth center in source frame
+
+        # Outer lip boundaries → centre
         min_x, max_x = float(outer_px[:, 0].min()), float(outer_px[:, 0].max())
         min_y, max_y = float(outer_px[:, 1].min()), float(outer_px[:, 1].max())
-        cx = (min_x + max_x) / 2.0
-        cy = (min_y + max_y) / 2.0
-        
-        # Generous envelope so full lips, teeth, oral cavity, and corners survive:
-        w_span = max(max_x - min_x, 0.40 * local_fh) + 0.16 * local_fh
-        h_span = max(max_y - min_y, 0.25 * local_fh) + 0.12 * local_fh
-        
-        x0 = max(0.0, cx - w_span / 2.0)
-        x1 = min(float(img.size[0]), cx + w_span / 2.0)
-        y0 = max(0.0, cy - h_span / 2.0)
-        y1 = min(float(img.size[1]), cy + h_span / 2.0)
-        
-        crop = img.crop((int(x0), int(y0), int(math.ceil(x1)), int(math.ceil(y1))))
+
+        # Puckered cartoon visemes have tall upper lips: shift center up and use generous top padding
+        if "ROUNDED" in vis:
+            cx = (min_x + max_x) / 2.0
+            cy = (min_y + max_y) / 2.0 - 0.02 * local_fh
+            pad_top = 0.075 * local_fh
+            pad_bot = 0.040 * local_fh
+            pad_side = 0.065 * local_fh
+        else:
+            cx = (min_x + max_x) / 2.0
+            cy = (min_y + max_y) / 2.0
+            pad_top = 0.050 * local_fh
+            pad_bot = 0.035 * local_fh
+            pad_side = 0.060 * local_fh
+
+        x0 = int(cx - (max_x - min_x) / 2.0 - pad_side)
+        x1 = int(cx + (max_x - min_x) / 2.0 + pad_side)
+        y0 = int(cy - (max_y - min_y) / 2.0 - pad_top)
+        y1 = int(cy + (max_y - min_y) / 2.0 + pad_bot)
+
+        crop = img.crop((x0, y0, x1, y1))
         cw, ch = crop.size
-        
-        # Smooth elliptical mask for seamless skin blending
-        mask = np.zeros((ch, cw), dtype=np.float32)
+
+        # Soft anatomical super-ellipse mask (order 3.5: solid inner 75%, smoothstep falloff in outer 25%)
         yy, xx = np.ogrid[:ch, :cw]
-        norm_dist = np.sqrt(((xx - cw/2.0) / (cw/2.0))**2 + ((yy - ch/2.0) / (ch/2.0))**2)
-        mask = np.clip((1.0 - norm_dist) / 0.35, 0.0, 1.0)
-        mask_img = Image.fromarray((mask * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(3.0))
-        
+        rx = cw / 2.0
+        ry = ch / 2.0
+        norm_dist = ((np.abs(xx - rx) / rx)**3.5 + (np.abs(yy - ry) / ry)**3.5)**(1.0 / 3.5)
+
+        mask = np.clip((1.0 - norm_dist) / 0.25, 0.0, 1.0)
+        mask = mask * mask * (3 - 2 * mask)  # smoothstep
+
         crop_arr = np.array(crop).copy()
-        crop_arr[..., 3] = (crop_arr[..., 3].astype(np.float32) * (np.array(mask_img, dtype=np.float32) / 255.0)).astype(np.uint8)
-        
+        crop_arr[..., 3] = (mask * 255).astype(np.uint8)
+
         out_w = max(2, int(round(cw * ratio)))
         out_h = max(2, int(round(ch * ratio)))
         plate = Image.fromarray(crop_arr).resize((out_w, out_h), Image.LANCZOS)
-        
+
         rel = os.path.join("visemes", f"{vis}.png")
         plate.save(os.path.join(d, rel))
         rig.visemes[vis] = rel

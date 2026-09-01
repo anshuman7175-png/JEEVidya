@@ -44,11 +44,11 @@ def blend_frames() -> int:
 
 def min_hold_frames() -> int:
     """Minimum frames a pose must be HELD (fully committed) before
-    another transition may begin: ~1.33 s at the current FPS. This is
+    another transition may begin: ~3.0 s at the current FPS. This is
     the single strongest guard against rapid pose thrash: no matter how
     many gestures fire, the body settles into each stance long enough
     to be READ."""
-    return max(4, round(_fps() * 1.33))
+    return max(4, round(_fps() * 3.0))
 
 # Default pose when nothing is triggered
 DEFAULT_POSE = "neutral"

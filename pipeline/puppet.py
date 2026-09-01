@@ -362,7 +362,7 @@ class PuppetActor:
                        and p != self._speak_pose]
             if options:
                 self._speak_pose = options[self._rng.randrange(len(options))]
-            self._next_speak_pose_ms = t_ms + self._rng.uniform(4500, 7500)
+            self._next_speak_pose_ms = t_ms + self._rng.uniform(6000, 10000)
         return self._speak_pose
 
     # --- pose synthesis ---
@@ -533,12 +533,12 @@ class PuppetActor:
         pose.eye_dx = sdx
         pose.eye_dy = sdy
 
-        # 6 · Critically-damped smoothing — TUNED rates:
-        #     tilt/brow slowed for natural, less snappy feel
-        pose.head_yaw = self._chase("head_yaw", yaw_target, 0.18)
-        pose.lean = self._chase("lean", pose.lean, 0.22)
-        pose.head_tilt = self._chase("head_tilt", pose.head_tilt, 0.18)  # was 0.25
-        pose.brow = self._chase("brow", pose.brow, 0.20)  # was 0.3
+        # 6 · Critically-damped smoothing — organic, film-grade rate:
+        #     tilt/brow/lean slowed for natural, organic feel (no snapping)
+        pose.head_yaw = self._chase("head_yaw", yaw_target, 0.12)
+        pose.lean = self._chase("lean", pose.lean, 0.14)
+        pose.head_tilt = self._chase("head_tilt", pose.head_tilt, 0.12)
+        pose.brow = self._chase("brow", pose.brow, 0.14)
 
         # 7 · Record what was actually RENDERED (not what the matrix said)
         #     so the coherence audit can catch a face whose expression
