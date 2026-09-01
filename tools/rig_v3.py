@@ -1341,37 +1341,43 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
         rig.mouth_targets[vis] = fit_mouth_target(outer_n, inner_n, seed)
         targets += 1
 
-        # ── the plate cut, from the SAME measurement ──────
+        # ── the plate cut: full-fidelity artist mouth with smooth skin feather ──
         ratio = canon_fh / local_fh          # source px → canonical px
-        margin = PLATE_MARGIN * local_fh
-        x0 = max(0.0, outer_px[:, 0].min() - margin)
-        y0 = max(0.0, outer_px[:, 1].min() - margin)
-        x1 = min(float(img.size[0]), outer_px[:, 0].max() + margin)
-        y1 = min(float(img.size[1]), outer_px[:, 1].max() + margin)
-        crop = img.crop((int(x0), int(y0),
-                         int(math.ceil(x1)), int(math.ceil(y1))))
-        out_w = max(2, int(round(crop.size[0] * ratio)))
-        out_h = max(2, int(round(crop.size[1] * ratio)))
-        plate = crop.resize((out_w, out_h), Image.LANCZOS)
-
-        # Lip polygon in the resized plate's own space, grown slightly so
-        # the artwork's ink outline survives, then feathered ~1.2 px.
-        sx = out_w / max(1e-6, (x1 - x0))
-        sy = out_h / max(1e-6, (y1 - y0))
-        poly = np.stack([(outer_px[:, 0] - x0) * sx,
-                         (outer_px[:, 1] - y0) * sy], axis=1)
-        mask = polygon_mask(poly, (out_w, out_h))
-        mask = _distance_blur(mask, PLATE_DILATE * canon_fh)
-        mask_img = Image.fromarray(
-            (np.clip(mask, 0.0, 1.0) * 255).astype(np.uint8))
-        mask_img = mask_img.filter(ImageFilter.GaussianBlur(PLATE_FEATHER_PX))
-
-        arr = np.asarray(plate).copy()
-        arr[..., 3] = (arr[..., 3].astype(np.float32) *
-                       (np.asarray(mask_img, dtype=np.float32) / 255.0)
-                       ).astype(np.uint8)
+        
+        # Mouth center in source frame
+        min_x, max_x = float(outer_px[:, 0].min()), float(outer_px[:, 0].max())
+        min_y, max_y = float(outer_px[:, 1].min()), float(outer_px[:, 1].max())
+        cx = (min_x + max_x) / 2.0
+        cy = (min_y + max_y) / 2.0
+        
+        # Generous envelope so full lips, teeth, oral cavity, and corners survive:
+        w_span = max(max_x - min_x, 0.40 * local_fh) + 0.16 * local_fh
+        h_span = max(max_y - min_y, 0.25 * local_fh) + 0.12 * local_fh
+        
+        x0 = max(0.0, cx - w_span / 2.0)
+        x1 = min(float(img.size[0]), cx + w_span / 2.0)
+        y0 = max(0.0, cy - h_span / 2.0)
+        y1 = min(float(img.size[1]), cy + h_span / 2.0)
+        
+        crop = img.crop((int(x0), int(y0), int(math.ceil(x1)), int(math.ceil(y1))))
+        cw, ch = crop.size
+        
+        # Smooth elliptical mask for seamless skin blending
+        mask = np.zeros((ch, cw), dtype=np.float32)
+        yy, xx = np.ogrid[:ch, :cw]
+        norm_dist = np.sqrt(((xx - cw/2.0) / (cw/2.0))**2 + ((yy - ch/2.0) / (ch/2.0))**2)
+        mask = np.clip((1.0 - norm_dist) / 0.35, 0.0, 1.0)
+        mask_img = Image.fromarray((mask * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(3.0))
+        
+        crop_arr = np.array(crop).copy()
+        crop_arr[..., 3] = (crop_arr[..., 3].astype(np.float32) * (np.array(mask_img, dtype=np.float32) / 255.0)).astype(np.uint8)
+        
+        out_w = max(2, int(round(cw * ratio)))
+        out_h = max(2, int(round(ch * ratio)))
+        plate = Image.fromarray(crop_arr).resize((out_w, out_h), Image.LANCZOS)
+        
         rel = os.path.join("visemes", f"{vis}.png")
-        Image.fromarray(arr).save(os.path.join(d, rel))
+        plate.save(os.path.join(d, rel))
         rig.visemes[vis] = rel
         plates += 1
     return plates, targets
