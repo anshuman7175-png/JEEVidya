@@ -78,7 +78,8 @@ FOREHEAD = 10
 
 # Bake tuning — all proportional to face height, never literal pixels.
 HEAD_DILATE = 0.02          # ×face_h, mask growth so hair is not clipped
-SEAM_BAND = 0.04            # ×face_h, tight neck collar feather (stays above chest/hoodie)
+SEAM_BAND = 0.04            # ×face_h, neck collar feather band
+HEAD_NECK_OVERLAP = 0.12    # ×face_h, solid neck extension overlap below seam so head never detaches
 # ×face_h, transparent breathing room kept around the head plate.
 #
 # HEAD_DILATE grows the MASK so hair is not clipped, but the crop used to
@@ -264,31 +265,14 @@ def _flood_from_seed(region: np.ndarray, seed: np.ndarray,
 
 
 def head_mask(lms: np.ndarray, alpha: np.ndarray,
-              seam_y: Optional[float] = None) -> np.ndarray:
-    """§3.3 / Perfection Plan Phase 1 — silhouette-connected head mask.
+              seam_y: Optional[float] = None,
+              overlap: float = 0.0) -> np.ndarray:
+    """§3.3/§3.4 — binary claim on every pixel belonging to the head.
 
-    The face-landmark hull is correct as a SEED but wrong as a BOUNDARY:
-    a convex hull can never contain a ponytail, a hair spike, a bun or a
-    glasses arm, so those pixels stayed on the body and rendered as
-    orphan hair beside a moving head.
-
-    Construction:
-      • seed  = the face-oval hull (plus the silhouette-top extension,
-        which anchors the seed into the hair mass above the forehead)
-      • region = every non-transparent pixel ABOVE the neck seam
-      • mask  = flood fill of the region from the seed — every opaque
-        pixel connected to the face above the seam joins the head:
-        ponytails, spikes, buns, ears, glasses arms, all of it.
-
-    Silhouette edges stay HARD (the art's own antialiased alpha is the
-    edge); only the neck seam is feathered, later, by
-    `complementary_ramps` — feathering the silhouette here is what used
-    to halo the hair.
-
-    `seam_y` bounds the flood from below. Without it (legacy callers)
-    the flood runs over the whole silhouette, which is still strictly
-    more correct than the hull for hair, and the vertical ramp in
-    `complementary_ramps` remains the actual body/head split.
+    Grows the landmark convex hull upwards to the top of solid art so
+    high hair/caps are seeded, then floods connected opaque pixels.
+    Bounded below by seam_y + overlap: the neck flood extends into the collar
+    so head tilts and rotations maintain a 100% solid neck connection.
     """
     h, w = alpha.shape
     fh = face_height(lms)
@@ -306,23 +290,12 @@ def head_mask(lms: np.ndarray, alpha: np.ndarray,
                                     [x1 + pad_x, top_y]])])
     seed = polygon_mask(convex_hull(extended), (w, h)) > 0.5
 
-    # Region: opaque pixels above the neck seam. The seam bounds the
-    # flood so a head can never claim the torso through the neck.
+    # Region: opaque pixels above the neck seam + overlap
     region = solid.copy()
     if seam_y is not None:
         yy = np.arange(h)[:, None]
-        region &= yy < int(math.ceil(seam_y))
+        region &= yy < int(math.ceil(seam_y + overlap))
 
-    # The claim is BINARY: a flooded pixel belongs to the head entirely,
-    # its partner body factor (1 − mask) is exactly zero there. Scaling
-    # the claim by the art's alpha — the previous behaviour — split every
-    # ANTIALIASED silhouette pixel between the two layers: an edge pixel
-    # with α=200 kept headless alpha 200·(1−200/255)≈43, so the orphan
-    # gate correctly refused the whole silhouette fringe of every head.
-    # The plate still respects the art's transparency by construction,
-    # because compositing multiplies the ramp by the art's OWN alpha —
-    # a binary claim on an α=64 pixel yields a plate pixel of α=64,
-    # exactly as drawn, and a body pixel of α=0, exactly as required.
     return _flood_from_seed(region, seed).astype(np.float32)
 
 
@@ -347,12 +320,7 @@ def crop_padded(arr: np.ndarray, x0: int, y0: int, x1: int, y1: int
 
 def border_opaque_counts(arr: np.ndarray, thresh: int = 8
                          ) -> Dict[str, int]:
-    """Opaque pixels touching each border of an RGBA plate.
-
-    Any non-zero count means the plate was cropped flush against real
-    art, so the resample in engine/head_transform.py has no pixels to
-    read past the edge and shears that art off — the "cut head".
-    """
+    """Opaque pixels touching each border of an RGBA plate."""
     a = arr[..., 3]
     return {"top": int((a[0, :] > thresh).sum()),
             "bottom": int((a[-1, :] > thresh).sum()),
@@ -360,22 +328,28 @@ def border_opaque_counts(arr: np.ndarray, thresh: int = 8
             "right": int((a[:, -1] > thresh).sum())}
 
 
-def complementary_ramps(mask: np.ndarray, seam_y: float, band_px: float
-                        ) -> Tuple[np.ndarray, np.ndarray]:
-    """§3.3 — the energy-preserving seam.
+def complementary_ramps(mask: np.ndarray, seam_y: float, band_px: float,
+                        overlap_px: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
+    """§3.3 — solid overlap seam.
 
-    Returns (head_alpha_factor, body_alpha_factor) with the identity
-    `head + body == 1` at every pixel, by construction: the body factor
-    is literally `1 - head`. The head factor is the head mask crossed
-    with a vertical ramp that falls from 1 to 0 across the neck band, so
-    neither layer can contribute extra energy and no seam line exists.
+    Returns (head_alpha_factor, body_alpha_factor).
+    The head plate includes a solid neck stump extending past seam_y into the collar.
+    The headless body maintains solid torso/collar coverage below seam_y.
+    Combined opacity across the neck connection is >= 1.0 everywhere, guaranteeing
+    100% solid opacity with zero semi-transparency or detachment under head rotation.
     """
     h, w = mask.shape
     ys = np.arange(h, dtype=np.float32)[:, None]
     band = max(1.0, float(band_px))
-    ramp = np.clip(((seam_y + band) - ys) / (2.0 * band), 0.0, 1.0)
-    head = np.clip(mask * ramp, 0.0, 1.0)
-    return head.astype(np.float32), (1.0 - head).astype(np.float32)
+
+    overlap_y = seam_y + overlap_px
+    ramp_head = np.clip((overlap_y - ys) / band, 0.0, 1.0)
+    head = np.clip(mask * ramp_head, 0.0, 1.0)
+
+    ramp_body = np.clip((ys - (seam_y - band)) / band, 0.0, 1.0)
+    body = np.clip(ramp_body, 0.0, 1.0)
+
+    return head.astype(np.float32), body.astype(np.float32)
 
 
 def seam_error(head_a: np.ndarray, body_a: np.ndarray) -> float:
@@ -936,7 +910,8 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     # unbounded flood, where the vertical seam ramp remains the split.
     _neck = rig.joints.get("neck")
     hmask = head_mask(canon_lms, alpha,
-                      seam_y=float(_neck[1]) if _neck else None)
+                      seam_y=float(_neck[1]) if _neck else None,
+                      overlap=HEAD_NECK_OVERLAP * fh)
     ys, xs = np.nonzero(hmask > 0.01)
     if len(ys) == 0:
         raise BakeError(f"character '{rig.character}': empty head mask")
@@ -949,7 +924,8 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     y0, y1 = int(ys.min()) - margin, int(ys.max()) + 1 + margin
 
     seam_y = float(_neck[1]) if _neck else float(y1)
-    head_ramp, body_ramp = complementary_ramps(hmask, seam_y, SEAM_BAND * fh)
+    head_ramp, body_ramp = complementary_ramps(
+        hmask, seam_y, SEAM_BAND * fh, overlap_px=HEAD_NECK_OVERLAP * fh)
     report.seam_err = seam_error(head_ramp, body_ramp)
 
     head_full = body_arr.copy().astype(np.float32)
@@ -1184,8 +1160,10 @@ def _bake_pose(rig: Rig, name: str, img: Image.Image, pose_lms: np.ndarray,
     # computed BEFORE the mask so it can bound the silhouette flood
     # (Phase 1) — an unbounded flood would claim the torso via the neck.
     seam_y = xform.apply_point(0.0, canon_seam_y)[1]
-    pmask = head_mask(pose_lms, arr[..., 3], seam_y=seam_y)
-    head_ramp, body_ramp = complementary_ramps(pmask, seam_y, SEAM_BAND * fh)
+    pmask = head_mask(pose_lms, arr[..., 3], seam_y=seam_y,
+                      overlap=HEAD_NECK_OVERLAP * fh)
+    head_ramp, body_ramp = complementary_ramps(
+        pmask, seam_y, SEAM_BAND * fh, overlap_px=HEAD_NECK_OVERLAP * fh)
 
     headless = arr.copy().astype(np.float32)
     headless[..., 3] = headless[..., 3] * body_ramp
