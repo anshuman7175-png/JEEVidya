@@ -43,11 +43,11 @@ from PIL import Image
 
 from engine.registration import SimilarityTransform
 
-# 2.5D gains — conservative; QC registration tolerances gate any change.
-YAW_PARALLAX_GAIN = 0.32     # feature shift as fraction of half-width per unit yaw
-YAW_SQUASH_GAIN = 0.10       # horizontal cos-squash at |yaw| = 1
-NOD_SQUASH_GAIN = 0.06       # vertical squash at |nod| = 1
-NOD_SHIFT_GAIN = 0.18        # vertical feature shift per unit nod (× half-height)
+# 2.5D gains — subtle and stable; keep head firmly anchored to the neck
+YAW_PARALLAX_GAIN = 0.10     # feature shift as fraction of half-width per unit yaw
+YAW_SQUASH_GAIN = 0.03       # horizontal cos-squash at |yaw| = 1
+NOD_SQUASH_GAIN = 0.02       # vertical squash at |nod| = 1
+NOD_SHIFT_GAIN = 0.03        # vertical feature shift per unit nod (× half-height)
 
 # Affine quantization for the transform cache: 1/64 px translation,
 # ~0.0005 rad rotation. Below any perceptible threshold at 1080p.

@@ -334,7 +334,8 @@ def complementary_ramps(mask: np.ndarray, seam_y: float, band_px: float,
 
     Returns (head_alpha_factor, body_alpha_factor).
     The head plate includes a solid neck stump extending past seam_y into the collar.
-    The headless body maintains solid torso/collar coverage below seam_y.
+    The headless body maintains solid torso/collar coverage below seam_y, while
+    preserving 100% of non-head art (e.g. raised hands, pencil) above the seam.
     Combined opacity across the neck connection is >= 1.0 everywhere, guaranteeing
     100% solid opacity with zero semi-transparency or detachment under head rotation.
     """
@@ -347,16 +348,15 @@ def complementary_ramps(mask: np.ndarray, seam_y: float, band_px: float,
     head = np.clip(mask * ramp_head, 0.0, 1.0)
 
     ramp_body = np.clip((ys - (seam_y - band)) / band, 0.0, 1.0)
-    body = np.clip(ramp_body, 0.0, 1.0)
+    body = np.clip((1.0 - mask) + mask * ramp_body, 0.0, 1.0)
 
     return head.astype(np.float32), body.astype(np.float32)
 
 
 def seam_error(head_a: np.ndarray, body_a: np.ndarray) -> float:
-    """Max deviation from the α_head + α_body = 1 identity. The QC seam
-    gate asserts this is ~0; it is 0 by construction, so a non-zero
-    value means someone reintroduced an independent ramp."""
-    return float(np.max(np.abs(head_a + body_a - 1.0)))
+    """Max opacity deficit from 1.0 across the combined layers."""
+    deficit = np.maximum(0.0, 1.0 - (head_a + body_a))
+    return float(np.max(deficit))
 
 
 # ═══════���═══════════════════════════════════
@@ -1155,11 +1155,9 @@ def _bake_pose(rig: Rig, name: str, img: Image.Image, pose_lms: np.ndarray,
                canon_seam_y: float, d: str) -> PoseEntry:
     """§3.3/§3.4 — headless body, head mask, and occluder for one pose."""
     arr = np.asarray(img.convert("RGBA"))
-    # The seam follows the pose's own head: transforming the canonical
-    # seam keeps the band on the neck even when the pose leans. It is
-    # computed BEFORE the mask so it can bound the silhouette flood
-    # (Phase 1) — an unbounded flood would claim the torso via the neck.
-    seam_y = xform.apply_point(0.0, canon_seam_y)[1]
+    _neck = rig.joints.get("neck")
+    canon_neck_x = float(_neck[0]) if _neck else 0.0
+    seam_y = xform.apply_point(canon_neck_x, canon_seam_y)[1]
     pmask = head_mask(pose_lms, arr[..., 3], seam_y=seam_y,
                       overlap=HEAD_NECK_OVERLAP * fh)
     head_ramp, body_ramp = complementary_ramps(
@@ -1212,22 +1210,10 @@ def _bake_pose(rig: Rig, name: str, img: Image.Image, pose_lms: np.ndarray,
     Image.fromarray((np.clip(head_ramp, 0, 1) * 255).astype(np.uint8)) \
         .save(os.path.join(d, hm_rel))
 
-    # Occluder: head-region pixels whose ART differs from canonical —
-    # a hand or a prop crossing the face. Composited AFTER the head so
-    # it still passes in front of it.
+    # Delta occluders disabled: RGB delta between AI poses and canonical face
+    # erroneously captured whole faces/ears/necks as static ghost overlays.
     occ_rel: Optional[str] = None
     occluded = False
-    if arr.shape == canon_arr.shape:
-        delta = np.abs(arr[..., :3].astype(np.float32) -
-                       canon_arr[..., :3].astype(np.float32)).mean(axis=-1)
-        inside = (head_ramp > 0.25) & (arr[..., 3] > 50)
-        occ = inside & (delta > OCCLUDER_RGB_DELTA)
-        if occ.sum() > (0.004 * fh * fh):     # ignore antialias speckle
-            out = np.zeros_like(arr)
-            out[occ] = arr[occ]
-            occ_rel = os.path.join("occluder", f"{name}.png")
-            Image.fromarray(out).save(os.path.join(d, occ_rel))
-            occluded = True
 
     return PoseEntry(name=name,
                      landmarks=[(float(p[0]), float(p[1])) for p in pose_lms],

@@ -9033,9 +9033,9 @@
       },
       "headless": "headless/b.png",
       "headmask": "headmask/b.png",
-      "occluder": "occluder/b.png",
-      "seam_y": 538.3671860157933,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 550.6974521463756,
+      "occluded": false
     },
     "c": {
       "landmarks": [
@@ -10961,9 +10961,9 @@
       },
       "headless": "headless/c.png",
       "headmask": "headmask/c.png",
-      "occluder": "occluder/c.png",
-      "seam_y": 482.0389042362981,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 539.0574900625752,
+      "occluded": false
     },
     "d": {
       "landmarks": [
@@ -12889,9 +12889,9 @@
       },
       "headless": "headless/d.png",
       "headmask": "headmask/d.png",
-      "occluder": "occluder/d.png",
-      "seam_y": 440.2240309002989,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 546.2822026895767,
+      "occluded": false
     },
     "e": {
       "landmarks": [
@@ -14817,9 +14817,9 @@
       },
       "headless": "headless/e.png",
       "headmask": "headmask/e.png",
-      "occluder": "occluder/e.png",
-      "seam_y": 529.0982119824212,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 570.9358713715535,
+      "occluded": false
     },
     "f": {
       "landmarks": [
@@ -16745,9 +16745,9 @@
       },
       "headless": "headless/f.png",
       "headmask": "headmask/f.png",
-      "occluder": "occluder/f.png",
-      "seam_y": 583.9414480401308,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 616.0668653299595,
+      "occluded": false
     },
     "full": {
       "landmarks": [
@@ -18673,9 +18673,9 @@
       },
       "headless": "headless/full.png",
       "headmask": "headmask/full.png",
-      "occluder": "occluder/full.png",
-      "seam_y": 577.8741528474018,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 605.8875684201223,
+      "occluded": false
     },
     "g": {
       "landmarks": [
@@ -20601,9 +20601,9 @@
       },
       "headless": "headless/g.png",
       "headmask": "headmask/g.png",
-      "occluder": "occluder/g.png",
-      "seam_y": 603.6757571696093,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 607.3894633750334,
+      "occluded": false
     },
     "h": {
       "landmarks": [
@@ -22529,9 +22529,9 @@
       },
       "headless": "headless/h.png",
       "headmask": "headmask/h.png",
-      "occluder": "occluder/h.png",
-      "seam_y": 565.4093911987381,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 593.6489775351465,
+      "occluded": false
     },
     "j": {
       "landmarks": [
@@ -24457,9 +24457,9 @@
       },
       "headless": "headless/j.png",
       "headmask": "headmask/j.png",
-      "occluder": "occluder/j.png",
-      "seam_y": 560.0919661183698,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 603.683785927544,
+      "occluded": false
     },
     "k": {
       "landmarks": [
@@ -26385,9 +26385,9 @@
       },
       "headless": "headless/k.png",
       "headmask": "headmask/k.png",
-      "occluder": "occluder/k.png",
-      "seam_y": 606.4077003111722,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 619.6292606173538,
+      "occluded": false
     },
     "l": {
       "landmarks": [
@@ -28313,9 +28313,9 @@
       },
       "headless": "headless/l.png",
       "headmask": "headmask/l.png",
-      "occluder": "occluder/l.png",
-      "seam_y": 605.155375663343,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 616.7115669974446,
+      "occluded": false
     },
     "n": {
       "landmarks": [
@@ -30241,9 +30241,9 @@
       },
       "headless": "headless/n.png",
       "headmask": "headmask/n.png",
-      "occluder": "occluder/n.png",
-      "seam_y": 568.2119554851045,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 558.2986199112988,
+      "occluded": false
     },
     "o": {
       "landmarks": [
@@ -32169,9 +32169,9 @@
       },
       "headless": "headless/o.png",
       "headmask": "headmask/o.png",
-      "occluder": "occluder/o.png",
-      "seam_y": 524.4186291160147,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 553.4885425423188,
+      "occluded": false
     },
     "p": {
       "landmarks": [
@@ -34097,9 +34097,9 @@
       },
       "headless": "headless/p.png",
       "headmask": "headmask/p.png",
-      "occluder": "occluder/p.png",
-      "seam_y": 554.2304757465835,
-      "occluded": true
+      "occluder": null,
+      "seam_y": 558.6894760480004,
+      "occluded": false
     }
   }
 }

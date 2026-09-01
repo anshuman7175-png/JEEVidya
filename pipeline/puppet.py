@@ -163,7 +163,7 @@ class PuppetActor:
 
         # Speaking body-pose rotation (hands!): cycle natural talking
         # poses on phrase-length intervals instead of freezing in one
-        self._speak_pose: str = "explaining"
+        self._speak_pose: str = "neutral"
         self._next_speak_pose_ms: float = 0.0
 
         # Pose library integration
@@ -409,34 +409,27 @@ class PuppetActor:
         pose.mouth_press = ch["mouth_press"] * _AFFECT_PRESS_GAIN
         pose.lid = ch["lid_openness"]
 
-        # 2 · Breathing (always) + speech motion (reuses V2 tuning constants)
-        #     Breathing amplitude modulated by a slow swell so it's never
-        #     metronomically regular (AI tell #1). Rate and depth are
-        #     affect-driven: activation breathes FASTER and SHALLOWER, which
-        #     is the body tell an audience reads before the face.
+        # 2 · Idle breathing & speaking bounce / sway (continuous)
         f = global_frame
-        breath_mod = 0.7 + 0.3 * math.sin(f * 0.007)  # slow amplitude swell
-        # The rate multiplier advances a PHASE accumulator, never scales
-        # `f` directly: scaling the argument of sin() would teleport the
-        # breath mid-cycle every time arousal moved.
-        self._breath_phase += settings.BODY_BREATHE_SPEED \
-            * ch["breath_rate_mult"]
-        pose.bounce += math.sin(self._breath_phase) \
-            * settings.BODY_BREATHE_AMPLITUDE * breath_mod \
-            * ch["breath_depth_mult"]
-        if is_speaking and fa.get("is_speaking", False):
+        # Independent phase per actor prevents synchronized breathing
+        self._breath_phase += 0.02
+        if is_speaking:
+            # Speaking bounce: speech energy drives frequency and amplitude
             pose.bounce += math.sin(f * settings.BODY_SPEAK_SPEED) \
                 * settings.BODY_SPEAK_BOUNCE * energy
             pose.sway += math.sin(f * 0.25) * settings.BODY_SPEAK_SWAY * energy
             pose.squash += math.sin(f * 0.3) \
                 * settings.BODY_SPEAK_SCALE_PULSE * energy
-            # Speech energy → brow: louder = slightly raised brow
+            # Speech-energy brow lift: excited speech raises brows
             amp_norm = max(0.0, min(1.0, (fa.get("db", -80.0) + 50.0) / 35.0))
             pose.brow += amp_norm * 0.28 * energy
-
-        # 2b · Listener reactive nods: NOT periodic — only react to
-        #      speaker emphasis peaks. Visual hierarchy: listener is calm.
-        if not is_speaking:
+        else:
+            # Breathing cycle
+            pose.bounce += math.sin(self._breath_phase) \
+                * settings.BODY_BREATHE_AMPLITUDE * energy
+            pose.squash += math.sin(self._breath_phase) \
+                * 0.01 * energy
+            # Attentive listener nodding: triggered by speaker's amplitude peaks
             amp_now = max(0.0, min(1.0, (fa.get("db", -80.0) + 50.0) / 35.0))
             if amp_now > 0.65 and (t_ms - self._last_listener_nod_ms) > 2000:
                 self.gestures.schedule("micro_nod", t_ms, scale=0.30)
@@ -447,14 +440,14 @@ class PuppetActor:
         #     reads as reserved or animated depending on how the character
         #     feels, instead of needing a second set of "excited" gestures.
         g = self.gestures.sample(t_ms)
-        gain = ch["gesture_gain"]
+        gain = ch.get("gesture_gain", 1.0)
         pose.lean += g["lean"] * gain
         pose.head_nod += g["head_nod"] * gain
         pose.bounce += g["bounce"] * gain
         pose.sway += g["sway"] * gain
         pose.squash += g["squash"] * gain
         pose.brow += g["brow"] * gain
-        yaw_target += g["head_yaw"] * gain
+        yaw_target = g["head_yaw"] * gain
 
         # 3a · Head tilt: alternate direction on emphasis beats so the
         #      head traces ARCS instead of bouncing on one axis
@@ -467,17 +460,19 @@ class PuppetActor:
         # 3b · Pose library: gesture → body pose with anti-ping-pong
         if self.pose_lib.has_poses:
             gesture_pose = self.gestures.active_pose(t_ms)
-            if gesture_pose:
+            if gesture_pose and gesture_pose in self.pose_lib.pose_names and gesture_pose in self.rig.poses:
                 if not self.pose_state.would_pingpong(gesture_pose):
                     self.pose_state.set_target(gesture_pose, displacement=0.7)
             elif is_speaking:
-                # Rotate through natural talking poses
+                # Rotate through natural talking poses on phrase-length intervals
                 next_sp = self._speaking_pose(t_ms)
-                if not self.pose_state.would_pingpong(next_sp):
-                    self.pose_state.set_target(next_sp, displacement=0.4)
+                if next_sp in self.pose_lib.pose_names and next_sp in self.rig.poses:
+                    if not self.pose_state.would_pingpong(next_sp):
+                        self.pose_state.set_target(next_sp, displacement=0.4)
             else:
-                # Listener: cycle calm poses at half the speaker rate
-                self.pose_state.set_target("listening", displacement=0.3)
+                # Listener: keep calm neutral pose
+                if "neutral" in self.pose_lib.pose_names and "neutral" in self.rig.poses:
+                    self.pose_state.set_target("neutral", displacement=0.3)
             _from, _to, _bt = self.pose_state.step()
             pose.body_pose = _from
             pose.body_pose_to = _to

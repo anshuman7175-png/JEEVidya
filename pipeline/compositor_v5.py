@@ -287,13 +287,13 @@ class StreamingCompositor(CinematicCompositor):
             return {"x": p["x"] * rs, "y": p["y"] * rs,
                     "scale": p["scale"], "opacity": p["opacity"]}
 
-        prev_params = {
-            "girl": scaled(prev_preset["active"] if speaker == "girl"
-                           else prev_preset["inactive"]),
-            "boy": scaled(prev_preset["inactive"] if speaker == "girl"
-                          else prev_preset["active"]),
+        cur_params = {
+            "girl": scaled(cur_preset["active"] if speaker == "girl"
+                           else cur_preset["inactive"]),
+            "boy": scaled(cur_preset["inactive"] if speaker == "girl"
+                          else cur_preset["active"]),
         }
-        self.cine.begin_segment(prev_params, seed=seg_seed)
+        self.cine.begin_segment(cur_params, seed=seg_seed)
         if prev_shot != cur_shot:
             self.cine.on_cut(prev_preset["active"]["x"],
                              cur_preset["active"]["x"])

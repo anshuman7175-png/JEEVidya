@@ -252,9 +252,8 @@ class HeadAssembly:
 
     def body(self, from_pose: str, to_pose: str, blend_t: float
              ) -> Optional[Image.Image]:
-        """Cross-fade two HEADLESS bodies. Because neither carries a face,
-        a cross-fade can no longer produce two heads and three mouths —
-        D2 is fixed by what the images ARE, not by render-time care."""
+        """Cross-fade two HEADLESS bodies. Both layers fade symmetrically
+        in lockstep with the head affine transform."""
         a = self.headless(from_pose) or self.headless(self.rig.canonical_pose)
         b = self.headless(to_pose) or a
         if a is None:
@@ -264,11 +263,12 @@ class HeadAssembly:
             return a.copy()
         if t >= 0.995:
             return b.copy()
-        out = a.copy()
-        top = b.copy()
-        top.putalpha(top.getchannel("A").point(lambda v, k=t: int(v * k)))
-        out.alpha_composite(top)
-        return out
+
+        # True symmetric alpha cross-fade
+        a_arr = np.array(a, dtype=np.float32)
+        b_arr = np.array(b, dtype=np.float32)
+        blended = a_arr * (1.0 - t) + b_arr * t
+        return Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8))
 
     # ─── step 2: the composed plate (D3/D5/D9/D10) ────────
 
@@ -426,21 +426,13 @@ class HeadAssembly:
             plate = ht.shift_features_subpixel(plate, aff.face_dx, aff.face_dy)
         if self.depth is not None and (abs(head.yaw) > 1e-3
                                        or abs(head.nod) > 1e-3):
-            plate = self.depth.warp(plate, head.yaw * ht.YAW_PARALLAX_GAIN * 30.0,
-                                    head.nod * 8.0)
+            plate = self.depth.warp(plate, head.yaw * ht.YAW_PARALLAX_GAIN * 15.0,
+                                    head.nod * 3.0)
 
         # `aff` already maps plate pixels → canvas pixels (the plate
         # origin is folded into the pose similarity in `affine()`).
         head_img = self._xcache.transform(plate, ch.key(), aff, canvas_size)
         body.alpha_composite(head_img, (0, 0))
-
-        occ = self.occluder(from_pose)
-        if occ is not None:
-            if occ.size != canvas_size:
-                pad = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-                pad.alpha_composite(occ, (0, 0))
-                occ = pad
-            body.alpha_composite(occ, (0, 0))
         return body
 
     # ─── QC surface ───────────────────────���───────────────
