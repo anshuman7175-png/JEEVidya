@@ -319,11 +319,15 @@ def mixdown(turn_data: List[Dict[str, Any]], out_path: str,
     bed_r = np.concatenate([np.zeros(haas, dtype=np.float32), bed])[:n]
 
     # ── SUM + MASTER (−14 LUFS on the mid channel) ──
-    left = voice + bed + sfx_l + foley_l
-    right = voice + bed_r + sfx_r + foley_r
+    left = np.nan_to_num(voice + bed + sfx_l + foley_l, nan=0.0, posinf=0.0, neginf=0.0)
+    right = np.nan_to_num(voice + bed_r + sfx_r + foley_r, nan=0.0, posinf=0.0, neginf=0.0)
     mid = (left + right) * 0.5
-    g = 10 ** ((-14.0 - loudness_lufs(mid)) / 20)
-    left = np.tanh(left * g * 0.92) / 0.92
-    right = np.tanh(right * g * 0.92) / 0.92
+    lufs = loudness_lufs(mid)
+    if math.isnan(lufs) or math.isinf(lufs) or lufs < -70.0:
+        g = 1.0
+    else:
+        g = 10 ** ((-14.0 - lufs) / 20)
+    left = np.nan_to_num(np.tanh(left * g * 0.92) / 0.92, nan=0.0)
+    right = np.nan_to_num(np.tanh(right * g * 0.92) / 0.92, nan=0.0)
 
     return _encode_stereo(left, right, out_path)

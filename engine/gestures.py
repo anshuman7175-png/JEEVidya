@@ -166,15 +166,15 @@ GESTURES: Dict[str, Gesture] = {g.name: g for g in [
 # ═══════════════════════════════════════════
 
 GESTURE_POSE_MAP: Dict[str, str] = {
-    "point":          "pointing_up",
-    "shrug":          "shrug",
-    "think_tilt":     "thinking",
-    "recoil":         "surprised",
-    "excited_bounce": "excited",
-    "facepalm":       "facepalm",
-    "lean_in":        "presenting",
-    "nod":            "confident",
-    "jump":           "excited",
+    "point":          "b",
+    "shrug":          "h",
+    "think_tilt":     "j",
+    "recoil":         "g",
+    "excited_bounce": "o",
+    "facepalm":       "f",
+    "lean_in":        "c",
+    "nod":            "a",
+    "jump":           "p",
 }
 
 # Apply body_pose to all registered gestures
@@ -341,7 +341,7 @@ class GestureTrack:
     # the silhouette. Soft beat gestures (scale ~0.35–0.55) should only
     # move the bones — reserving image swaps for deliberate, full-strength
     # gestures is what stops the "characters switching poses so fast" chaos.
-    _POSE_SWAP_MIN_SCALE = 0.60
+    _POSE_SWAP_MIN_SCALE = 0.45
 
     def active_pose(self, t_ms: float) -> str:
         """Return the body_pose of the most recently triggered STRONG

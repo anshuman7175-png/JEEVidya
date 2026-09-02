@@ -347,22 +347,20 @@ class PuppetActor:
 
     # ─── speaking pose rotation ──────────────────────────
 
-    _SPEAK_POSE_ROTATION = ("explaining", "presenting", "both_hands_wide",
-                            "hand_on_heart", "counting")
-
     def _speaking_pose(self, t_ms: float) -> str:
-        """Deterministically cycle natural talking poses every 4.5–7.5 s
+        """Deterministically cycle natural talking poses every 2.5–4.5 s
         so the hands gesticulate through the whole turn (only poses the
-        character actually has are eligible). Rotation is slow on purpose:
-        combined with keyword/beat gestures it used to produce a pose swap
-        every 1–2 s, which reads as frantic channel-surfing."""
-        if t_ms >= self._next_speak_pose_ms:
-            options = [p for p in self._SPEAK_POSE_ROTATION
-                       if p in self.pose_lib.pose_names
+        character actually has are eligible)."""
+        if t_ms >= self._next_speak_pose_ms or not self._speak_pose:
+            options = [p for p in self.pose_lib.pose_names
+                       if p in self.rig.poses
+                       and p not in ("full", "neutral")
                        and p != self._speak_pose]
+            if not options:
+                options = [p for p in self.pose_lib.pose_names if p in self.rig.poses]
             if options:
                 self._speak_pose = options[self._rng.randrange(len(options))]
-            self._next_speak_pose_ms = t_ms + self._rng.uniform(6000, 10000)
+            self._next_speak_pose_ms = t_ms + self._rng.uniform(2500, 4500)
         return self._speak_pose
 
     # --- pose synthesis ---
@@ -462,17 +460,13 @@ class PuppetActor:
             gesture_pose = self.gestures.active_pose(t_ms)
             if gesture_pose and gesture_pose in self.pose_lib.pose_names and gesture_pose in self.rig.poses:
                 if not self.pose_state.would_pingpong(gesture_pose):
-                    self.pose_state.set_target(gesture_pose, displacement=0.7)
+                    self.pose_state.set_target(gesture_pose, displacement=0.6)
             elif is_speaking:
                 # Rotate through natural talking poses on phrase-length intervals
                 next_sp = self._speaking_pose(t_ms)
                 if next_sp in self.pose_lib.pose_names and next_sp in self.rig.poses:
                     if not self.pose_state.would_pingpong(next_sp):
                         self.pose_state.set_target(next_sp, displacement=0.4)
-            else:
-                # Listener: keep calm neutral pose
-                if "neutral" in self.pose_lib.pose_names and "neutral" in self.rig.poses:
-                    self.pose_state.set_target("neutral", displacement=0.3)
             _from, _to, _bt = self.pose_state.step()
             pose.body_pose = _from
             pose.body_pose_to = _to

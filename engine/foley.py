@@ -79,7 +79,7 @@ def synth_breath(depth: float = 1.0, seconds: float = 0.42,
     x = a * (1.0 - t) + b * t
 
     # Rising arc with a soft comma at the end (the pre-speech catch).
-    env = np.sin(np.pi * np.clip(t * 1.12, 0, 1)) ** 1.5
+    env = np.maximum(0.0, np.sin(np.pi * np.clip(t * 1.12, 0, 1))) ** 1.5
     env *= 1.0 - 0.35 * np.exp(-((t - 0.93) ** 2) / 0.0012)
     x *= env
     peak = float(np.abs(x).max()) + 1e-9
@@ -96,7 +96,7 @@ def synth_cloth(amplitude: float = 1.0, seconds: float = 0.28,
     noise = rng.standard_normal(n).astype(np.float32)
     x = _bandpass_fft(noise, 1500.0, 6500.0 + 2500.0 * amplitude)
     t = np.linspace(0.0, 1.0, n, dtype=np.float32)
-    env = (t ** 0.6) * np.exp(-t * 6.5)          # fast rise, natural decay
+    env = (np.maximum(0.0, t) ** 0.6) * np.exp(-t * 6.5)          # fast rise, natural decay
     env /= env.max() + 1e-9
     x *= env
     peak = float(np.abs(x).max()) + 1e-9
