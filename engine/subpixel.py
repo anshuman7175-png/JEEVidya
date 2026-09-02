@@ -81,19 +81,8 @@ def paste_subpixel(frame: Image.Image, sprite: Image.Image,
 def motion_ghosts(frame: Image.Image, sprite: Image.Image,
                   x: float, y: float, vx: float, vy: float,
                   threshold: float = 2.5) -> Image.Image:
-    """2-sample motion blur: ghost copies trail along the velocity
-    vector at 35%/16% alpha. Only kicks in past `threshold` px/frame,
-    so settled characters stay tack sharp."""
-    speed = math.hypot(vx, vy)
-    if speed < threshold:
-        return frame
-    k = min(1.0, (speed - threshold) / 14.0)      # blur ramps with speed
-    for frac, alpha in ((0.66, 0.16 + 0.10 * k), (0.33, 0.30 + 0.12 * k)):
-        ghost = sprite.copy()
-        a = ghost.split()[3].point(lambda p, m=alpha: int(p * m))
-        ghost.putalpha(a)
-        frame = paste_subpixel(frame, ghost,
-                               x - vx * frac, y - vy * frac)
+    """Motion ghosts disabled: multi-sample sprite stamping creates
+    ghost trails / shadow artifacts behind moving characters."""
     return frame
 
 

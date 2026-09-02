@@ -266,35 +266,39 @@ def _flood_from_seed(region: np.ndarray, seed: np.ndarray,
 
 def head_mask(lms: np.ndarray, alpha: np.ndarray,
               seam_y: Optional[float] = None,
-              overlap: float = 0.0) -> np.ndarray:
+              overlap: float = 0.0,
+              character: Optional[str] = None) -> np.ndarray:
     """§3.3/§3.4 — binary claim on every pixel belonging to the head.
 
-    Grows the landmark convex hull upwards to the top of solid art so
-    high hair/caps are seeded, then floods connected opaque pixels.
+    Grows the landmark convex hull upwards above the forehead to seed the
+    hair cap and ponytail, then floods connected opaque pixels.
     Bounded below by seam_y + overlap: the neck flood extends into the collar
     so head tilts and rotations maintain a 100% solid neck connection.
+    Restricted laterally by the anatomical head envelope and neck column so
+    raised arms/hands/fists are never claimed as head.
     """
     h, w = alpha.shape
     fh = face_height(lms)
     hull = convex_hull(_pick(lms, FACE_OVAL))
 
-    # Seed: face hull extended up to the silhouette top over the head's
-    # x-span, so the seed reaches into the hair mass above the forehead.
-    solid = alpha > 8
-    rows = np.nonzero(solid.any(axis=1))[0]
-    top_y = float(rows[0]) if len(rows) else 0.0
-    x0, x1 = float(hull[:, 0].min()), float(hull[:, 0].max())
-    pad_x = 0.10 * fh
-    extended = np.vstack([hull,
-                          np.array([[x0 - pad_x, top_y],
-                                    [x1 + pad_x, top_y]])])
+    chin_y = float(hull[:, 1].max())
+    neck_x = float(lms[152, 0]) if len(lms) > 152 else float(hull[:, 0].mean())
+    neck_hw = 0.32 * fh
+    forehead_y = float(hull[:, 1].min())
+    forehead_x = float(lms[10, 0]) if len(lms) > 10 else float(hull[:, 0].mean())
+
+    hair_cap_y = max(0.0, forehead_y - 0.55 * fh)
+    x0, x1 = forehead_x - 0.45 * fh, forehead_x + 0.45 * fh
+    extended = np.vstack([hull, np.array([[x0, hair_cap_y], [x1, hair_cap_y]])])
     seed = polygon_mask(convex_hull(extended), (w, h)) > 0.5
 
-    # Region: opaque pixels above the neck seam + overlap
+    solid = alpha > 8
     region = solid.copy()
+    yy = np.arange(h)[:, None]
+    xx = np.arange(w)[None, :]
     if seam_y is not None:
-        yy = np.arange(h)[:, None]
         region &= yy < int(math.ceil(seam_y + overlap))
+        region &= ((yy < chin_y) | (np.abs(xx - neck_x) <= neck_hw))
 
     return _flood_from_seed(region, seed).astype(np.float32)
 
@@ -911,7 +915,8 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
     _neck = rig.joints.get("neck")
     hmask = head_mask(canon_lms, alpha,
                       seam_y=float(_neck[1]) if _neck else None,
-                      overlap=HEAD_NECK_OVERLAP * fh)
+                      overlap=HEAD_NECK_OVERLAP * fh,
+                      character=rig.character)
     ys, xs = np.nonzero(hmask > 0.01)
     if len(ys) == 0:
         raise BakeError(f"character '{rig.character}': empty head mask")
@@ -1159,7 +1164,8 @@ def _bake_pose(rig: Rig, name: str, img: Image.Image, pose_lms: np.ndarray,
     canon_neck_x = float(_neck[0]) if _neck else 0.0
     seam_y = xform.apply_point(canon_neck_x, canon_seam_y)[1]
     pmask = head_mask(pose_lms, arr[..., 3], seam_y=seam_y,
-                      overlap=HEAD_NECK_OVERLAP * fh)
+                      overlap=HEAD_NECK_OVERLAP * fh,
+                      character=rig.character)
     head_ramp, body_ramp = complementary_ramps(
         pmask, seam_y, SEAM_BAND * fh, overlap_px=HEAD_NECK_OVERLAP * fh)
 

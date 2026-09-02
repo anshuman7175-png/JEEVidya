@@ -163,7 +163,18 @@ class CameraDynamics:
         if sv is None:
             sv = self._chars[key] = SpringVec(target, omega=11.0, zeta=0.8,
                                               fps=self.fps)
-        return sv.step(target)
+        out = sv.step(target)
+        # When a character is hidden in the target preset (e.g. solo medium or extreme closeup),
+        # snap their opacity and scale immediately to prevent ghosting over the active speaker.
+        if target.get("opacity", 1.0) <= 0.01:
+            out["opacity"] = 0.0
+            if "opacity" in sv.springs:
+                sv.springs["opacity"].snap(0.0)
+        if target.get("scale", 1.0) <= 0.01:
+            out["scale"] = 0.0
+            if "scale" in sv.springs:
+                sv.springs["scale"].snap(0.0)
+        return out
 
     def frame_transform(self) -> Dict[str, float]:
         """Global (dx, dy, zoom, blur) for this frame; call once/frame."""
@@ -192,23 +203,11 @@ class CameraDynamics:
                 "whip_blur": blur, "whip_dir": self.cut.direction}
 
 
-# ═══════════════════════════════════════════
-# WHIP-PAN DIRECTIONAL BLUR (numpy, 3 rolls)
-# ═══════════════════════════════════════════
-
 def whip_blur(frame: Image.Image, amount: float,
               direction: float = 1.0) -> Image.Image:
-    """Horizontal motion-blur streak for cut frames. amount 0..1."""
-    if amount <= 0.01:
-        return frame
-    arr = np.asarray(frame.convert("RGB"), dtype=np.float32)
-    shift = max(2, int(28 * amount))
-    s = int(math.copysign(shift, direction))
-    acc = arr.copy()
-    acc += np.roll(arr, s // 2, axis=1)
-    acc += np.roll(arr, s, axis=1)
-    acc += np.roll(arr, -s // 3, axis=1)
-    return Image.fromarray((acc / 4.0).astype(np.uint8))
+    """Whip blur disabled: multi-exposure np.roll creates multi-character
+    ghost silhouettes / shadow flashes across cuts."""
+    return frame
 
 
 def apply_frame_transform(pos_x: float, pos_y: float, scale: float,

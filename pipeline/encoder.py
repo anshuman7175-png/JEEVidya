@@ -115,10 +115,15 @@ class StreamEncoder:
     def close(self) -> None:
         if self.proc.stdin:
             try:
+                self.proc.stdin.flush()
                 self.proc.stdin.close()
             except OSError:
                 pass
-        code = self.proc.wait()
+        try:
+            code = self.proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            code = self.proc.wait()
         self._log_handle.close()
         if code != 0:
             raise RuntimeError(

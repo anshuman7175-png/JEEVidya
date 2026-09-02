@@ -24,21 +24,22 @@ class CameraSystem:
 
     def cut_to(self, shot_name: str) -> None:
         """
-        Initiate a camera transition to a new shot type.
-        If the shot is the same, no transition occurs.
+        Initiate a camera cut to a new shot type.
+        Camera shot changes are clean cinematic hard cuts so inactive
+        characters never linger as ghost overlays across shots.
         """
         if shot_name not in brand.SHOT_PRESETS:
             return
-        if shot_name == self.current_shot and not self.is_transitioning:
+        if shot_name == self.current_shot:
             return
 
         self.prev_shot = self.current_shot
         self.current_shot = shot_name
         self.transition_frame = 0
-        self.is_transitioning = True
+        self.is_transitioning = False
 
     def update(self) -> None:
-        """Advance the transition by one frame."""
+        """Advance the frame state."""
         if self.is_transitioning:
             self.transition_frame += 1
             if self.transition_frame >= self.transition_total:
@@ -48,18 +49,18 @@ class CameraSystem:
         """
         Get the current (x, y, scale, opacity) for a character role.
         role: "active" or "inactive"
-        
-        During transitions, interpolates between previous and current presets.
         """
         current_preset = brand.SHOT_PRESETS.get(self.current_shot, brand.SHOT_PRESETS["two_shot"])
         current_params = current_preset.get(role, current_preset["active"])
 
-        if not self.is_transitioning:
+        if not self.is_transitioning or current_params.get("opacity", 1.0) <= 0.01:
             return current_params.copy()
 
-        # Interpolate from previous to current
+        # Interpolate from previous to current only if both presets keep character visible
         prev_preset = brand.SHOT_PRESETS.get(self.prev_shot, brand.SHOT_PRESETS["two_shot"])
         prev_params = prev_preset.get(role, prev_preset["active"])
+        if prev_params.get("opacity", 1.0) <= 0.01:
+            return current_params.copy()
 
         return camera_transition(
             self.transition_frame,

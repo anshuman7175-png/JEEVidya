@@ -18,6 +18,7 @@ import os
 import random
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 from PIL import Image
 
 from config import settings
@@ -44,10 +45,10 @@ def blend_frames() -> int:
 
 def min_hold_frames() -> int:
     """Minimum frames a pose must be HELD (fully committed) before
-    another transition may begin: ~1.2 s at the current FPS. This is
+    another transition may begin: ~1.5 s at the current FPS. This is
     the guard against rapid pose thrash while allowing lively speech
     transitions on phrase boundaries."""
-    return max(4, round(_fps() * 1.2))
+    return max(4, round(_fps() * 1.5))
 
 # Default pose when nothing is triggered
 DEFAULT_POSE = "neutral"
@@ -140,7 +141,13 @@ class PoseLibrary:
 
     def blended_body(self, from_pose: str, to_pose: str,
                      blend_t: float) -> Optional[Image.Image]:
-        """Cross-fade between two full body images. blend_t: 0=from, 1=to."""
+        """Cross-fade between two full body images. blend_t: 0=from, 1=to.
+
+        Uses a TRUE linear blend in float space so the combined opacity
+        is EXACTLY the max of both sources, never higher. The old
+        alpha-composite path layered the incoming image ON TOP of the
+        outgoing at full alpha, which doubled opacity at mid-transition
+        and caused a bright flash/ghost artifact."""
         img_from = self._poses.get(from_pose)
         img_to = self._poses.get(to_pose)
         if img_to is None:
@@ -150,15 +157,12 @@ class PoseLibrary:
         if blend_t <= 0.01:
             return img_from
 
-        # Alpha-based cross-fade
-        result = img_from.copy()
-        # Modulate the target's alpha by blend_t
-        to_copy = img_to.copy()
-        r, g, b, a = to_copy.split()
-        a = a.point(lambda p: int(p * blend_t))
-        to_copy = Image.merge("RGBA", (r, g, b, a))
-        result.alpha_composite(to_copy)
-        return result
+        # True symmetric linear cross-fade in float space (no opacity doubling)
+        t = max(0.0, min(1.0, blend_t))
+        a_arr = np.array(img_from, dtype=np.float32)
+        b_arr = np.array(img_to, dtype=np.float32)
+        blended = a_arr * (1.0 - t) + b_arr * t
+        return Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8))
 
 
 class PoseState:
@@ -185,14 +189,13 @@ class PoseState:
 
     @property
     def blend_t(self) -> float:
-        """Eased blend: raised-cosine S-curve (slow-in, slow-out).
-        This is the single biggest upgrade — linear ramps look like
-        'switching a picture'; eased ramps look like weight shifting."""
+        """Eased blend: Ken Perlin's smootherstep S-curve (zero 1st and 2nd derivatives).
+        Provides a perfectly smooth, continuous transition without abrupt acceleration."""
         if self.current == self.target:
             return 1.0
-        raw = min(1.0, self._blend_frame / max(1, self._blend_total))
-        # Raised cosine: 0→1 with zero derivative at endpoints
-        return 0.5 - 0.5 * math.cos(raw * math.pi)
+        x = min(1.0, max(0.0, self._blend_frame / max(1, self._blend_total)))
+        # smootherstep: 6x^5 - 15x^4 + 10x^3
+        return x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
 
     @property
     def is_blending(self) -> bool:
@@ -200,13 +203,7 @@ class PoseState:
 
     def set_target(self, pose: str, displacement: float = 0.5) -> None:
         """Request transition. displacement 0..1 controls speed:
-        high (big pose change) → fast fade; low (subtle) → slow graceful.
-
-        Requests arriving before min_hold_frames() have elapsed since the
-        last transition are DROPPED — the pose must land, be held, and be
-        read before the body is allowed to move again. Gesture triggers
-        re-fire every frame while active, so a dropped request that still
-        matters simply succeeds once the hold expires."""
+        high (big pose change) → fast fade; low (subtle) → slow graceful."""
         if pose == self.target:
             return
         if pose == self.current:
@@ -215,8 +212,7 @@ class PoseState:
             return
 
         # Minimum-hold gate: refuse mid-blend interruptions AND rapid
-        # re-targeting. Without this, keyword + beat + rotation triggers
-        # stack into a pose swap every few hundred milliseconds.
+        # re-targeting.
         if self.is_blending or self._hold_frames < min_hold_frames():
             return
 
@@ -224,18 +220,20 @@ class PoseState:
         self._blend_frame = 0
         self._hold_frames = 0
 
-        # Displacement-adaptive DURATION (seconds, FPS-independent) +
-        # jitter. Sub-200ms full-body fades read as a strobing slideshow.
+        # Cinematic transition durations (0.28s - 0.48s) at 60fps.
+        # High-displacement changes (arms moving to new positions) transition
+        # quickly (15-20 frames) so the S-curve passes through the double-arm
+        # overlap zone in <150ms (reads as motion blur, not double-exposure).
         if displacement > 0.7:
-            base_s = 0.27    # big change: quicker to hide ghost overlap
+            base_s = 0.28
         elif displacement > 0.3:
-            base_s = 0.40    # medium: smooth default
+            base_s = 0.38
         else:
-            base_s = 0.53    # subtle: graceful ease
+            base_s = 0.48
         base = round(_fps() * base_s)
-        # ±2 frame jitter (breaks regularity)
-        self._blend_total = max(2, round(_fps() * 0.20),
-                                base + self._rng.choice([-2, -1, 0, 1, 2]))
+        # ±1 frame jitter (breaks metronomic regularity)
+        self._blend_total = max(8, round(_fps() * 0.22),
+                                base + self._rng.choice([-1, 0, 1]))
 
         # Track for anti-ping-pong
         self._recent.append(pose)

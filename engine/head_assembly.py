@@ -433,6 +433,37 @@ class HeadAssembly:
         # origin is folded into the pose similarity in `affine()`).
         head_img = self._xcache.transform(plate, ch.key(), aff, canvas_size)
         body.alpha_composite(head_img, (0, 0))
+
+        # Step 5: occluder cross-fade — hands/props that must render IN
+        # FRONT of the head are composited here, blended with the same
+        # eased blend_t the body and head use. Without this, the occluder
+        # snaps from one pose's hands to the other's during transitions,
+        # creating a flash/discontinuity.
+        t = max(0.0, min(1.0, blend_t))
+        occ_a = self.occluder(from_pose)
+        occ_b = self.occluder(to_pose) if to_pose != from_pose else occ_a
+        if occ_a is not None or occ_b is not None:
+            if occ_a is None:
+                occ_a = occ_b
+            if occ_b is None:
+                occ_b = occ_a
+            if occ_a is occ_b or t <= 0.005:
+                body.alpha_composite(occ_a, (0, 0))
+            elif t >= 0.995:
+                body.alpha_composite(occ_b, (0, 0))
+            else:
+                # Linear blend in float space, same as body()
+                oa = np.array(occ_a, dtype=np.float32)
+                ob = np.array(occ_b, dtype=np.float32)
+                if oa.shape == ob.shape:
+                    occ_blend = np.clip(oa * (1.0 - t) + ob * t,
+                                        0, 255).astype(np.uint8)
+                    body.alpha_composite(
+                        Image.fromarray(occ_blend), (0, 0))
+                else:
+                    # Different sizes: just composite the dominant one
+                    body.alpha_composite(
+                        occ_b if t > 0.5 else occ_a, (0, 0))
         return body
 
     # ─── QC surface ───────────────────────���───────────────
