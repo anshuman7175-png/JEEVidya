@@ -45,10 +45,9 @@ def blend_frames() -> int:
 
 def min_hold_frames() -> int:
     """Minimum frames a pose must be HELD (fully committed) before
-    another transition may begin: ~3.5 s at the current FPS. This is
-    the guard against rapid pose thrash while allowing natural speech
-    gesticulation without hands flashing or blinking."""
-    return max(10, round(_fps() * 3.5))
+    another transition may begin: ~1.6 s at the current FPS. This is
+    calibrated to natural human idea-chunk cadence without rapid jitter."""
+    return max(10, round(_fps() * 1.6))
 
 # Default pose when nothing is triggered
 DEFAULT_POSE = "neutral"

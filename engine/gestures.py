@@ -189,20 +189,33 @@ for _gname, _pname in GESTURE_POSE_MAP.items():
 # ═══════════════════════════════════════════
 
 KEYWORD_TRIGGERS: Dict[str, str] = {
-    # pointing / directing attention (major words only, NOT filler pronouns)
-    "dekho": "point", "देखो": "point",
-    # amazement / surprise
+    # pointing / directing attention
+    "dekho": "point", "देखो": "point", "dekhiye": "point", "ye": "point",
+    "idhar": "point", "upar": "point", "neeche": "point", "rocket": "point",
+    "speed": "point", "velocity": "point", "force": "point", "earth": "point",
+    "orbit": "point", "formula": "point", "dharti": "point",
+    # explaining / didactic
+    "matlab": "point", "kyunki": "point", "jaise": "point", "tarah": "point",
+    "gravity": "point", "easy": "point", "concept": "point", "rule": "point",
+    "rope": "point", "kheenchti": "point", "bahar": "point", "phenku": "point",
+    "kabhi": "point", "wapas": "point",
+    # amazement / surprise / wonder
     "arre": "recoil", "अरे": "recoil", "wow": "recoil", "waah": "recoil",
     "वाह": "recoil", "amazing": "recoil", "kya!": "recoil", "oho": "recoil",
+    "accha": "recoil", "samajh": "recoil",
     # negation
     "nahi": "shake", "नहीं": "shake", "nahin": "shake", "no": "shake",
-    "galat": "shake", "गलत": "shake",
-    # agreement
+    "galat": "shake", "गलत": "shake", "never": "shake", "zero": "shake",
+    # agreement / assertion
     "haan": "nod", "हां": "nod", "हाँ": "nod", "yes": "nod", "bilkul": "nod",
     "बिल्कुल": "nod", "sahi": "nod", "सही": "nod", "exactly": "nod",
-    # thinking
+    "pakka": "nod", "sure": "nod",
+    # thinking / questioning
     "socho": "think_tilt", "सोचो": "think_tilt", "hmm": "think_tilt",
-    "shayad": "think_tilt", "शायद": "think_tilt",
+    "shayad": "think_tilt", "शायद": "think_tilt", "agar": "think_tilt",
+    "maan": "think_tilt", "kya": "think_tilt", "kyun": "think_tilt",
+    "kaise": "think_tilt", "kitni": "think_tilt", "kitna": "think_tilt",
+    "bhaiya": "think_tilt",
     # excitement
     "mast": "excited_bounce", "superb": "excited_bounce",
     "jhakkas": "excited_bounce", "great": "excited_bounce",
@@ -214,11 +227,96 @@ KEYWORD_TRIGGERS: Dict[str, str] = {
 
 _STRIP = ".,!?;:'\"()-—।"
 
-# Small "beat" gestures used to fill keyword-less stretches of speech —
-# real speakers gesticulate continuously, not only on trigger words.
-# All carry a body_pose via GESTURE_POSE_MAP, so the HANDS visibly move.
+# Beat gestures used to fill keyword-less stretches of speech
 BEAT_GESTURES: Tuple[str, ...] = ("point", "lean_in", "nod",
                                   "excited_bounce", "shrug")
+
+# Semantic category mapping for words to character body poses
+SEMANTIC_CATEGORIES: Dict[str, str] = {
+    # Point / attention
+    "dekho": "point", "dekhiye": "point", "ye": "point", "idhar": "point",
+    "upar": "point", "neeche": "point", "rocket": "point", "speed": "point",
+    "velocity": "point", "force": "point", "earth": "point", "orbit": "point",
+    "formula": "point", "dharti": "point",
+    # Explaining
+    "matlab": "explain", "kyunki": "explain", "jaise": "explain", "tarah": "explain",
+    "gravity": "explain", "easy": "explain", "concept": "explain", "rule": "explain",
+    "rope": "explain", "kheenchti": "explain", "bahar": "explain",
+    # Questions / curiosity
+    "kya": "inquisitive", "kyun": "inquisitive", "kaise": "inquisitive",
+    "kitni": "inquisitive", "kitna": "inquisitive", "bhaiya": "inquisitive",
+    "phenku": "inquisitive", "wapas": "inquisitive", "kabhi": "inquisitive",
+    # Thinking
+    "socho": "think", "hmm": "think", "shayad": "think", "agar": "think",
+    "maan": "think", "par": "think", "lekin": "think",
+    # Excitement
+    "arre": "excited", "wow": "excited", "waah": "excited", "amazing": "excited",
+    "mast": "excited", "superb": "excited", "great": "excited", "samajh": "excited",
+    "accha": "excited",
+    # Agreement / assertion
+    "haan": "agree", "yes": "agree", "bilkul": "agree", "sahi": "agree",
+    "exactly": "agree", "pakka": "agree",
+}
+
+# Character-specific rigged body poses for each semantic category
+CHARACTER_SEMANTIC_POSES: Dict[str, Dict[str, str]] = {
+    "chintu": {
+        "point": "b",        # wide pointing/explaining
+        "explain": "e",      # expressive hands-out explanation
+        "inquisitive": "c",  # pointing forward/questioning
+        "think": "h",        # hand on chin / pondering
+        "excited": "g",      # wide excited arms
+        "agree": "a",        # assertive nod / confident stance
+        "calm": "d",         # hands resting calm
+        "neutral": "neutral",
+    },
+    "boy": {
+        "point": "b",
+        "explain": "e",
+        "inquisitive": "c",
+        "think": "h",
+        "excited": "g",
+        "agree": "a",
+        "calm": "d",
+        "neutral": "neutral",
+    },
+    "gudiya": {
+        "point": "b",        # pointing hand
+        "explain": "e",      # hands raised explaining
+        "inquisitive": "c",  # index finger up asking
+        "think": "j",        # head tilted / thinking
+        "excited": "o",      # cheerful open gesture
+        "agree": "p",        # hands on hips confident
+        "calm": "d",         # attentive listening
+        "neutral": "neutral",
+    },
+    "girl": {
+        "point": "b",
+        "explain": "e",
+        "inquisitive": "c",
+        "think": "j",
+        "excited": "o",
+        "agree": "p",
+        "calm": "d",
+        "neutral": "neutral",
+    },
+}
+
+# Secondary pose rotations for natural variation during long speeches
+CONVERSATIONAL_ROTATION: Dict[str, Tuple[str, ...]] = {
+    "chintu": ("b", "c", "e", "g", "h", "a"),
+    "boy": ("b", "c", "e", "g", "h", "a"),
+    "gudiya": ("c", "b", "e", "o", "j", "p"),
+    "girl": ("c", "b", "e", "o", "j", "p"),
+}
+
+# Attentive listening poses (calm stances with micro-reactions)
+LISTENER_POSES: Dict[str, Tuple[str, ...]] = {
+    "chintu": ("neutral", "d", "j"),
+    "boy": ("neutral", "d", "j"),
+    "gudiya": ("neutral", "d", "h"),
+    "girl": ("neutral", "d", "h"),
+}
 
 
 def normalize_word(word: str) -> str:
@@ -227,6 +325,16 @@ def normalize_word(word: str) -> str:
 
 def trigger_for(word: str) -> Optional[str]:
     return KEYWORD_TRIGGERS.get(normalize_word(word))
+
+
+def semantic_pose_for(word: str, character: str) -> Optional[str]:
+    """Return the character's best rigged body pose matching the spoken word."""
+    w = normalize_word(word)
+    cat = SEMANTIC_CATEGORIES.get(w)
+    if not cat:
+        return None
+    char_map = CHARACTER_SEMANTIC_POSES.get(character.lower(), CHARACTER_SEMANTIC_POSES["boy"])
+    return char_map.get(cat)
 
 
 def _is_numeric(word: str) -> bool:
@@ -278,12 +386,11 @@ class GestureTrack:
 
     def schedule_beats(self, words: Sequence, rng,
                        energy: float = 1.0,
-                       min_gap_ms: float = 4500.0) -> int:
+                       min_gap_ms: float = 2000.0) -> int:
         """Fill keyword-less stretches with small deterministic beat
-        gestures (soft scale) so the speaker's hands stay ALIVE for the
-        whole turn. Numbers get an automatic point — teachers count on
-        their fingers. `rng` must be a seeded random.Random for
-        bit-identical re-renders."""
+        gestures (~2.0s human gesticulation interval) so the speaker's
+        hands stay natural and alive. Numbers trigger an automatic point.
+        `rng` is a seeded random.Random for bit-identical re-renders."""
         n = 0
         last_ms = -1e9
         for w in words:
@@ -293,10 +400,10 @@ class GestureTrack:
             if w.start_ms - last_ms < min_gap_ms:
                 continue
             if _is_numeric(w.text):
-                name, scale = "point", 0.6 * energy
+                name, scale = "point", 0.65 * energy
             else:
                 name = BEAT_GESTURES[rng.randrange(len(BEAT_GESTURES))]
-                scale = rng.uniform(0.35, 0.55) * energy
+                scale = rng.uniform(0.50, 0.75) * energy
             if self.schedule(name, w.start_ms, scale=scale):
                 last_ms = w.start_ms
                 n += 1
@@ -337,11 +444,8 @@ class GestureTrack:
             del self._items[:cut]
             del self._starts[:cut]
 
-    # A full-body pose swap is the most violent thing a gesture can do to
-    # the silhouette. Soft beat gestures (scale ~0.35–0.55) should only
-    # move the bones — reserving image swaps for deliberate, full-strength
-    # gestures is what stops the "characters switching poses so fast" chaos.
-    _POSE_SWAP_MIN_SCALE = 0.45
+    # Threshold for a gesture to trigger a body pose swap
+    _POSE_SWAP_MIN_SCALE = 0.35
 
     def active_pose(self, t_ms: float) -> str:
         """Return the body_pose of the most recently triggered STRONG

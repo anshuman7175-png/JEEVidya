@@ -30,7 +30,8 @@ from engine.affect import (AffectState, ListenerCoupling, coherence_audit,
                            map_channels, schedule_micro_expressions,
                            verify_state_continuity)
 from engine.bone_engine import BoneEngine, PuppetPose
-from engine.gestures import GestureTrack
+from engine.gestures import (GestureTrack, semantic_pose_for,
+                            CONVERSATIONAL_ROTATION, LISTENER_POSES)
 from engine.pose_library import PoseLibrary, PoseState, DEFAULT_POSE
 from engine.rig import Rig, has_rig  # noqa: F401  (has_rig re-exported)
 from engine.visemes import (AmplitudeEnvelope, VisemeTrack,
@@ -238,15 +239,24 @@ class PuppetActor:
             self.affect.push_event("addressed")
 
         safe = self._safe_poses()
-        if is_my_turn:
+        self._span_words = list(span.words) if is_my_turn else []
+
+        first_pose = None
+        if is_my_turn and span.words:
+            first_pose = semantic_pose_for(span.words[0].text, self.character)
+
+        if first_pose and first_pose in safe and first_pose in self.pose_lib.pose_names and first_pose in self.rig.poses:
+            pref = [first_pose]
+        elif is_my_turn:
             if emotion in ("curious", "skeptical", "thinking") or is_question:
-                pref = ["c", "d", "j", "b", "o"]
+                pref = ["c", "e", "j", "b", "h"] if self.character in ("gudiya", "girl") else ["c", "h", "j", "b", "d"]
             elif emotion in ("enthusiastic", "excited", "happy", "amazed"):
-                pref = ["b", "o", "g", "c", "p"]
+                pref = ["o", "g", "b", "c", "p"] if self.character in ("gudiya", "girl") else ["g", "b", "e", "o", "a"]
             else:
-                pref = ["b", "c", "d", "g", "a", "o"]
+                pref = ["b", "c", "e", "o", "p"] if self.character in ("gudiya", "girl") else ["b", "e", "c", "g", "a"]
         else:
-            pref = ["neutral", "a", "d", "n"]
+            pref = list(LISTENER_POSES.get(self.character.lower(), ("neutral", "d", "j")))
+
         valid = [p for p in pref if p in safe and p in self.pose_lib.pose_names and p in self.rig.poses]
         # Dynamically select a stance that differs from the current pose and avoids ping-pong
         candidates = [p for p in valid if p != self.pose_state.current and not self.pose_state.would_pingpong(p)]
@@ -254,7 +264,7 @@ class PuppetActor:
             candidates = [p for p in valid if p != self.pose_state.current]
         chosen = candidates[0] if candidates else (valid[0] if valid else "neutral")
         self._speak_pose = chosen
-        self._next_speak_pose_ms = span.start_ms + self._rng.uniform(5500, 8000)
+        self._next_speak_pose_ms = span.start_ms + self._rng.uniform(1800, 2600)
         if self.pose_state.current != chosen:
             self.pose_state.set_target(chosen, displacement=0.5)
 
@@ -376,22 +386,45 @@ class PuppetActor:
 
     # ─── speaking pose rotation ──────────────────────────
 
-    def _speaking_pose(self, t_ms: float) -> str:
-        """Deterministically cycle natural talking poses every 5.5–8.0 s
-        so the hands hold expressive gesticulation without flickering or thrashing."""
+    def _speaking_pose(self, t_ms: float, emotion: str = "neutral") -> str:
+        """Deterministically cycle natural talking poses every 1.8–2.6 s,
+        prioritizing keyword semantic triggers and natural phrase cadence."""
         safe = self._safe_poses()
+
+        # 1. Primary Priority: Active semantic gesture from gesture track
+        act_p = self.gestures.active_pose(t_ms)
+        if act_p and act_p in safe and act_p in self.pose_lib.pose_names and act_p in self.rig.poses:
+            if act_p != self.pose_state.current and not self.pose_state.is_blending:
+                self._speak_pose = act_p
+                self._next_speak_pose_ms = t_ms + self._rng.uniform(1800, 2600)
+                return act_p
+
+        # 2. Semantic word trigger: match spoken words near current timestamp
+        if hasattr(self, "_span_words") and self._span_words:
+            for w in self._span_words:
+                if 0 <= (t_ms - w.start_ms) < 450:
+                    sp = semantic_pose_for(w.text, self.character)
+                    if sp and sp in safe and sp in self.pose_lib.pose_names and sp in self.rig.poses:
+                        if sp != self.pose_state.current and not self.pose_state.is_blending:
+                            self._speak_pose = sp
+                            self._next_speak_pose_ms = t_ms + self._rng.uniform(1800, 2600)
+                            return sp
+
+        # 3. Phrasing Cadence: After 1.8s - 2.6s, transition to next conversational stance
         if t_ms >= self._next_speak_pose_ms or not self._speak_pose:
-            options = [p for p in ("b", "c", "d", "g", "h", "j", "o", "p", "a")
+            rotation = CONVERSATIONAL_ROTATION.get(self.character.lower(), ("b", "c", "e", "g", "h", "a"))
+            options = [p for p in rotation
                        if p in safe and p in self.pose_lib.pose_names
                        and p in self.rig.poses and p != self._speak_pose
                        and not self.pose_state.would_pingpong(p)]
             if not options:
-                options = [p for p in ("b", "c", "d", "g", "o", "neutral")
+                options = [p for p in rotation
                            if p in safe and p in self.pose_lib.pose_names
                            and p in self.rig.poses and p != self._speak_pose]
             if options:
                 self._speak_pose = self._rng.choice(options)
-            self._next_speak_pose_ms = t_ms + self._rng.uniform(5500, 8000)
+            self._next_speak_pose_ms = t_ms + self._rng.uniform(1800, 2600)
+
         return self._speak_pose
 
     # --- pose synthesis ---
@@ -491,9 +524,16 @@ class PuppetActor:
         # 3b · Pose library: natural gesticulation and stance rotation
         if self.pose_lib.has_poses:
             if is_speaking:
-                next_p = self._speaking_pose(t_ms)
+                next_p = self._speaking_pose(t_ms, emotion)
                 if next_p and next_p != self.pose_state.current and not self.pose_state.is_blending:
                     self.pose_state.set_target(next_p, displacement=0.5)
+            else:
+                # Listener maintains calm listening pose
+                listener_pref = LISTENER_POSES.get(self.character.lower(), ("neutral", "d", "j"))
+                if self.pose_state.current not in listener_pref and not self.pose_state.is_blending:
+                    target_listener = listener_pref[0]
+                    if target_listener in self.pose_lib.pose_names:
+                        self.pose_state.set_target(target_listener, displacement=0.3)
             _from, _to, _bt = self.pose_state.step()
             pose.body_pose = _from
             pose.body_pose_to = _to
