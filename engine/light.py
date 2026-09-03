@@ -40,12 +40,7 @@ def rim_light(char_img: Image.Image, side: float = 1.0,
               color: Tuple[int, int, int] = (140, 200, 255),
               strength: float = 0.75) -> Image.Image:
     """Key-side edge light from the alpha silhouette.
-    side: +1 light from the right, −1 from the left. Cached."""
-    key = ("rim", id(char_img), round(side, 1), color, round(strength, 2))
-    out = _cache.get(key)
-    if out is not None:
-        return out
-
+    side: +1 light from the right, −1 from the left."""
     if char_img.mode != "RGBA":
         char_img = char_img.convert("RGBA")
     alpha = np.asarray(char_img.split()[3], dtype=np.float32) / 255.0
@@ -64,21 +59,14 @@ def rim_light(char_img: Image.Image, side: float = 1.0,
     rim_img = Image.fromarray(rim).filter(
         ImageFilter.GaussianBlur(max(1, shift // 2)))
 
-    out = Image.alpha_composite(char_img, rim_img)
-    _cache[key] = out
-    return out
+    return Image.alpha_composite(char_img, rim_img)
 
 
 def ambient_wrap(char_img: Image.Image,
                  scene_color: Tuple[int, int, int],
                  amount: float = 0.18) -> Image.Image:
     """Tint the character toward the scene palette (bounce light).
-    Shadow side (screen-left half, feathered) gets slightly more. Cached."""
-    key = ("wrap", id(char_img), scene_color, round(amount, 2))
-    out = _cache.get(key)
-    if out is not None:
-        return out
-
+    Shadow side (screen-left half, feathered) gets slightly more."""
     if char_img.mode != "RGBA":
         char_img = char_img.convert("RGBA")
     arr = np.asarray(char_img, dtype=np.float32)
@@ -92,9 +80,7 @@ def ambient_wrap(char_img: Image.Image,
         (arr[..., :3].mean(axis=2, keepdims=True) / 255.0 + 0.35)
     result = arr.copy()
     result[..., :3] = np.clip(rgb, 0, 255)
-    out = Image.fromarray(result.astype(np.uint8))
-    _cache[key] = out
-    return out
+    return Image.fromarray(result.astype(np.uint8))
 
 
 def contact_shadow(width: int, softness: int = 0,

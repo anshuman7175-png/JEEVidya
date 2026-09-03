@@ -268,8 +268,8 @@ COALESCE_RANK: Dict[V, int] = {
 def coalesce_events(events: List[VisemeEvent],
                     min_dur_ms: float) -> List[VisemeEvent]:
     """Merge events shorter than min_dur_ms into the articulatorily
-    dominant neighbour. The short event's TIME goes to the winner —
-    total timeline coverage is preserved exactly."""
+    dominant neighbour. Vowels with duration >= 30ms are protected from
+    being swallowed by consonants to ensure crisp syllable articulation."""
     if not events:
         return events
     evs = [VisemeEvent(e.viseme, e.start_ms, e.end_ms) for e in events]
@@ -277,11 +277,25 @@ def coalesce_events(events: List[VisemeEvent],
     while changed and len(evs) > 1:
         changed = False
         for i, e in enumerate(evs):
+            # Protect vowels from being swallowed by plosive consonants
+            if e.viseme in VOWELS and e.dur >= 30.0:
+                continue
             if e.dur >= min_dur_ms:
                 continue
             prev_e = evs[i - 1] if i > 0 else None
             next_e = evs[i + 1] if i + 1 < len(evs) else None
-            # pick the more dominant ADJACENT event (bilabials win)
+            # If same viseme adjacent, merge immediately
+            if prev_e is not None and prev_e.viseme == e.viseme:
+                prev_e.end_ms = e.end_ms
+                del evs[i]
+                changed = True
+                break
+            if next_e is not None and next_e.viseme == e.viseme:
+                next_e.start_ms = e.start_ms
+                del evs[i]
+                changed = True
+                break
+            # pick the more dominant ADJACENT event
             cand = []
             if prev_e is not None and prev_e.end_ms >= e.start_ms - 1e-6:
                 cand.append(("prev", COALESCE_RANK[prev_e.viseme]))
@@ -289,8 +303,6 @@ def coalesce_events(events: List[VisemeEvent],
                 cand.append(("next", COALESCE_RANK[next_e.viseme]))
             if not cand:
                 continue
-            # If the SHORT event itself is the most dominant (a clipped
-            # bilabial), it absorbs its weaker neighbour's time instead.
             self_rank = COALESCE_RANK[e.viseme]
             weakest = min(cand, key=lambda c: c[1])
             if self_rank > max(r for _, r in cand):
@@ -329,11 +341,10 @@ class VisemeTrack:
         min_dur = (1000.0 / max(1, fps)) / SUBFRAMES
         return cls(coalesce_events(events, min_dur), turn_end_ms)
 
-    # Minimum event duration on the production VTT path (§7.4). Raw
-    # per-phoneme allocation can emit 35ms events — barely one frame at
-    # 30fps — which makes the mouth sprite thrash. Coalescing to ≥70ms
-    # (~2 frames) keeps articulation readable without losing sync.
-    WORD_EVENT_MIN_DUR_MS = 70.0
+    # Minimum event duration on the production VTT path (§7.4).
+    # 40ms (~2.4 frames @ 60fps) preserves distinct consonants and vowels
+    # while eliminating sub-frame fluttering.
+    WORD_EVENT_MIN_DUR_MS = 40.0
 
     @classmethod
     def from_words(cls, words: Sequence,
@@ -346,19 +357,15 @@ class VisemeTrack:
             phones = g2p(w.text)
             if not phones:
                 continue
-            # Vowels get more time than consonants (proportional allocation)
-            weights = [1.0 if p in VOWELS else 0.55 for p in phones]
+            # Vowels receive twice the time of consonants
+            weights = [1.4 if p in VOWELS else 0.7 for p in phones]
             total = sum(weights)
-            span = max(40.0, w.end_ms - w.start_ms)
+            span = max(50.0, w.end_ms - w.start_ms)
             t = w.start_ms
-            # weights is a comprehension over phones — same length by
-            # construction; strict=True pins that down.
             for p, wt in zip(phones, weights, strict=True):
-                d = max(35.0, span * wt / total)
-                events.append(VisemeEvent(p, t, min(t + d, w.end_ms)))
+                d = span * wt / total
+                events.append(VisemeEvent(p, t, t + d))
                 t += d
-                if t >= w.end_ms:
-                    break
         end = turn_end_ms if turn_end_ms is not None else (
             events[-1].end_ms if events else 0.0)
         return cls(coalesce_events(events, cls.WORD_EVENT_MIN_DUR_MS), end)

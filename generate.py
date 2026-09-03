@@ -69,6 +69,8 @@ def main():
                         help="Run with example dialogue for testing")
     parser.add_argument("--preview", action="store_true",
                         help="Fast preview: first 6 seconds at half resolution")
+    parser.add_argument("--force", action="store_true",
+                        help="Rebuild every node even on cache hits")
 
     args = parser.parse_args()
 
@@ -88,7 +90,7 @@ def main():
     print(f"  Turns: {len(dialogue.get('turns', []))}")
     print(f"{'=' * 60}\n")
 
-    output = run_dialogue_pipeline(dialogue, preview=args.preview)
+    output = run_dialogue_pipeline(dialogue, preview=args.preview, force=args.force)
 
     print(f"\n{'=' * 60}")
     print("  ✓ SUCCESS!")

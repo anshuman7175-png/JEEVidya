@@ -86,7 +86,7 @@ EMOTION_ENTRY_GESTURE: Dict[str, str] = {
     "confident": "nod",
 }
 
-_BLINK_FRAMES = 6         # close(2) hold(1) open(3)
+_BLINK_DURATION_MS = 280.0   # 85ms close (cubic) + 30ms hold + 165ms open (cubic)
 _SILENT = {"db": -80.0, "mouth_state": 0, "is_speaking": False}
 
 
@@ -109,9 +109,9 @@ class PuppetActor:
 
         # Deterministic per-character randomness (bit-identical re-renders)
         self._rng = random.Random(character)
-        self._next_blink_ms = self._rng.uniform(800, 2600)
+        self._next_blink_ms = self._rng.uniform(2200, 4500)
         self._blink_start_ms = -1e9
-        self._double_blink_pending = False     # 10% chance second blink
+        self._double_blink_pending = False
 
         # Micro-saccade state (random eye jitter between fixations)
         self._saccade_dx: float = 0.0
@@ -177,11 +177,14 @@ class PuppetActor:
         # NOTE: tilt + brow rates slowed from v1 (0.25→0.18, 0.3→0.20)
         # for more natural, less reactive feel
         self._smooth = {"head_yaw": 0.0, "lean": 0.0, "head_tilt": 0.0,
-                        "brow": 0.0}
+                        "head_nod": 0.0, "brow": 0.0, "bounce": 0.0, "sway": 0.0}
         # Asymmetric mouth smoothing state: the jaw OPENS fast (muscle
         # snap) and CLOSES slow (relaxation). Without this filter the
         # per-frame viseme jaw target strobes at frame rate.
         self._mouth_smooth = 0.0
+        self._current_viseme = "REST"
+        self._viseme_hold_frames = 0
+        self._quiet_frames = 0
 
     def _init_alt_torsos(self) -> None:
         """Crop torso regions from each pose image and register with BoneEngine."""
@@ -197,6 +200,14 @@ class PuppetActor:
         if torsos:
             self.engine.set_alt_torsos(torsos)
             print(f"  [Puppet] {self.character}: {len(torsos)} alt torsos registered")
+
+    def _safe_poses(self) -> set:
+        if self.character == "gudiya":
+            # Exclude e (severed splayed arms) and k (tiny T-pose)
+            return {"neutral", "a", "b", "c", "d", "f", "g", "h", "i", "j", "l", "n", "o", "p"}
+        else:
+            # Chintu has 15 completely verified full poses
+            return {"neutral", "a", "b", "c", "d", "e", "f", "g", "h", "j", "k", "l", "n", "o", "p"}
 
     # ─── span lifecycle ───────────────────────────────────
 
@@ -225,6 +236,27 @@ class PuppetActor:
             # The listener is being addressed, which is its own arousal
             # bump — this is what stops the dead-eyed listener.
             self.affect.push_event("addressed")
+
+        safe = self._safe_poses()
+        if is_my_turn:
+            if emotion in ("curious", "skeptical", "thinking") or is_question:
+                pref = ["c", "d", "j", "b", "o"]
+            elif emotion in ("enthusiastic", "excited", "happy", "amazed"):
+                pref = ["b", "o", "g", "c", "p"]
+            else:
+                pref = ["b", "c", "d", "g", "a", "o"]
+        else:
+            pref = ["neutral", "a", "d", "n"]
+        valid = [p for p in pref if p in safe and p in self.pose_lib.pose_names and p in self.rig.poses]
+        # Dynamically select a stance that differs from the current pose and avoids ping-pong
+        candidates = [p for p in valid if p != self.pose_state.current and not self.pose_state.would_pingpong(p)]
+        if not candidates:
+            candidates = [p for p in valid if p != self.pose_state.current]
+        chosen = candidates[0] if candidates else (valid[0] if valid else "neutral")
+        self._speak_pose = chosen
+        self._next_speak_pose_ms = span.start_ms + self._rng.uniform(5500, 8000)
+        if self.pose_state.current != chosen:
+            self.pose_state.set_target(chosen, displacement=0.5)
 
         if is_my_turn:
             self._viseme_track = VisemeTrack.from_words(span.words,
@@ -256,10 +288,6 @@ class PuppetActor:
             elif emotion == "curious":
                 self.gestures.schedule("lean_in", span.start_ms + 250, scale=0.6)
         self.gestures.clear_before(span.start_ms)
-        # Cut-masking blink: humans blink at attention shifts, and a
-        # blink just after the cut makes the edit itself feel smoother
-        self._next_blink_ms = min(self._next_blink_ms,
-                                  span.start_ms + self._rng.uniform(120, 300))
         self._was_active = is_my_turn
 
     # ─── listener coupling (§XVII) ────────────────────────
@@ -296,36 +324,37 @@ class PuppetActor:
                            f"wiring into the pose is dead")
         return [f"{self.character}: {v}" for v in out]
 
-    # ─── blink scheduler (log-normal + double-blink) ──────
+    # ─── blink scheduler (measured human profile) ──────
 
     def _next_blink_interval(self) -> float:
-        """Log-normal distribution: median ~3s, range 1.5–7s.
-        Real human blink statistics, not uniform random.
-
-        Divided by affect's `blink_rate_mult`: an aroused character blinks
-        up to 2.2× as often, a calm one barely more than half as often —
-        one of the strongest unconscious arousal cues there is."""
-        base = max(1400.0, min(7500.0, math.exp(self._rng.gauss(8.0, 0.4))))
-        rate = max(0.1, self.channels["blink_rate_mult"])
-        return max(650.0, min(9000.0, base / rate))
+        """Human resting blink distribution: 3.8 to 6.5 seconds.
+        Gentle modulation with affect's blink_rate_mult (clamped 0.8-1.25)
+        to avoid rapid flutter while preserving emotional expression."""
+        base = self._rng.uniform(3800.0, 6200.0)
+        rate = max(0.8, min(1.25, self.channels.get("blink_rate_mult", 1.0)))
+        return max(3200.0, min(7000.0, base / rate))
 
     def _blink_amount(self, t_ms: float, fps: int) -> float:
         if t_ms >= self._next_blink_ms:
             self._blink_start_ms = t_ms
-            # 10% double-blink: second blink 150ms later
-            if self._double_blink_pending:
-                self._double_blink_pending = False
-                self._next_blink_ms = t_ms + self._next_blink_interval()
-            elif self._rng.random() < 0.10:
-                self._double_blink_pending = True
-                self._next_blink_ms = t_ms + 150.0  # tight second blink
-            else:
-                self._next_blink_ms = t_ms + self._next_blink_interval()
+            self._next_blink_ms = t_ms + self._next_blink_interval()
         dt = t_ms - self._blink_start_ms
-        dur = _BLINK_FRAMES * 1000.0 / fps
-        if 0 <= dt <= dur:
-            t = dt / dur
-            return math.sin(t * math.pi) ** 0.7   # fast close, ease open
+        dur = _BLINK_DURATION_MS
+        if 0.0 <= dt <= dur:
+            # Measured human curve (close ~85ms cubic, hold ~30ms, open ~165ms cubic ease-out)
+            close_ms = 85.0
+            hold_ms = 30.0
+            open_ms = dur - close_ms - hold_ms
+            if dt < close_ms:
+                t = dt / close_ms
+                return t * t * t
+            dt_rem = dt - close_ms
+            if dt_rem < hold_ms:
+                return 1.0
+            dt_rem -= hold_ms
+            if dt_rem < open_ms:
+                t = dt_rem / open_ms
+                return 1.0 - (1.0 - (1.0 - t) ** 3)
         return 0.0
 
     # ─── micro-saccade generator ─────────────────────────────
@@ -338,29 +367,31 @@ class PuppetActor:
         positive character holds its gaze; an activated one checks away
         more often."""
         if t_ms >= self._next_saccade_ms:
-            # New fixation point: small random offset (max ±3px head-local)
+            # New fixation point: small random offset (max ±2.5px head-local)
             self._saccade_dx = self._rng.uniform(-2.5, 2.5)
             self._saccade_dy = self._rng.uniform(-1.5, 1.5)
             hold = max(0.2, self.channels["gaze_hold_mult"])
-            self._next_saccade_ms = t_ms + self._rng.uniform(300, 1500) * hold
+            self._next_saccade_ms = t_ms + self._rng.uniform(400, 1500) * hold
         return self._saccade_dx, self._saccade_dy
 
     # ─── speaking pose rotation ──────────────────────────
 
     def _speaking_pose(self, t_ms: float) -> str:
-        """Deterministically cycle natural talking poses every 2.5–4.5 s
-        so the hands gesticulate through the whole turn (only poses the
-        character actually has are eligible)."""
+        """Deterministically cycle natural talking poses every 5.5–8.0 s
+        so the hands hold expressive gesticulation without flickering or thrashing."""
+        safe = self._safe_poses()
         if t_ms >= self._next_speak_pose_ms or not self._speak_pose:
-            options = [p for p in self.pose_lib.pose_names
-                       if p in self.rig.poses
-                       and p not in ("full", "neutral")
-                       and p != self._speak_pose]
+            options = [p for p in ("b", "c", "d", "g", "h", "j", "o", "p", "a")
+                       if p in safe and p in self.pose_lib.pose_names
+                       and p in self.rig.poses and p != self._speak_pose
+                       and not self.pose_state.would_pingpong(p)]
             if not options:
-                options = [p for p in self.pose_lib.pose_names if p in self.rig.poses]
+                options = [p for p in ("b", "c", "d", "g", "o", "neutral")
+                           if p in safe and p in self.pose_lib.pose_names
+                           and p in self.rig.poses and p != self._speak_pose]
             if options:
-                self._speak_pose = options[self._rng.randrange(len(options))]
-            self._next_speak_pose_ms = t_ms + self._rng.uniform(2500, 4500)
+                self._speak_pose = self._rng.choice(options)
+            self._next_speak_pose_ms = t_ms + self._rng.uniform(5500, 8000)
         return self._speak_pose
 
     # --- pose synthesis ---
@@ -412,12 +443,14 @@ class PuppetActor:
         # Independent phase per actor prevents synchronized breathing
         self._breath_phase += 0.02
         if is_speaking:
-            # Speaking bounce: speech energy drives frequency and amplitude
-            pose.bounce += math.sin(f * settings.BODY_SPEAK_SPEED) \
-                * settings.BODY_SPEAK_BOUNCE * energy
-            pose.sway += math.sin(f * 0.25) * settings.BODY_SPEAK_SWAY * energy
-            pose.squash += math.sin(f * 0.3) \
-                * settings.BODY_SPEAK_SCALE_PULSE * energy
+            # Speaking bounce: natural speech cadence (~0.75 Hz, 1.5px amplitude)
+            # Replaces legacy 2.0 Hz / 5px jarring bounce
+            pose.bounce += math.sin(f * 0.078) * 1.5 * energy
+            # Speaking sway: relaxed lateral weight shift (~0.25 Hz, 1.0px amplitude)
+            # Replaces legacy 2.5 Hz (0.4s) rapid trembling
+            pose.sway += math.sin(f * 0.026) * 1.0 * energy
+            # Organic squash & stretch: breath swell + nod compression
+            pose.squash += math.sin(self._breath_phase) * 0.003 * energy - pose.head_nod * 0.012
             # Speech-energy brow lift: excited speech raises brows
             amp_norm = max(0.0, min(1.0, (fa.get("db", -80.0) + 50.0) / 35.0))
             pose.brow += amp_norm * 0.28 * energy
@@ -426,7 +459,7 @@ class PuppetActor:
             pose.bounce += math.sin(self._breath_phase) \
                 * settings.BODY_BREATHE_AMPLITUDE * energy
             pose.squash += math.sin(self._breath_phase) \
-                * 0.01 * energy
+                * 0.003 * energy - pose.head_nod * 0.012
             # Attentive listener nodding: triggered by speaker's amplitude peaks
             amp_now = max(0.0, min(1.0, (fa.get("db", -80.0) + 50.0) / 35.0))
             if amp_now > 0.65 and (t_ms - self._last_listener_nod_ms) > 2000:
@@ -455,45 +488,51 @@ class PuppetActor:
             self._tilt_sign *= -1.0   # flip for next emphasis
         pose.head_tilt += gesture_tilt
 
-        # 3b · Pose library: gesture → body pose with anti-ping-pong
+        # 3b · Pose library: natural gesticulation and stance rotation
         if self.pose_lib.has_poses:
-            gesture_pose = self.gestures.active_pose(t_ms)
-            if gesture_pose and gesture_pose in self.pose_lib.pose_names and gesture_pose in self.rig.poses:
-                if not self.pose_state.would_pingpong(gesture_pose):
-                    self.pose_state.set_target(gesture_pose, displacement=0.6)
-            elif is_speaking:
-                # Rotate through natural talking poses on phrase-length intervals
-                next_sp = self._speaking_pose(t_ms)
-                if next_sp in self.pose_lib.pose_names and next_sp in self.rig.poses:
-                    if not self.pose_state.would_pingpong(next_sp):
-                        self.pose_state.set_target(next_sp, displacement=0.4)
+            if is_speaking:
+                next_p = self._speaking_pose(t_ms)
+                if next_p and next_p != self.pose_state.current and not self.pose_state.is_blending:
+                    self.pose_state.set_target(next_p, displacement=0.5)
             _from, _to, _bt = self.pose_state.step()
             pose.body_pose = _from
             pose.body_pose_to = _to
             pose.body_pose_blend = _bt
 
         # 4 · Mouth: coarticulated viseme glide × enveloped amplitude.
-        #     The envelope steps EVERY frame so speech decays smoothly
-        #     into silence instead of snapping shut.
+        #     Agile tracking at 40ms syllable rates without artificial hold lag.
         amp_level = self._env.step(fa.get("db", -80.0))
         if is_speaking and self._viseme_track is not None:
             wt_dict, jaw = self._viseme_track.weights_at(t_ms, energy)
-            # Pick the dominant viseme for the sprite render path
             sorted_v = sorted(wt_dict.items(), key=lambda x: x[1], reverse=True)
             primary = sorted_v[0][0].value if sorted_v else "REST"
             secondary = sorted_v[1][0].value if len(sorted_v) > 1 else primary
             blend = sorted_v[1][1] if len(sorted_v) > 1 else 0.0
-            pose.viseme = primary
-            pose.viseme_to = secondary
-            pose.viseme_blend = blend
-            # Jaw controls mouth openness, gated by amplitude envelope,
-            # then run through an asymmetric attack/release filter so the
-            # mouth moves at MUSCLE rate (open ~50ms, close ~130ms) instead
-            # of strobing to a new target every single frame.
+
             raw_open = jaw * (0.22 + 0.78 * max(0.0, min(1.0, amp_level)))
-            k = 0.55 if raw_open > self._mouth_smooth else 0.28
+            # Organic muscle filter: attack 0.28, release 0.12
+            k = 0.28 if raw_open > self._mouth_smooth else 0.12
             self._mouth_smooth += (raw_open - self._mouth_smooth) * k
             pose.mouth_open = self._mouth_smooth
+
+            # Quiet tracking for inter-word pause hysteresis
+            if self._mouth_smooth < 0.10:
+                self._quiet_frames += 1
+            else:
+                self._quiet_frames = 0
+
+            # Inter-word closure: close to REST only after sustained pause
+            if self._quiet_frames >= 3 or self._mouth_smooth < 0.08:
+                pose.viseme = "REST"
+                pose.viseme_to = "REST"
+                pose.viseme_blend = 0.0
+                self._current_viseme = "REST"
+            else:
+                pose.viseme = primary
+                pose.viseme_to = secondary
+                pose.viseme_blend = blend
+                self._current_viseme = primary
+
             # Speech-beat nod: only on amplitude peaks (> 0.6)
             if self._viseme_track.word_started_within(t_ms) \
                     and fa.get("is_speaking", False) \
@@ -507,27 +546,24 @@ class PuppetActor:
                 self._mouth_smooth = 0.0
             pose.viseme_blend, pose.mouth_open = 0.0, self._mouth_smooth
 
-        # 5 · Blink (log-normal intervals + double-blink)
+        # 5 · Blink (measured human ease-in, hold, ease-out)
         pose.blink = self._blink_amount(t_ms, fps)
 
-        # 5b · Phrase-boundary blink boost: speakers blink more at pauses
-        if is_speaking and self._viseme_track is not None:
-            if not self._viseme_track.word_started_within(t_ms, 300) \
-                    and (t_ms - self._blink_start_ms) > 2000 \
-                    and self._rng.random() < 0.003:  # ~10% per pause
-                self._next_blink_ms = min(self._next_blink_ms, t_ms + 50)
-
-        # 5c · Micro-saccades (eye jitter between fixation points)
+        # 5b · Micro-saccades (eye jitter between fixation points)
         sdx, sdy = self._update_saccades(t_ms)
         pose.eye_dx = sdx
         pose.eye_dy = sdy
 
         # 6 · Critically-damped smoothing — organic, film-grade rate:
-        #     tilt/brow/lean slowed for natural, organic feel (no snapping)
+        #     All motion channels are smoothed with critically damped filters
+        #     to ensure C1 continuity and eliminate any angular steps or trembling.
         pose.head_yaw = self._chase("head_yaw", yaw_target, 0.12)
         pose.lean = self._chase("lean", pose.lean, 0.14)
         pose.head_tilt = self._chase("head_tilt", pose.head_tilt, 0.12)
+        pose.head_nod = self._chase("head_nod", pose.head_nod, 0.14)
         pose.brow = self._chase("brow", pose.brow, 0.14)
+        pose.bounce = self._chase("bounce", pose.bounce, 0.15)
+        pose.sway = self._chase("sway", pose.sway, 0.12)
 
         # 7 · Record what was actually RENDERED (not what the matrix said)
         #     so the coherence audit can catch a face whose expression

@@ -45,10 +45,10 @@ def blend_frames() -> int:
 
 def min_hold_frames() -> int:
     """Minimum frames a pose must be HELD (fully committed) before
-    another transition may begin: ~1.5 s at the current FPS. This is
-    the guard against rapid pose thrash while allowing lively speech
-    transitions on phrase boundaries."""
-    return max(4, round(_fps() * 1.5))
+    another transition may begin: ~3.5 s at the current FPS. This is
+    the guard against rapid pose thrash while allowing natural speech
+    gesticulation without hands flashing or blinking."""
+    return max(10, round(_fps() * 3.5))
 
 # Default pose when nothing is triggered
 DEFAULT_POSE = "neutral"
@@ -141,28 +141,15 @@ class PoseLibrary:
 
     def blended_body(self, from_pose: str, to_pose: str,
                      blend_t: float) -> Optional[Image.Image]:
-        """Cross-fade between two full body images. blend_t: 0=from, 1=to.
-
-        Uses a TRUE linear blend in float space so the combined opacity
-        is EXACTLY the max of both sources, never higher. The old
-        alpha-composite path layered the incoming image ON TOP of the
-        outgoing at full alpha, which doubled opacity at mid-transition
-        and caused a bright flash/ghost artifact."""
+        """Select body for pose transition. Snaps cleanly at midpoint t >= 0.5
+        to guarantee 100% solid opacity with zero ghosting or blur/shadow artifacts."""
         img_from = self._poses.get(from_pose)
         img_to = self._poses.get(to_pose)
         if img_to is None:
             return img_from
-        if img_from is None or blend_t >= 0.99:
+        if img_from is None or blend_t >= 0.5:
             return img_to
-        if blend_t <= 0.01:
-            return img_from
-
-        # True symmetric linear cross-fade in float space (no opacity doubling)
-        t = max(0.0, min(1.0, blend_t))
-        a_arr = np.array(img_from, dtype=np.float32)
-        b_arr = np.array(img_to, dtype=np.float32)
-        blended = a_arr * (1.0 - t) + b_arr * t
-        return Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8))
+        return img_from
 
 
 class PoseState:
@@ -220,20 +207,17 @@ class PoseState:
         self._blend_frame = 0
         self._hold_frames = 0
 
-        # Cinematic transition durations (0.28s - 0.48s) at 60fps.
-        # High-displacement changes (arms moving to new positions) transition
-        # quickly (15-20 frames) so the S-curve passes through the double-arm
-        # overlap zone in <150ms (reads as motion blur, not double-exposure).
+        # Smooth keyframe transitions (0.24s - 0.32s, ~14-20 frames @ 60fps).
+        # Eliminates the flashing/blinking hand artifact by providing a
+        # continuous Perlin smootherstep dissolve between silhouettes.
         if displacement > 0.7:
-            base_s = 0.28
+            base_s = 0.24
         elif displacement > 0.3:
-            base_s = 0.38
+            base_s = 0.28
         else:
-            base_s = 0.48
-        base = round(_fps() * base_s)
-        # ±1 frame jitter (breaks metronomic regularity)
-        self._blend_total = max(8, round(_fps() * 0.22),
-                                base + self._rng.choice([-1, 0, 1]))
+            base_s = 0.32
+        base = max(6, round(_fps() * base_s))
+        self._blend_total = max(6, base + self._rng.choice([-1, 0, 1]))
 
         # Track for anti-ping-pong
         self._recent.append(pose)

@@ -787,6 +787,8 @@ class BoneEngine:
         overshoot_deg, lag_px = physics or (0.0, 0.0)
         ch = FaceChannels(mouth=self._mouth_params(pose),
                           viseme_class=pose.viseme,
+                          viseme_to=pose.viseme_to,
+                          viseme_blend=pose.viseme_blend,
                           eyes=self._eye_state(pose),
                           brow=pose.brow)
         head = ht.HeadPose(

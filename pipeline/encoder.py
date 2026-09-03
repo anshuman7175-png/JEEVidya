@@ -191,7 +191,10 @@ def concat_and_mux(segment_paths: list, audio_path: Optional[str],
     cmd = [_ffmpeg_exe(), "-y", "-f", "concat", "-safe", "0", "-i", list_path]
     if has_audio:
         cmd += ["-i", audio_path]
-    cmd += ["-c:v", "copy"]
+    cmd += [
+        "-c:v", "copy",
+        "-bsf:v", "h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1",
+    ]
     if has_audio:
         cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
     cmd += [output_path]

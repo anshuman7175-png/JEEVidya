@@ -541,7 +541,8 @@ class EyeRasterizer:
         ImageDraw.Draw(mask).polygon(
             [((x - self._x0) * S, (y - self._y0) * S)
              for x, y in self._clip_poly], fill=255)
-        self._clip_mask = mask
+        # Softly antialiased boundary eliminates polygonal cutout edge seams
+        self._clip_mask = mask.filter(ImageFilter.GaussianBlur(max(1.0, S * 0.6)))
         ap = np.asarray(mask) > 127
         self._ap = ap
         col = ap.any(axis=0)
@@ -581,53 +582,45 @@ class EyeRasterizer:
         idx = np.nonzero(self._col_any)[0]
         return [(float(x), float(rows[x])) for x in idx]
 
-    def _lid_shear(self, src: Image.Image, origin: Tuple[float, float],
-                   rows: np.ndarray) -> np.ndarray:
-        """The lid strip at NATURAL SCALE, sheared per column so its bottom
-        row rides the leading edge. Returns (H, W, 3) over the whole patch.
+    def _lid_surface(self, closure: float, rows: np.ndarray,
+                     skin_rgb: Tuple[int, int, int]) -> np.ndarray:
+        """3D anatomical eyelid surface shaded across the eyeball dome.
 
-        The previous version stretched the strip to whatever height the
-        closure needed. On this art that is a 28px band over a 95px opening
-        — a 3.4× smear, which is why a blink looked like a bar of mush
-        drawn across the eye. A lid does not stretch as it closes; it
-        TRANSLATES over the eyeball. So here the pixels keep their aspect
-        and each column is merely shifted down by its own amount:
-
-            shift[x] = rows[x] − (rest bottom row)
-
-        Per column, not one shift for the patch, because the leading edge
-        is a curve — the eye closes deepest at its middle. A single shift
-        would either tear the lid away from the rim at the corners or crush
-        it at the centre; the shear keeps the strip continuous and lets its
-        bottom row follow the curve exactly. At closure 0 the shift is the
-        one pixel that returns the strip where it was cut from, so a
-        resting frame is untouched artwork.
-
-        Sampling is CLAMPED vertically, which is the guarantee that
-        matters: the lid's alpha is the coverage mask, so every covered
-        pixel must have a colour, and a covered pixel above the shifted
-        strip would otherwise be a transparent hole in the lid. Clamping
-        repeats the strip's topmost row — measured clean eyelid skin — so
-        the deep part of a closure continues that tone instead of
-        distorting the crease to reach it.
+        Eliminates the barcode streaks and rectangular bounding box seams
+        caused by clamping a tight baked 2D texture sprite over a moving curve.
+        Provides smooth spherical volume, soft upper crease depth, and seamless
+        skin blending at any closure level.
         """
-        S = SUPERSAMPLE
-        sw = max(1, int(round(src.width * S)))
-        sh = max(1, int(round(src.height * S)))          # natural scale
-        arr = np.asarray(src.convert("RGB").resize((sw, sh), Image.LANCZOS))
-        oy = int(round((origin[1] - self._y0) * S))
-        ox = int(round((origin[0] - self._x0) * S))
+        cols = np.nonzero(self._col_any)[0]
+        if len(cols) == 0:
+            return np.zeros((self._h, self._w, 3), dtype=np.uint8)
 
-        # Per-column shift that puts the strip's bottom row on the edge.
-        shift = np.rint(rows - float(oy + sh - 1))
-        shift[~self._col_any] = 0.0
-        # Columns outside the aperture are never painted (the coverage mask
-        # is empty there), but they still index the array, so keep them in
-        # range rather than relying on the mask.
-        ys = np.arange(self._h)[:, None]
-        sy = np.clip(ys - shift[None, :] - oy, 0, sh - 1).astype(np.intp)
-        sx = np.clip(np.arange(self._w) - ox, 0, sw - 1).astype(np.intp)
-        return arr[sy, sx[None, :].repeat(self._h, axis=0)]
+        base_skin = np.array(skin_rgb, dtype=np.float32)
+        S = SUPERSAMPLE
+        cx = (self.geo.iris_c[0] - self._x0) * S
+        cy = (self.geo.iris_c[1] - self._y0) * S
+        rx = self.geo.axes[0] * S * 1.5
+        ry = self.geo.axes[1] * S * 1.5
+
+        ys, xs = np.mgrid[0:self._h, 0:self._w]
+        dx = (xs - cx) / max(1.0, rx)
+        dy = (ys - cy) / max(1.0, ry)
+
+        r2 = dx * dx + dy * dy
+        dome = np.clip(1.0 - 0.40 * r2, 0.0, 1.0)
+
+        top_y = self._col_top[cols].min()
+        bot_y = self._col_bot[cols].max()
+        norm_y = np.clip((ys - top_y) / max(1.0, bot_y - top_y), 0.0, 1.0)
+
+        # Soft upper crease depth
+        crease_shadow = 1.0 - 0.08 * np.exp(-12.0 * (norm_y ** 1.5))
+        # Spherical dome specular curvature
+        dome_spec = 0.06 * (dome ** 1.5)
+
+        intensity = crease_shadow + dome_spec
+        rgb = base_skin[None, None, :] * intensity[..., None]
+        return np.clip(rgb, 0, 255).astype(np.uint8)
 
     @staticmethod
     def _as_mask(m: np.ndarray) -> Image.Image:
@@ -791,56 +784,71 @@ class EyeRasterizer:
         closure = max(0.0, min(1.0, blink))
         rows = self._margin_rows(closure)
         cover = self._cover(rows)
-        edge = self._edge_points(rows - 0.5)
+        if closure > 0.75:
+            import cv2
+            k = max(2, int(S * 1.6))
+            kernel = np.ones((k, k), np.uint8)
+            cover = cv2.dilate(cover.astype(np.uint8), kernel, iterations=1) > 0
 
-        if self.lid is not None:
-            # ART LID — the artist's own eyelid skin, slid down over the
-            # eye. Colour and extent come from different places, and both
-            # matter:
-            #
-            #   pixels : the baked strip at NATURAL SCALE, sheared per
-            #            column so its bottom row rides the leading edge
-            #            (see `_lid_shear`). That bottom row is the row
-            #            directly above the aperture — the artist's own
-            #            crease and lash — so the skin arriving at the
-            #            closing edge is drawn skin, undistorted, and a
-            #            resting frame is untouched artwork.
-            #   alpha  : the coverage mask itself. Because the shear samples
-            #            with vertical clamping, every covered pixel has
-            #            real skin behind it; the alpha alone decides the
-            #            shape. The old code took the opposite approach —
-            #            paste the strip, then intersect with a polygon —
-            #            which meant any disagreement between the two
-            #            became a transparent hole in the lid.
-            rgb = self._lid_shear(self.lid, geo.lid_origin, rows)
-            alpha = (cover * 255).astype(np.uint8)
-            img.alpha_composite(Image.fromarray(
-                np.dstack([rgb, alpha]), "RGBA"))
-        else:
-            # SYNTHETIC FALLBACK — flat skin, for rigs with no baked lid.
-            img.paste(Image.new("RGBA", img.size, skin + (255,)), (0, 0),
-                      self._as_mask(cover))
-            if edge and closure > 0.02:
-                # Crease + lash on the leading edge, which a flat fill has
-                # none of. One point per column, so this polyline is
-                # monotonic and cannot cross itself. The ART path needs
-                # none of this — the strip's own bottom row IS the lash the
-                # artist drew, and painting a palette line over it would
-                # put flat colour back inside the eye.
-                crease = self._color("lip_shadow", (150, 100, 84))
-                draw.line(edge, fill=crease + (160,),
-                          width=max(1, int(S * 0.9)))
-                lash = self._color("lash", (38, 26, 24))
-                draw.line(edge, fill=lash + (255,), width=max(1, int(S * 1.6)))
+        # 3D anatomical eyelid surface matching character palette skin and eye dome
+        skin_val = self.palette.get("skin", (245, 175, 135))
+        skin_rgb = (max(skin_val[0], 240), max(skin_val[1], 168), max(skin_val[2], 128))
+        rgb = self._lid_surface(closure, rows, skin_rgb)
+        alpha = (cover * 255).astype(np.uint8)
+        img.alpha_composite(Image.fromarray(
+            np.dstack([rgb, alpha]), "RGBA"))
+
+        # Eyelash rim & eyelid crease shadow along the closing contour:
+        # Fades in smoothly as the lid closes; at full closure, rests gracefully
+        # along the natural cartoon eyelash seam (~88% depth).
+        # Tapers to 0 at the medial canthus (near the nose bridge) to eliminate
+        # dark notches, hash marks, or blunt line seams against the nose.
+        if closure > 0.35:
+            lash_closure = min(closure, 0.88) if closure >= 0.90 else closure
+            lash_rows = self._margin_rows(lash_closure)
+            edge = self._edge_points(lash_rows - 0.5)
+            if len(edge) > 1:
+                draw = ImageDraw.Draw(img)
+                fade = min(1.0, (closure - 0.35) / 0.25)
+                crease = self._color("lip_shadow", (140, 80, 65))
+                lash = self._color("lash", (28, 8, 4))
+                xs = [p[0] for p in edge]
+                min_x, max_x = min(xs), max(xs)
+                span_x = max(1.0, max_x - min_x)
+
+                # Segment-by-segment stroke with medial canthus (nose) tapering
+                for i in range(len(edge) - 1):
+                    p0, p1 = edge[i], edge[i + 1]
+                    mid_x = (p0[0] + p1[0]) * 0.5
+                    norm_x = (mid_x - min_x) / span_x
+                    # dist_to_inner: 0 at inner canthus (nose), 1 at outer canthus
+                    dist_to_inner = norm_x if left else (1.0 - norm_x)
+                    taper = min(1.0, max(0.0, (dist_to_inner - 0.08) / 0.20))
+                    taper_outer = min(1.0, max(0.0, (1.0 - dist_to_inner) / 0.08))
+                    stroke_fade = fade * taper * taper_outer
+                    if stroke_fade > 0.01:
+                        c_alpha = int(140 * stroke_fade)
+                        l_alpha = int(220 * stroke_fade)
+                        draw.line([p0, p1], fill=crease + (c_alpha,),
+                                  width=max(1, int(S * 0.9)))
+                        draw.line([p0, p1], fill=lash + (l_alpha,),
+                                  width=max(1, int(S * 1.4)))
 
         # 4 · Clip to the aperture, then downsample.
-        # Applied at supersampled resolution so the boundary is
-        # antialiased by the LANCZOS step and the eye's rim blends into
-        # the artwork's lash line instead of showing a stair-stepped edge.
+        # At high blink closure (> 0.75), softly dilate aperture mask by ~2px
+        # to cleanly conceal open-eye socket lines without dark specks near nose.
+        final_mask = clip_mask
+        if closure > 0.75:
+            dilate_r = max(1, int(S * 1.5))
+            dilated = clip_mask.filter(ImageFilter.MaxFilter(dilate_r * 2 + 1))
+            dilated = dilated.filter(ImageFilter.GaussianBlur(S * 0.7))
+            blend_w = min(1.0, (closure - 0.75) / 0.20)
+            final_mask = Image.blend(clip_mask, dilated, blend_w)
+
         img.putalpha(Image.composite(img.split()[3],
-                                     Image.new("L", img.size, 0), clip_mask))
+                                     Image.new("L", img.size, 0), final_mask))
         img = img.resize((max(w // S, 1), max(h // S, 1)), Image.LANCZOS)
-        img = img.filter(ImageFilter.GaussianBlur(0.4))
+        img = img.filter(ImageFilter.GaussianBlur(0.35))
         out = (img, (self._x0, self._y0))
         self._cache[key] = out
         if len(self._cache) > self._cache_size:

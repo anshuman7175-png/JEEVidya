@@ -1054,8 +1054,18 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
         # happens the iris is what must move: skin is the face's identity.
         palette["iris"] = _push_dark(palette["iris"], palette["skin"],
                                      IRIS_LASH_SEP)
-        palette["lash"] = _push_dark(palette["lash"], palette["iris"],
-                                     IRIS_LASH_SEP)
+    # Canonical mouth origin in head plate space (centroid X, upper lip top Y)
+    canon_arr = np.asarray(head_crop.convert("RGBA"))
+    plate_arr = np.asarray(plate.convert("RGBA"))
+    m_diff = np.abs(canon_arr[..., :3].astype(int) - plate_arr[..., :3].astype(int)).max(axis=2)
+    m_diff[:int(head_crop.height * 0.50), :] = 0
+    m_ys, m_xs = np.where(m_diff > 15)
+    if len(m_ys) > 0:
+        mouth_cx = float(m_xs.mean())
+        mouth_top = float(np.percentile(m_ys, 10))
+        mouth_origin = (mouth_cx, mouth_top)
+    else:
+        mouth_origin = (float(plate_lms[0][0]), float(plate_lms[0][1]))
 
     rig.head = HeadGeometry(
         plate="head_plate.png",
@@ -1067,7 +1077,8 @@ def bake(rig: Rig, body: Image.Image, detect, canonical_pose: str = "neutral"
         iris_l=iris_geo_l, iris_r=iris_geo_r,
         art_eye_l=art_eye_l, art_eye_r=art_eye_r,
         palette=palette, shading="mouth_shading.png",
-        offset=(float(x0), float(y0)), face_height=fh)
+        offset=(float(x0), float(y0)), face_height=fh,
+        mouth_origin=mouth_origin)
 
     # ─── §3.1–3.4 per-pose registration + bakes ───────────
     pose_files: Dict[str, str] = {canonical_pose: ""}
@@ -1266,6 +1277,7 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
     rig.visemes = {k: v for k, v in rig.visemes.items()
                    if k.startswith("LID_")}
     rig.mouth_targets = {}
+    rig.viseme_anchors = {}
     if not os.path.isdir(src):
         return 0, 0
 
@@ -1316,31 +1328,26 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
         rig.mouth_targets[vis] = fit_mouth_target(outer_n, inner_n, seed)
         targets += 1
 
-        # ── the plate cut: anatomical super-ellipse crop with smoothstep feather ──
+        # ── the plate cut: bounded below subnasale, anchored to upper lip ──
         ratio = canon_fh / local_fh          # source px → canonical px
 
-        # Outer lip boundaries → centre
+        # Outer lip boundaries
         min_x, max_x = float(outer_px[:, 0].min()), float(outer_px[:, 0].max())
         min_y, max_y = float(outer_px[:, 1].min()), float(outer_px[:, 1].max())
 
-        # Puckered cartoon visemes have tall upper lips: shift center up and use generous top padding
-        if "ROUNDED" in vis:
-            cx = (min_x + max_x) / 2.0
-            cy = (min_y + max_y) / 2.0 - 0.02 * local_fh
-            pad_top = 0.075 * local_fh
-            pad_bot = 0.040 * local_fh
-            pad_side = 0.065 * local_fh
-        else:
-            cx = (min_x + max_x) / 2.0
-            cy = (min_y + max_y) / 2.0
-            pad_top = 0.050 * local_fh
-            pad_bot = 0.035 * local_fh
-            pad_side = 0.060 * local_fh
+        src_subnasale_y = float(lm[164, 1])
+        src_lip_top = lm[0]
 
+        # Bounded crop: top NEVER encroaches into subnasale or nostrils!
+        pad_top = min(0.025 * local_fh, max(3.0, (min_y - src_subnasale_y) * 0.40))
+        pad_bot = 0.035 * local_fh
+        pad_side = 0.050 * local_fh
+
+        cx = float((min_x + max_x) / 2.0)
         x0 = int(cx - (max_x - min_x) / 2.0 - pad_side)
         x1 = int(cx + (max_x - min_x) / 2.0 + pad_side)
-        y0 = int(cy - (max_y - min_y) / 2.0 - pad_top)
-        y1 = int(cy + (max_y - min_y) / 2.0 + pad_bot)
+        y0 = max(int(src_subnasale_y + 2.0), int(min_y - pad_top))
+        y1 = int(max_y + pad_bot)
 
         crop = img.crop((x0, y0, x1, y1))
         cw, ch = crop.size
@@ -1354,6 +1361,12 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
         mask = np.clip((1.0 - norm_dist) / 0.25, 0.0, 1.0)
         mask = mask * mask * (3 - 2 * mask)  # smoothstep
 
+        # Smooth feather across top pad region to ensure zero residue above lip vermilion
+        top_fade_h = max(2, int((min_y - y0) * 0.8))
+        for r in range(min(top_fade_h, ch)):
+            f = (r / top_fade_h) ** 1.5
+            mask[r, :] *= f
+
         crop_arr = np.array(crop).copy()
         crop_arr[..., 3] = (mask * 255).astype(np.uint8)
 
@@ -1364,6 +1377,11 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
         rel = os.path.join("visemes", f"{vis}.png")
         plate.save(os.path.join(d, rel))
         rig.visemes[vis] = rel
+
+        # Canonical mouth-center and upper-lip anchor in sprite pixels
+        anchor_x = float((cx - x0) * ratio)
+        anchor_y = float((min_y - y0) * ratio)
+        rig.viseme_anchors[vis] = (anchor_x, anchor_y)
         plates += 1
     return plates, targets
 

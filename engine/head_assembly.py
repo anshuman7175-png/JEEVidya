@@ -58,11 +58,15 @@ class FaceChannels:
     """Everything that changes INSIDE the head plate for one frame."""
     mouth: MouthParams = field(default_factory=MouthParams)
     viseme_class: str = "REST"
+    viseme_to: Optional[str] = None
+    viseme_blend: float = 0.0
     eyes: EyeState = field(default_factory=EyeState)
     brow: float = 0.0
 
     def key(self) -> Tuple:
-        return (self.mouth.quantized_key(), self.viseme_class,
+        v_blend_q = round(self.viseme_blend * 4) / 4.0 if (self.viseme_to and self.viseme_to != self.viseme_class) else 0.0
+        v_to = self.viseme_to if v_blend_q > 0.0 else None
+        return (self.mouth.quantized_key(), self.viseme_class, v_to, v_blend_q,
                 self.eyes.quantized_key(), round(self.brow / _Q_BROW) * _Q_BROW)
 
 
@@ -124,9 +128,22 @@ class HeadAssembly:
         self.brow_l = self._pts(geo.brow_l)
         self.brow_r = self._pts(geo.brow_r)
 
+        self.landmarks = self._pts(geo.landmarks)
+        if getattr(geo, "mouth_origin", None):
+            self.lip_top = (geo.mouth_origin[0] * self.scale, geo.mouth_origin[1] * self.scale)
+        elif rig.character == "gudiya":
+            self.lip_top = (312.56 * self.scale, 518.0 * self.scale)
+        elif rig.character == "chintu":
+            self.lip_top = (373.98 * self.scale, 548.0 * self.scale)
+        elif self.landmarks:
+            self.lip_top = self.landmarks[0]
+        else:
+            self.lip_top = (geo.offset[0] * self.scale, geo.offset[1] * self.scale)
+
         # Art viseme sprites, when the character has them: geometry from
         # the model, pixels from the artwork (Part IV §4.3).
         self.art: Dict[str, Image.Image] = {}
+        self.art_anchors: Dict[str, Tuple[float, float]] = {}
         for name, fname in (rig.visemes or {}).items():
             if name.startswith("LID_"):
                 continue
@@ -134,6 +151,9 @@ class HeadAssembly:
             if os.path.exists(p):
                 try:
                     self.art[name] = self._load(p)
+                    if hasattr(rig, "viseme_anchors") and name in rig.viseme_anchors:
+                        ax, ay = rig.viseme_anchors[name]
+                        self.art_anchors[name] = (ax * self.scale, ay * self.scale)
                 except Exception:
                     pass
 
@@ -252,19 +272,18 @@ class HeadAssembly:
 
     def body(self, from_pose: str, to_pose: str, blend_t: float
              ) -> Optional[Image.Image]:
-        """Cross-fade two HEADLESS bodies. Both layers fade symmetrically
-        in lockstep with the head affine transform."""
+        """Cross-fade two HEADLESS bodies smoothly without 1-frame pops."""
         a = self.headless(from_pose) or self.headless(self.rig.canonical_pose)
         b = self.headless(to_pose) or a
         if a is None:
             return None
-        t = max(0.0, min(1.0, blend_t))
-        if b is None or b is a or t <= 0.005:
+        if b is None or b is a:
             return a.copy()
-        if t >= 0.995:
+        t = max(0.0, min(1.0, blend_t))
+        if t <= 0.01:
+            return a.copy()
+        if t >= 0.99:
             return b.copy()
-
-        # True symmetric alpha cross-fade
         a_arr = np.array(a, dtype=np.float32)
         b_arr = np.array(b, dtype=np.float32)
         blended = a_arr * (1.0 - t) + b_arr * t
@@ -292,9 +311,11 @@ class HeadAssembly:
         self.eyes.composite(plate, ch.eyes)
         art = self.art.get(ch.viseme_class)
         if art is not None:
-            mcx, mcy = self.mouth.center
-            px = int(round(mcx - art.width / 2.0))
-            py = int(round(mcy - art.height / 2.0))
+            anchor = self.art_anchors.get(ch.viseme_class, (art.width / 2.0, 4.0 * self.scale))
+            # Anatomical jaw follow (expands only downwards toward chin!)
+            jaw_dy = ch.mouth.jaw * 1.5 * self.scale
+            px = int(round(self.lip_top[0] - anchor[0]))
+            py = int(round(self.lip_top[1] - anchor[1] + jaw_dy))
             plate.alpha_composite(art, (px, py))
         else:
             self.mouth.composite(plate, ch.mouth, ch.viseme_class)
@@ -434,11 +455,7 @@ class HeadAssembly:
         head_img = self._xcache.transform(plate, ch.key(), aff, canvas_size)
         body.alpha_composite(head_img, (0, 0))
 
-        # Step 5: occluder cross-fade — hands/props that must render IN
-        # FRONT of the head are composited here, blended with the same
-        # eased blend_t the body and head use. Without this, the occluder
-        # snaps from one pose's hands to the other's during transitions,
-        # creating a flash/discontinuity.
+        # Step 5: occluder cross-fade — hands/props that must render IN FRONT of the head
         t = max(0.0, min(1.0, blend_t))
         occ_a = self.occluder(from_pose)
         occ_b = self.occluder(to_pose) if to_pose != from_pose else occ_a
@@ -447,23 +464,18 @@ class HeadAssembly:
                 occ_a = occ_b
             if occ_b is None:
                 occ_b = occ_a
-            if occ_a is occ_b or t <= 0.005:
+            if occ_a is occ_b or t <= 0.01:
                 body.alpha_composite(occ_a, (0, 0))
-            elif t >= 0.995:
+            elif t >= 0.99:
                 body.alpha_composite(occ_b, (0, 0))
             else:
-                # Linear blend in float space, same as body()
                 oa = np.array(occ_a, dtype=np.float32)
                 ob = np.array(occ_b, dtype=np.float32)
                 if oa.shape == ob.shape:
-                    occ_blend = np.clip(oa * (1.0 - t) + ob * t,
-                                        0, 255).astype(np.uint8)
-                    body.alpha_composite(
-                        Image.fromarray(occ_blend), (0, 0))
+                    occ_blend = np.clip(oa * (1.0 - t) + ob * t, 0, 255).astype(np.uint8)
+                    body.alpha_composite(Image.fromarray(occ_blend), (0, 0))
                 else:
-                    # Different sizes: just composite the dominant one
-                    body.alpha_composite(
-                        occ_b if t > 0.5 else occ_a, (0, 0))
+                    body.alpha_composite(occ_b if t >= 0.5 else occ_a, (0, 0))
         return body
 
     # ─── QC surface ───────────────────────���───────────────

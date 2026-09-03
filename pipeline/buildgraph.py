@@ -552,7 +552,7 @@ class VideoBuild:
                 "dna": self.dna.cache_key_material(),      # Tier 2 genome
                 "overrides": self.overrides,               # Tier 3 critic fixes
             }
-            seg_key = key_of("seg-v1", code_fp, asset_fp,
+            seg_key = key_of("seg-v12-no-flash-scale", code_fp, asset_fp,
                              json.dumps(recipe, sort_keys=True,
                                         ensure_ascii=False))
 

@@ -17,6 +17,7 @@ Supports res_scale for fast half-resolution previews.
 """
 from __future__ import annotations
 
+import math
 import os
 import time as time_module
 from typing import Any, Callable, Dict, List, Optional
@@ -111,8 +112,8 @@ class StreamingCompositor(CinematicCompositor):
         self.fast_particles = FastParticleRenderer()
         # Critic-agent overrides: caption size/position, hologram scale
         cap_scale = 1.0 + self.overrides.get("caption_font_scale", 0.0)
-        self.caption_y_frac = min(0.90, settings.CAPTION_Y_POSITION
-                                  + self.overrides.get("caption_y_position", 0.0))
+        self.caption_y_frac = min(0.78, max(0.65, settings.CAPTION_Y_POSITION
+                                  + self.overrides.get("caption_y_position", 0.0)))
         self.hologram_scale = max(0.4, 1.0
                                   + self.overrides.get("hologram_scale", 0.0))
         self.caption_font = resolve_devanagari_font(
@@ -747,24 +748,33 @@ class StreamingCompositor(CinematicCompositor):
         for i, elem in enumerate(turn.get("visual_elements", [])):
             action = elem.get("action", "")
             params = elem.get("params", {})
-            ep = min(1.0, max(0.0, (progress - i * 0.2) / 0.3))
+            ep = min(1.0, max(0.0, (progress - i * 0.08) / 0.16))
             if ep <= 0:
                 continue
 
             if action == "draw_circle":
-                radius = int(params.get("radius", 100) * ep * rs)
+                radius = int(params.get("radius", 100) * min(1.0, ep * 1.05) * rs)
                 cx = center_x + int(params.get("x", 0) * rs)
                 cy = center_y + int(params.get("y", 0) * rs)
-                color = self._resolve_color(params.get("color", "primary"))
+                # Outer atmosphere glow
+                glow_r = radius + int(12 * rs)
+                draw.ellipse((cx - glow_r, cy - glow_r, cx + glow_r, cy + glow_r),
+                             outline=(0, 210, 255, int(90 * ep)), width=max(2, int(4 * rs)))
+                # Deep planetary sphere fill + crisp neon rim
                 draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius),
-                             outline=color + (int(255 * ep),), width=max(2, int(3 * rs)))
+                             fill=(15, 38, 70, int(220 * ep)),
+                             outline=(0, 220, 255, int(255 * ep)), width=max(3, int(4 * rs)))
 
             elif action == "show_text":
-                font = self._get_font(brand.FONT_MAIN, max(12, int(brand.FONT_SIZE_BODY * rs)))
-                draw.text((center_x + int(params.get("x", 0) * rs),
-                           center_y + int(params.get("y", 0) * rs)),
-                          params.get("text", ""), font=font,
-                          fill=brand.CHALKBOARD_TEXT + (int(255 * ep),), anchor="mm")
+                font = self._get_font(brand.FONT_BOLD, max(18, int(34 * rs)))
+                tx = center_x + int(params.get("x", 0) * rs)
+                ty = center_y + int(params.get("y", 0) * rs)
+                text = params.get("text", "")
+                # Drop shadow for high contrast + crisp white text
+                draw.text((tx + 2, ty + 2), text, font=font,
+                          fill=(0, 0, 0, int(220 * ep)), anchor="mm")
+                draw.text((tx, ty), text, font=font,
+                          fill=(255, 255, 255, int(255 * ep)), anchor="mm")
 
             elif action == "show_formula":
                 # V5 Tier 2: HOLOGRAPHIC LaTeX — glowing glass panel that
@@ -778,16 +788,16 @@ class StreamingCompositor(CinematicCompositor):
                         latex,
                         t_seconds=local_frame / self.fps,
                         reveal=ep,
-                        color=(pal["secondary"] if pal else brand.SECONDARY),
+                        color=(255, 255, 255),
                         glow_color=(pal["glow"] if pal else brand.PRIMARY),
-                        max_width=int(self.width * 0.82 * holo_scale / max(rs, 1e-6) * rs),
-                        font_size=30)
+                        max_width=int(self.width * 0.88 * holo_scale / max(rs, 1e-6) * rs),
+                        font_size=46)
                     if img is not None:
                         if rs != 1.0:
                             img = img.resize((max(1, int(img.width * rs)),
                                               max(1, int(img.height * rs))),
                                              Image.Resampling.LANCZOS)
-                        fy = center_y + int(params.get("y", 200) * rs) + bob
+                        fy = center_y + int(params.get("y", 200) * 0.68 * rs) + bob
                         frame.alpha_composite(
                             img, dest=(center_x - img.width // 2,
                                        fy - img.height // 2))
@@ -797,21 +807,27 @@ class StreamingCompositor(CinematicCompositor):
                 x1 = center_x + int(params.get("x1", 0) * rs)
                 y1 = center_y + int(params.get("y1", 0) * rs)
                 x2f = center_x + int(params.get("x2", 0) * rs)
-                y2f = center_y + int(params.get("y2", 0) * rs)
+                y2f = center_y + int(min(360, params.get("y2", 500)) * rs)
                 x2 = int(x1 + (x2f - x1) * ep)
                 y2 = int(y1 + (y2f - y1) * ep)
-                color = self._resolve_color(params.get("color", "accent"))
+                arrow_color = (255, 90, 90)
+                # Outer glow line + core white line
                 draw.line([(x1, y1), (x2, y2)],
-                          fill=color + (int(255 * ep),), width=max(2, int(3 * rs)))
-                if ep > 0.8:
-                    hs = max(5, int(10 * rs))
-                    draw.polygon([(x2, y2), (x2 - hs, y2 - hs), (x2 + hs, y2 - hs)],
-                                 fill=color + (255,))
+                          fill=arrow_color + (int(110 * ep),), width=max(4, int(7 * rs)))
+                draw.line([(x1, y1), (x2, y2)],
+                          fill=(255, 255, 255) + (int(255 * ep),), width=max(2, int(3 * rs)))
+                if ep > 0.3:
+                    hs = max(8, int(15 * rs))
+                    angle = math.atan2(y2f - y1, x2f - x1)
+                    p1 = (x2, y2)
+                    p2 = (x2 - hs * math.cos(angle - 0.5), y2 - hs * math.sin(angle - 0.5))
+                    p3 = (x2 - hs * math.cos(angle + 0.5), y2 - hs * math.sin(angle + 0.5))
+                    draw.polygon([p1, p2, p3], fill=arrow_color + (255,))
 
-        # Tiny corner characters (scaled)
-        for lib, x in ((self.gudiya, 150), (self.chintu, 930)):
+        # Corner characters watching the explanation
+        for lib, x in ((self.gudiya, 120), (self.chintu, 960)):
             img = lib.get("neutral")
             if img:
                 frame = self._paste_character(frame, img, int(x * rs),
-                                              int(1650 * rs), 0.30, 0.4)
+                                              int(1760 * rs), 0.26, 0.90)
         return frame

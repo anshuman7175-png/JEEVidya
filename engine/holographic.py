@@ -29,16 +29,16 @@ def _build_panel(latex: str, color: Tuple[int, int, int],
             (max_width, max(1, int(formula.height * ratio))),
             Image.Resampling.LANCZOS)
 
-    pad_x, pad_y = 44, 30
+    pad_x, pad_y = 54, 38
     w, h = formula.width + pad_x * 2, formula.height + pad_y * 2
-    margin = 40                                     # room for the halo
+    margin = 44                                     # room for the halo
     panel = Image.new("RGBA", (w + margin * 2, h + margin * 2), (0, 0, 0, 0))
     d = ImageDraw.Draw(panel)
 
-    # Glass card
+    # Glass card with rich contrast
     card = (margin, margin, margin + w, margin + h)
-    d.rounded_rectangle(card, radius=22, fill=(8, 10, 30, 150))
-    d.rounded_rectangle(card, radius=22, outline=glow_color + (200,), width=3)
+    d.rounded_rectangle(card, radius=22, fill=(10, 14, 32, 225))
+    d.rounded_rectangle(card, radius=22, outline=glow_color + (220,), width=4)
     # Corner ticks (sci-fi framing)
     for cx, cy, sx, sy in ((card[0], card[1], 1, 1), (card[2], card[1], -1, 1),
                            (card[0], card[3], 1, -1), (card[2], card[3], -1, -1)):
@@ -46,17 +46,17 @@ def _build_panel(latex: str, color: Tuple[int, int, int],
         d.line((cx + sx * 8, cy, cx + sx * 26, cy), fill=glow_color + (255,), width=4)
 
     # Halo: blur a copy of the border underneath
-    halo = panel.filter(ImageFilter.GaussianBlur(10))
+    halo = panel.filter(ImageFilter.GaussianBlur(14))
     panel = Image.alpha_composite(halo, panel)
     panel.alpha_composite(formula, (margin + pad_x, margin + pad_y))
     return panel
 
 
 def formula_panel(latex: str, t_seconds: float, reveal: float,
-                  color: Tuple[int, int, int] = (255, 215, 0),
+                  color: Tuple[int, int, int] = (255, 255, 255),
                   glow_color: Tuple[int, int, int] = (0, 212, 255),
-                  max_width: int = 900,
-                  font_size: int = 30) -> Tuple[Optional[Image.Image], int]:
+                  max_width: int = 960,
+                  font_size: int = 46) -> Tuple[Optional[Image.Image], int]:
     """
     The per-frame holographic formula.
 

@@ -34,7 +34,7 @@ import numpy as np
 
 from config import settings
 
-MIX_VERSION = "mix-v5-console"
+MIX_VERSION = "mix-v5-console-loudnorm-v2"
 SR = 44100
 
 
@@ -76,13 +76,39 @@ def _decode(path: str) -> np.ndarray:
 
 
 def _encode_stereo(left: np.ndarray, right: np.ndarray, out_path: str) -> str:
+    import subprocess
+    import tempfile
     from pydub import AudioSegment
+
+    # Soft-limit peaks before 16-bit quantisation to prevent hard integer clipping
+    max_peak = max(float(np.abs(left).max()), float(np.abs(right).max()), 1e-6)
+    if max_peak > 0.98:
+        scale = 0.98 / max_peak
+        left = left * scale
+        right = right * scale
+
     inter = np.empty(len(left) * 2, dtype=np.int16)
-    inter[0::2] = (np.clip(left, -1, 1) * 32767).astype(np.int16)
-    inter[1::2] = (np.clip(right, -1, 1) * 32767).astype(np.int16)
+    inter[0::2] = (np.clip(left, -1.0, 1.0) * 32767).astype(np.int16)
+    inter[1::2] = (np.clip(right, -1.0, 1.0) * 32767).astype(np.int16)
     seg = AudioSegment(data=inter.tobytes(), sample_width=2,
                        frame_rate=SR, channels=2)
-    seg.export(out_path, format="mp3", bitrate="256k")
+
+    # Master to exact EBU R128 (-14.0 LUFS, -1.0 dBTP ceiling) via ffmpeg loudnorm
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+        raw_wav = tf.name
+    try:
+        seg.export(raw_wav, format="wav")
+        cmd = [
+            "ffmpeg", "-y", "-i", raw_wav,
+            "-af", "loudnorm=I=-13.8:TP=-1.2:LRA=11.0",
+            "-ar", str(SR), "-b:a", "256k", out_path
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            seg.export(out_path, format="mp3", bitrate="256k")
+    finally:
+        if os.path.exists(raw_wav):
+            os.remove(raw_wav)
     return out_path
 
 
@@ -318,16 +344,14 @@ def mixdown(turn_data: List[Dict[str, Any]], out_path: str,
     haas = int(SR * 0.009)
     bed_r = np.concatenate([np.zeros(haas, dtype=np.float32), bed])[:n]
 
-    # ── SUM + MASTER (−14 LUFS on the mid channel) ──
+    # ── SUM + MASTER (−14 LUFS standard) ──
     left = np.nan_to_num(voice + bed + sfx_l + foley_l, nan=0.0, posinf=0.0, neginf=0.0)
     right = np.nan_to_num(voice + bed_r + sfx_r + foley_r, nan=0.0, posinf=0.0, neginf=0.0)
     mid = (left + right) * 0.5
     lufs = loudness_lufs(mid)
-    if math.isnan(lufs) or math.isinf(lufs) or lufs < -70.0:
-        g = 1.0
-    else:
+    if not (math.isnan(lufs) or math.isinf(lufs) or lufs < -70.0):
         g = 10 ** ((-14.0 - lufs) / 20)
-    left = np.nan_to_num(np.tanh(left * g * 0.92) / 0.92, nan=0.0)
-    right = np.nan_to_num(np.tanh(right * g * 0.92) / 0.92, nan=0.0)
+        left = left * g
+        right = right * g
 
     return _encode_stereo(left, right, out_path)

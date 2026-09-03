@@ -193,6 +193,7 @@ class HeadGeometry:
     shading: Optional[str] = None           # mouth-region shading map PNG
     offset: Point = (0.0, 0.0)              # plate origin in puppet space
     face_height: float = 0.0                # chin→brow, for scale-free gates
+    mouth_origin: Optional[Point] = None    # canonical mouth origin (cx, top) in plate pixels
 
     def to_dict(self) -> dict:
         return {
@@ -214,12 +215,14 @@ class HeadGeometry:
             "shading": self.shading,
             "offset": list(self.offset),
             "face_height": self.face_height,
+            "mouth_origin": list(self.mouth_origin) if self.mouth_origin else None,
         }
 
     @staticmethod
     def from_dict(d: dict) -> "HeadGeometry":
         def poly(key: str) -> List[Point]:
             return [tuple(p) for p in d.get(key, [])]
+        mo = d.get("mouth_origin")
         return HeadGeometry(
             plate=d.get("plate", "head_plate.png"),
             landmarks=poly("landmarks"),
@@ -235,6 +238,7 @@ class HeadGeometry:
             shading=d.get("shading"),
             offset=tuple(d.get("offset", (0.0, 0.0))),
             face_height=float(d.get("face_height", 0.0)),
+            mouth_origin=(float(mo[0]), float(mo[1])) if mo else None,
         )
 
     def eye_dict(self, left: bool) -> dict:
@@ -388,6 +392,7 @@ class Rig:
     head: Optional[HeadGeometry] = None
     # viseme name → {"jaw","width","round","press","pull"}, fitted from art
     mouth_targets: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    viseme_anchors: Dict[str, Tuple[float, float]] = field(default_factory=dict)
     poses: Dict[str, PoseEntry] = field(default_factory=dict)
 
     # ─── Convenience accessors ────────────────────────────
@@ -505,6 +510,9 @@ class Rig:
         if self.mouth_targets:
             d["mouth_targets"] = {k: dict(v)
                                   for k, v in self.mouth_targets.items()}
+        if self.viseme_anchors:
+            d["viseme_anchors"] = {k: list(v)
+                                   for k, v in self.viseme_anchors.items()}
         if self.poses:
             d["poses"] = {k: v.to_dict() for k, v in self.poses.items()}
         return d
@@ -540,6 +548,8 @@ class Rig:
             rig.head = HeadGeometry.from_dict(d["head"])
         rig.mouth_targets = {k: dict(v) for k, v
                              in d.get("mouth_targets", {}).items()}
+        rig.viseme_anchors = {k: (float(v[0]), float(v[1])) for k, v
+                              in d.get("viseme_anchors", {}).items()}
         rig.poses = {k: PoseEntry.from_dict(k, v)
                      for k, v in d.get("poses", {}).items()}
         return rig

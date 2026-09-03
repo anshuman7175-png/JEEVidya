@@ -14,9 +14,6 @@ from typing import Dict, Tuple
 import numpy as np
 from PIL import Image, ImageFilter
 
-_relight_cache: Dict[Tuple, Image.Image] = {}
-
-
 def relight_character_3d(char_img: Image.Image,
                          light_dir: Tuple[float, float, float] = (-0.4, -0.5, 0.77),
                          key_color: Tuple[int, int, int] = (255, 248, 235),
@@ -29,13 +26,6 @@ def relight_character_3d(char_img: Image.Image,
         return char_img
     if char_img.mode != "RGBA":
         char_img = char_img.convert("RGBA")
-
-    key = ("relight3d", id(char_img), light_dir, key_color,
-           round(key_intensity, 2), round(ambient_intensity, 2),
-           round(specular_strength, 2))
-    cached = _relight_cache.get(key)
-    if cached is not None:
-        return cached
 
     arr = np.asarray(char_img, dtype=np.float32)
     h, w = arr.shape[:2]
@@ -92,7 +82,4 @@ def relight_character_3d(char_img: Image.Image,
 
     out_arr = arr.copy()
     out_arr[..., :3] = lit_rgb
-    out_img = Image.fromarray(out_arr.astype(np.uint8))
-
-    _relight_cache[key] = out_img
-    return out_img
+    return Image.fromarray(out_arr.astype(np.uint8))

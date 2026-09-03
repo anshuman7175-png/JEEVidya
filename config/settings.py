@@ -159,7 +159,7 @@ INTER_TURN_PADDING_MS: int = 300       # Silence between dialogue turns
 # === Caption Settings ===
 CAPTION_FONT_SIZE: int = 48
 CAPTION_STROKE_WIDTH: int = 3
-CAPTION_Y_POSITION: float = 0.80
+CAPTION_Y_POSITION: float = 0.71
 CAPTION_MAX_CHARS_PER_LINE: int = 24   # Shorter lines for mobile
 
 # === rembg Settings ===

@@ -131,10 +131,10 @@ SHOT_PRESETS: Dict[str, Dict] = {
         "active":   {"x": 540, "y": 1650, "scale": 1.6, "opacity": 1.0},
         "inactive": {"x": 540, "y": 1650, "scale": 1.6, "opacity": 0.0},  # hidden
     },
-    # Normal dialogue: speaker prominent, listener smaller
+    # Normal dialogue: speaker prominent, listener solid
     "two_shot": {
         "active":   {"x": 320, "y": 1350, "scale": 1.0, "opacity": 1.0},
-        "inactive": {"x": 800, "y": 1380, "scale": 0.75, "opacity": 0.5},
+        "inactive": {"x": 800, "y": 1380, "scale": 0.82, "opacity": 1.0},
     },
     # Speaker solo medium shot
     "medium": {
@@ -146,10 +146,10 @@ SHOT_PRESETS: Dict[str, Dict] = {
         "active":   {"x": 150, "y": 1850, "scale": 0.30, "opacity": 0.4},
         "inactive": {"x": 930, "y": 1850, "scale": 0.30, "opacity": 0.4},
     },
-    # Reaction cut: listener close-up (face centered)
+    # Reaction cut: reacting speaker close-up (face centered)
     "reaction_cut": {
-        "active":   {"x": 540, "y": 1650, "scale": 0.0, "opacity": 0.0},  # hidden
-        "inactive": {"x": 540, "y": 1650, "scale": 1.3, "opacity": 1.0},
+        "active":   {"x": 540, "y": 1650, "scale": 1.35, "opacity": 1.0},
+        "inactive": {"x": 540, "y": 1650, "scale": 0.0, "opacity": 0.0},  # hidden
     },
     # Reveal: both characters small at bottom, content big above
     "reveal": {
