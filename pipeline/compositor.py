@@ -261,10 +261,20 @@ class CinematicCompositor:
     #   • vertical:   guarantee headroom — if the top would rise above
     #     the margin, slide the sprite down (the body extending past the
     #     bottom edge is natural close-up framing; a cropped skull is not)
-    #   • horizontal: keep the sprite on-screen with a small slack so
-    #     intended off-center compositions survive, gross cutoffs don't
+    #   • horizontal: keep the character's VISIBLE body on-screen with a
+    #     small slack so intended flanking compositions survive, gross
+    #     cutoffs don't. The clamp is reach-aware: sprite canvases carry
+    #     wide transparent margins (the girl's canvas is square — 1.0·H
+    #     wide — while her opaque body is only 0.485·H), so clamping on
+    #     the raw canvas half-width would drag every flanking preset toward
+    #     center. Instead the half-extent is the WORST-CASE measured arm
+    #     reach — a pose-independent constant, so the clamp never jitters
+    #     with pose changes and only engages near the edge / during zooms.
     HEADROOM_FRAC = 0.02      # minimum clear space above the head
-    EDGE_SLACK_FRAC = 0.04    # allowed horizontal overhang per side
+    EDGE_SLACK_FRAC = 0.06    # allowed horizontal overhang per side (~65 px)
+    REACH_FRAC = 0.31         # worst-case opaque half-extent, in units of
+                              # target_h (measured: girl 0.310 L / 0.297 R,
+                              # boy 0.281 L/R — tools/pose_envelope)
     CHAR_H_FRAC = 0.55        # canvas-height fraction at scale=1.0
     CHAR_H_CEILING = 0.92     # hard size ceiling: never taller than this
 
@@ -273,18 +283,34 @@ class CinematicCompositor:
                    int(self.height * self.CHAR_H_CEILING))
 
     def _safe_anchor(self, x: float, y: float, target_w: int,
-                     target_h: int) -> Tuple[int, int]:
+                     target_h: int) -> Tuple[float, float]:
         """Clamp a bottom-center anchor so the sprite is naturally framed.
-        Preserves deliberate flanking layouts (e.g. x=210 left, x=870 right)
-        without being fooled by transparent sprite canvas margins."""
+
+        Returns FLOATS: callers on the sub-pixel raster (paste_subpixel)
+        must not see integer truncation here — that is exactly the motion
+        judder the continuous placement path exists to avoid. Integer
+        paste paths cast at the paste site.
+
+        Preserves deliberate flanking layouts (e.g. x=250 left, x=830
+        right) because the horizontal bound uses the visible reach
+        envelope, never the transparent canvas width."""
         headroom = int(self.height * self.HEADROOM_FRAC)
-        # Vertical: top = y - target_h must stay below the headroom line
-        y = max(y, headroom + target_h)
-        # Horizontal: anchor point kept on screen within [0.08 * W, 0.92 * W]
-        min_x = int(self.width * 0.08)
-        max_x = int(self.width * 0.92)
-        x = max(min_x, min(int(x), max_x))
-        return int(x), int(y)
+        # Vertical: top = y - target_h must stay below the headroom line.
+        # Sliding down is the natural fix — a body past the bottom edge is
+        # close-up framing, a cropped skull is not.
+        y = max(float(y), float(headroom + target_h))
+        # Horizontal: keep the visible body within [-slack, W + slack].
+        # Half-extent can never exceed the canvas half-width (tiny sprites,
+        # narrow canvases), and never the worst-case reach (wide canvases).
+        slack = int(self.width * self.EDGE_SLACK_FRAC)
+        half = min(target_w / 2.0, self.REACH_FRAC * target_h)
+        min_x = half - slack
+        max_x = self.width + slack - half
+        if min_x > max_x:                 # sprite wider than frame + slack
+            x = self.width / 2.0
+        else:
+            x = max(min_x, min(float(x), max_x))
+        return x, y
 
     def _paste_character(self, frame: Image.Image, char_img: Image.Image,
                           x: int, y: int, scale: float, opacity: float) -> Image.Image:
@@ -309,8 +335,8 @@ class CinematicCompositor:
 
         # Safe-framed bottom-center anchor → paste corner
         ax, ay = self._safe_anchor(x, y, target_w, target_h)
-        paste_x = ax - target_w // 2
-        paste_y = ay - target_h
+        paste_x = int(round(ax)) - target_w // 2
+        paste_y = int(round(ay)) - target_h
 
         if frame.mode != 'RGBA':
             frame = frame.convert('RGBA')

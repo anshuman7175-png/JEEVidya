@@ -167,6 +167,61 @@ def test_horizontal_clamp_keeps_sprite_on_screen():
     assert ax + tw / 2 <= f.width + slack
 
 
+def test_horizontal_clamp_is_reach_aware_not_canvas_aware():
+    """Sprite canvases carry wide transparent margins. The clamp must bound
+    the VISIBLE reach envelope (REACH_FRAC · h), never the raw canvas width,
+    or every flanking preset gets dragged toward center."""
+    f = _Frame()
+    th = 1000
+    tw = int(th * 1.00)                            # girl's real canvas aspect
+    slack = int(f.width * f.EDGE_SLACK_FRAC)
+    reach = f.REACH_FRAC * th
+    ax, _ = f._safe_anchor(30, 1800, tw, th)
+    assert ax - reach >= -slack - 1e-6
+    assert ax < tw / 2 - slack, "clamped on canvas width, not reach"
+    ax, _ = f._safe_anchor(1070, 1800, tw, th)
+    assert ax + reach <= f.width + slack + 1e-6
+
+
+def test_flanking_presets_survive_the_clamp_at_rest():
+    """Every committed two_shot/medium/closeup preset must sit inside the
+    clamp with zero displacement — otherwise the compositor silently
+    re-frames the shot the designer approved."""
+    from config import brand
+    f = _Frame()
+    # Canvas aspects (measured from assets/characters/*/body.png):
+    # gudiya 1254×1254 → 1.00 (opaque body only 0.485·h wide),
+    # chintu  941×1672 → 0.56 (opaque body 0.295·h wide)
+    aspect = {"girl": 1.00, "boy": 0.56}
+    for shot in ("two_shot", "medium", "extreme_closeup",
+                 "reaction_cut", "reveal", "fullscreen_explain"):
+        for key, p in brand.SHOT_PRESETS[shot].items():
+            who = key.split("_")[0]
+            if who not in aspect or p["scale"] <= 0.01:
+                continue
+            th = f._char_target_h(p["scale"])
+            tw = int(th * aspect[who])
+            ax, _ = f._safe_anchor(p["x"], p["y"], tw, th)
+            assert ax == pytest.approx(p["x"]), \
+                f"{shot}.{key}: preset x={p['x']} displaced to {ax:.1f}"
+
+
+def test_safe_anchor_preserves_subpixel_position():
+    """The puppet path pastes on a continuous raster; integer truncation
+    inside the clamp would reintroduce the motion judder it exists to
+    remove."""
+    f = _Frame()
+    ax, ay = f._safe_anchor(540.37, 1650.61, 600, 900)
+    assert ax == pytest.approx(540.37)
+    assert ay == pytest.approx(1650.61)
+
+
+def test_oversized_sprite_centres_instead_of_oscillating():
+    f = _Frame()
+    ax, _ = f._safe_anchor(0, 1800, 1400, 4000)    # both bounds cross
+    assert ax == pytest.approx(f.width / 2)
+
+
 def test_size_ceiling_holds():
     f = _Frame()
     assert f._char_target_h(99.0) <= int(f.height * f.CHAR_H_CEILING)
