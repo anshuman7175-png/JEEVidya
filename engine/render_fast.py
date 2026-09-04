@@ -67,19 +67,39 @@ def _scan_font_files() -> List[str]:
 
 def resolve_devanagari_font(size: int) -> ImageFont.FreeTypeFont:
     """
-    Return a font guaranteed to render Hindi/Hinglish captions.
-    Order: bundled Noto Sans Devanagari → macOS Devanagari-capable system
-    fonts → brand fallback → PIL default (last resort only).
+    Return a heavy bold modern font for YouTube Shorts captions.
+    Prioritizes ExtraBold/Bold modern geometric sans fonts (Mukta Mahee, Kohinoor).
     """
-    key = ("devanagari", size)
+    key = ("devanagari_bold", size)
     if key in _font_cache:
         return _font_cache[key]
 
     files = _scan_font_files()
-    lower_map = {f: os.path.basename(f).lower() for f in files}
+    lower_map = {os.path.basename(f).lower(): f for f in files}
+
+    # Priority 1: Mukta Mahee ExtraBold (index 5) or Bold (index 6)
+    for base, path in lower_map.items():
+        if "muktamahee" in base:
+            for idx in (5, 6, 1, 0):
+                try:
+                    font = ImageFont.truetype(path, size, index=idx)
+                    _font_cache[key] = font
+                    return font
+                except Exception:
+                    continue
+
+    # Priority 2: Kohinoor Devanagari Bold (index 3)
+    for base, path in lower_map.items():
+        if "kohinoor" in base and "bangla" not in base and "gujarati" not in base:
+            try:
+                font = ImageFont.truetype(path, size, index=3)
+                _font_cache[key] = font
+                return font
+            except Exception:
+                pass
 
     for hint in _DEVANAGARI_HINTS:
-        for path, base in lower_map.items():
+        for base, path in lower_map.items():
             if hint in base:
                 try:
                     font = ImageFont.truetype(path, size)
@@ -210,7 +230,7 @@ def _is_emphasis_word(word: str) -> bool:
 def _word_sprite(word: str, font: ImageFont.FreeTypeFont,
                  fill: Tuple[int, int, int], stroke_width: int,
                  glow: bool = False) -> Image.Image:
-    """Stroked (optionally glowing) word rendered once, cached forever."""
+    """Stroked (optionally glowing) word with drop shadow, cached forever."""
     key = (word, id(font), fill, stroke_width, glow)
     img = _word_sprite_cache.get(key)
     if img is not None:
@@ -219,16 +239,22 @@ def _word_sprite(word: str, font: ImageFont.FreeTypeFont,
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     bbox = probe.textbbox((0, 0), word, font=font,
                           stroke_width=stroke_width)
-    pad = 14 if glow else 4
+    pad = 20 if glow else 10
     w = bbox[2] - bbox[0] + pad * 2
     h = bbox[3] - bbox[1] + pad * 2
     img = Image.new("RGBA", (max(1, w), max(1, h)), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     origin = (pad - bbox[0], pad - bbox[1])
+
+    # 3D punchy drop shadow offset (gives incredible 3D pop on mobile)
+    d.text((origin[0] + 3, origin[1] + 5), word, font=font,
+           fill=(0, 0, 0, 220), stroke_width=stroke_width + 2,
+           stroke_fill=(0, 0, 0, 220))
+    # Crisp foreground with deep black stroke
     d.text(origin, word, font=font, fill=fill,
-           stroke_width=stroke_width, stroke_fill=(0, 0, 0))
+           stroke_width=stroke_width, stroke_fill=(0, 0, 0, 255))
     if glow:
-        halo = img.filter(ImageFilter.GaussianBlur(6))
+        halo = img.filter(ImageFilter.GaussianBlur(8))
         img = Image.alpha_composite(halo, img)
     _word_sprite_cache[key] = img
     return img
@@ -280,23 +306,22 @@ def draw_kinetic_caption(frame: Image.Image, words: List[str],
     if cur:
         lines.append(cur)
 
-    line_h = int(font.size * 1.4)
+    line_h = int(font.size * 1.35)
     yy = y
     for line in lines:
         total = sum(widths[i] for i in line) + space_w * (len(line) - 1)
         x = (frame.width - total) / 2
+
         for i in line:
             start = word_starts_ms[i] if i < len(word_starts_ms) else 0.0
-            if t_ms < start - 40:               # not spoken yet: hold slot
-                x += widths[i] + space_w
-                continue
             is_active = (i == active_index)
-            fill = (accent if is_active
+            # High-impact electric yellow for active word; pure white for other words in line
+            fill = ((255, 230, 0) if is_active
                     else emphasis if _is_emphasis_word(words[i])
-                    else brand.TEXT_CAPTION)
+                    else (255, 255, 255))
             sprite = _word_sprite(words[i], font, fill, stroke_width,
                                   glow=is_active)
-            scale = _pop_scale(t_ms - start)
+            scale = _pop_scale(t_ms - start) if (t_ms >= start - 40) else 1.0
             sw, sh = sprite.size
             if abs(scale - 1.0) > 0.02:
                 sprite = sprite.resize((max(1, int(sw * scale)),

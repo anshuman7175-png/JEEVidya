@@ -112,7 +112,7 @@ class StreamingCompositor(CinematicCompositor):
         self.fast_particles = FastParticleRenderer()
         # Critic-agent overrides: caption size/position, hologram scale
         cap_scale = 1.0 + self.overrides.get("caption_font_scale", 0.0)
-        self.caption_y_frac = min(0.78, max(0.65, settings.CAPTION_Y_POSITION
+        self.caption_y_frac = min(0.85, max(0.18, settings.CAPTION_Y_POSITION
                                   + self.overrides.get("caption_y_position", 0.0)))
         self.hologram_scale = max(0.4, 1.0
                                   + self.overrides.get("hologram_scale", 0.0))
@@ -288,16 +288,16 @@ class StreamingCompositor(CinematicCompositor):
             return {"x": p["x"] * rs, "y": p["y"] * rs,
                     "scale": p["scale"], "opacity": p["opacity"]}
 
+        g_raw, c_raw = self.camera.get_both_characters(speaker)
         cur_params = {
-            "girl": scaled(cur_preset["active"] if speaker == "girl"
-                           else cur_preset["inactive"]),
-            "boy": scaled(cur_preset["inactive"] if speaker == "girl"
-                          else cur_preset["active"]),
+            "girl": scaled(g_raw),
+            "boy": scaled(c_raw),
         }
         self.cine.begin_segment(cur_params, seed=seg_seed)
         if prev_shot != cur_shot:
-            self.cine.on_cut(prev_preset["active"]["x"],
-                             cur_preset["active"]["x"])
+            active_x = g_raw["x"] if speaker == "girl" else c_raw["x"]
+            prev_raw = self.camera.get_character_params("active", char_name=speaker)
+            self.cine.on_cut(prev_raw.get("x", active_x), active_x)
         self._motion = {
             "girl": CharacterMotion(seg_seed ^ 0xA11CE, fps=self.fps,
                                     side=-1.0),
@@ -462,7 +462,15 @@ class StreamingCompositor(CinematicCompositor):
         if self._lip_track is not None:
             openness, width_bias = self._lip_track.at(local_frame, t_ms)
 
-        for key, target in (("girl", g_target), ("boy", c_target)):
+        # Depth staging: listener rendered FIRST (background), speaker rendered SECOND (foreground)
+        if speaker == "girl":
+            char_order = (("boy", c_target), ("girl", g_target))
+        elif speaker == "boy":
+            char_order = (("girl", g_target), ("boy", c_target))
+        else:
+            char_order = (("girl", g_target), ("boy", c_target))
+
+        for key, target in char_order:
             params = self.cine.smooth_char(key, target)
             if params["opacity"] <= 0.01 or params["scale"] <= 0.01:
                 continue
@@ -490,8 +498,18 @@ class StreamingCompositor(CinematicCompositor):
 
             # Light: scene-color wrap + key-side rim (both cached)
             side = 1.0 if key == "girl" else -1.0   # lit from center
-            img = ambient_wrap(img, wrap_color, amount=0.16)
-            img = rim_light(img, side=side, color=rim_color, strength=0.7)
+            if is_active:
+                img = ambient_wrap(img, wrap_color, amount=0.12)
+                img = rim_light(img, side=side, color=rim_color, strength=0.72)
+            else:
+                img = ambient_wrap(img, wrap_color, amount=0.22)
+                img = rim_light(img, side=side, color=(120, 170, 210), strength=0.35)
+                if img.mode == "RGBA":
+                    r, g, b, a = img.split()
+                    r = r.point(lambda p: int(p * 0.86))
+                    g = g.point(lambda p: int(p * 0.86))
+                    b = b.point(lambda p: int(p * 0.88))
+                    img = Image.merge("RGBA", (r, g, b, a))
 
             # Camera transform + body offsets
             x, y, scale = apply_frame_transform(
@@ -613,7 +631,15 @@ class StreamingCompositor(CinematicCompositor):
         for p in (g_params, c_params):
             p["x"], p["y"], p["scale"] = apply_frame_transform(
                 p["x"], p["y"], p["scale"], self._xform, cx, cy)
-        layout = (("girl", g_params, c_params), ("boy", c_params, g_params))
+        # Depth staging & Z-Ordering:
+        # Inactive listener is rendered FIRST (background layer).
+        # Active speaker is rendered SECOND (foreground layer, on top of listener).
+        if speaker == "girl":
+            layout = (("boy", c_params, g_params), ("girl", g_params, c_params))
+        elif speaker == "boy":
+            layout = (("girl", g_params, c_params), ("boy", c_params, g_params))
+        else:
+            layout = (("girl", g_params, c_params), ("boy", c_params, g_params))
 
         for key, params, other in layout:
             if params["opacity"] <= 0.01 or params["scale"] <= 0.01:
@@ -621,10 +647,11 @@ class StreamingCompositor(CinematicCompositor):
             is_active = (key == speaker)
             actor = self.actors.get(key)
 
-            # Ground every character (lifts subtly while it moves)
+            # Ground every character with contact shadow (deeper for active speaker)
             th = self._char_target_h(params["scale"])
             if th > 8 and params["opacity"] > 0.15:
-                shadow = contact_shadow(int(th * 0.5), opacity=64)
+                shadow_op = 75 if is_active else 45
+                shadow = contact_shadow(int(th * (0.52 if is_active else 0.45)), opacity=shadow_op)
                 if frame.mode != "RGBA":
                     frame = frame.convert("RGBA")
                 frame.alpha_composite(
@@ -666,13 +693,31 @@ class StreamingCompositor(CinematicCompositor):
 
             # Studio Light Pass: 3D Volumetric Relighting + scene bounce wrap + key-side rim light
             side = 1.0 if key == "girl" else -1.0
-            scaled_puppet = relight_character_3d(
-                scaled_puppet,
-                light_dir=(-side * 0.45, -0.55, 0.77),
-                key_intensity=0.45,
-                specular_strength=0.25)
-            scaled_puppet = ambient_wrap(scaled_puppet, (20, 25, 45), amount=0.14)
-            scaled_puppet = rim_light(scaled_puppet, side=side, color=(160, 220, 255), strength=0.65)
+            if is_active:
+                # Foreground Active Speaker: Studio key light + crisp rim + eye specular
+                scaled_puppet = relight_character_3d(
+                    scaled_puppet,
+                    light_dir=(-side * 0.45, -0.55, 0.77),
+                    key_intensity=0.55,
+                    specular_strength=0.30)
+                scaled_puppet = ambient_wrap(scaled_puppet, (20, 25, 45), amount=0.12)
+                scaled_puppet = rim_light(scaled_puppet, side=side, color=(160, 220, 255), strength=0.72)
+            else:
+                # Background Inactive Listener: Atmospheric depth attenuation
+                scaled_puppet = relight_character_3d(
+                    scaled_puppet,
+                    light_dir=(-side * 0.45, -0.55, 0.77),
+                    key_intensity=0.25,
+                    specular_strength=0.10)
+                scaled_puppet = ambient_wrap(scaled_puppet, (18, 22, 40), amount=0.22)
+                scaled_puppet = rim_light(scaled_puppet, side=side, color=(120, 170, 210), strength=0.35)
+                # Subtle depth dimming (~14%) to establish photographic depth-of-field
+                if scaled_puppet.mode == "RGBA":
+                    r, g, b, a = scaled_puppet.split()
+                    r = r.point(lambda p: int(p * 0.86))
+                    g = g.point(lambda p: int(p * 0.86))
+                    b = b.point(lambda p: int(p * 0.88))
+                    scaled_puppet = Image.merge("RGBA", (r, g, b, a))
 
             # Continuous sub-pixel placement (prevents integer motion judder)
             px = params["x"] + dxr * target_h

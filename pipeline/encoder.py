@@ -34,7 +34,7 @@ class StreamEncoder:
 
     def __init__(self, output_path: str, width: int, height: int, fps: int,
                  audio_path: Optional[str] = None,
-                 crf: int = 19, preset: str = "faster"):
+                 crf: int = 16, preset: str = "slow"):
         self.output_path = output_path
         self.width = int(width)
         self.height = int(height)
@@ -58,23 +58,19 @@ class StreamEncoder:
             cmd += ["-i", audio_path]
 
         cmd += [
-            # Subtle film grain: kills AI sterility + banding in flat areas
-            "-vf", "noise=alls=4:allf=t+u",
             "-c:v", "libx264",
             "-preset", preset,
             "-crf", str(crf),
             "-pix_fmt", "yuv420p",
             "-profile:v", "high",
-            # BT.709 color metadata (Terminal Plan §XI): wrong/missing flags
-            # shift skin tones on every phone. Set AND asserted post-mux by
-            # pipeline/delivery_qc.py — verified, never assumed.
+            # BT.709 color metadata: verified post-mux by delivery_qc
             "-color_primaries", "bt709",
             "-color_trc", "bt709",
             "-colorspace", "bt709",
             "-movflags", "+faststart",
         ]
         if audio_path and os.path.exists(audio_path):
-            cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
+            cmd += ["-c:a", "aac", "-b:a", "320k", "-shortest"]
 
         cmd += [output_path]
 

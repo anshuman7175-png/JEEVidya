@@ -157,10 +157,10 @@ REACTION_CUT_DURATION: float = 0.5     # Quick reaction shots
 INTER_TURN_PADDING_MS: int = 300       # Silence between dialogue turns
 
 # === Caption Settings ===
-CAPTION_FONT_SIZE: int = 48
-CAPTION_STROKE_WIDTH: int = 3
-CAPTION_Y_POSITION: float = 0.71
-CAPTION_MAX_CHARS_PER_LINE: int = 24   # Shorter lines for mobile
+CAPTION_FONT_SIZE: int = 60
+CAPTION_STROKE_WIDTH: int = 6
+CAPTION_Y_POSITION: float = 0.63  # Lower safe zone (y=1210px): 240px above Shorts title, between characters
+CAPTION_MAX_CHARS_PER_LINE: int = 18   # Punchy 2-3 words per line for Shorts
 
 # === rembg Settings ===
 REMBG_MODEL: str = "isnet-general-use"

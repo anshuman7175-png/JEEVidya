@@ -55,7 +55,8 @@ class ShotSequencer:
         """Return one shot per turn. Turns with an explicit shot_type keep
         it; everything else is planned by rule + energy shape."""
         n = len(turns)
-        shots: List[Optional[str]] = [t.get("shot_type") for t in turns]
+        explicit_shots = [t.get("shot_type") for t in turns]
+        shots: List[Optional[str]] = list(explicit_shots)
         explain_idx = next((i for i, t in enumerate(turns)
                             if t.get("speaker") == "explanation"), None)
 
@@ -66,6 +67,12 @@ class ShotSequencer:
 
         self._enforce_no_triples(shots)
         self._enforce_peaks(shots, n, explain_idx)
+
+        # Explicit shot_type in the script ALWAYS wins over automated shape enforcement
+        for i, exp in enumerate(explicit_shots):
+            if exp:
+                shots[i] = exp
+
         return [s or "two_shot" for s in shots]
 
     def apply(self, turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

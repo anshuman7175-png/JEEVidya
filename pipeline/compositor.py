@@ -274,16 +274,16 @@ class CinematicCompositor:
 
     def _safe_anchor(self, x: float, y: float, target_w: int,
                      target_h: int) -> Tuple[int, int]:
-        """Clamp a bottom-center anchor so the sprite is fully framed.
-        Returns the corrected (x, y) anchor."""
+        """Clamp a bottom-center anchor so the sprite is naturally framed.
+        Preserves deliberate flanking layouts (e.g. x=210 left, x=870 right)
+        without being fooled by transparent sprite canvas margins."""
         headroom = int(self.height * self.HEADROOM_FRAC)
-        slack = int(self.width * self.EDGE_SLACK_FRAC)
         # Vertical: top = y - target_h must stay below the headroom line
         y = max(y, headroom + target_h)
-        # Horizontal: center-anchored; clamp only if the sprite can fit
-        if target_w <= self.width + 2 * slack:
-            x = max(target_w / 2 - slack,
-                    min(x, self.width - target_w / 2 + slack))
+        # Horizontal: anchor point kept on screen within [0.08 * W, 0.92 * W]
+        min_x = int(self.width * 0.08)
+        max_x = int(self.width * 0.92)
+        x = max(min_x, min(int(x), max_x))
         return int(x), int(y)
 
     def _paste_character(self, frame: Image.Image, char_img: Image.Image,
