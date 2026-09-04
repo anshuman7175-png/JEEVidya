@@ -41,13 +41,12 @@ from engine.render_fast import (
     FastParticleRenderer,
     GradientBackdrop,
     _is_emphasis_word,
-    draw_karaoke_caption,
-    draw_kinetic_caption,
-    resolve_devanagari_font,
 )
+from engine.captions import CaptionRenderer, CaptionStyle
 from pipeline.compositor import CinematicCompositor
 from pipeline.lipsync import (analyze_audio, compute_body_animation,
                               select_expression)
+from pipeline.puppet import PuppetActor
 from pipeline.timeline import Timeline, TurnSpan
 from tools.face_qc import GateResult
 
@@ -116,10 +115,21 @@ class StreamingCompositor(CinematicCompositor):
                                   + self.overrides.get("caption_y_position", 0.0)))
         self.hologram_scale = max(0.4, 1.0
                                   + self.overrides.get("hologram_scale", 0.0))
-        self.caption_font = resolve_devanagari_font(
-            max(14, int(settings.CAPTION_FONT_SIZE * res_scale * cap_scale)))
+        # Captions: HarfBuzz-shaped, FreeType-stroked word sprites (Baloo 2
+        # ExtraBold). Resolved ONCE here; the renderer caches every word.
+        self.caption_style = CaptionStyle.for_frame(
+            self.width, self.height, font_scale=cap_scale)
+        self.caption_renderer = CaptionRenderer(self.caption_style)
         self._formula_cache: Dict[str, Image.Image] = {}
         self._last_word_ms = -1.0
+
+        # ─── Tier 1: Bone Engine puppets — loaded ONCE, not per segment ───
+        # (Previously nested inside _build_motif_field, so a DNA-less
+        # compositor never defined self.actors and crashed on the first
+        # frame, while a DNA compositor re-parsed every rig per segment.)
+        self.actors: Dict[str, PuppetActor] = {}
+        self._load_actors()
+        self._puppet_turn: Optional[int] = None
 
         # ─── PRO PATH: cinematic camera, body dynamics, real lip sync ───
         energy = dna.genes["energy"] if dna else 0.6
@@ -153,10 +163,10 @@ class StreamingCompositor(CinematicCompositor):
                 rng.choice(names), size,
                 rng.choice(colors) + (rng.randint(26, 60),))
 
-        # ─── Tier 1: Bone Engine puppets (per-character fallback) ───
+    def _load_actors(self) -> None:
+        """Tier 1: Bone Engine puppets (per-character, rig-gated).
+        Characters without a rig keep the V2 expression-swap path."""
         from engine.rig import has_rig
-        from pipeline.puppet import PuppetActor
-        self.actors: Dict[str, PuppetActor] = {}
         for char_name, key, side in (("gudiya", "girl", "left"),
                                      ("chintu", "boy", "right")):
             if has_rig(char_name):
@@ -168,7 +178,6 @@ class StreamingCompositor(CinematicCompositor):
         if self.actors:
             print(f"  [V5] Bone Engine active: "
                   f"{', '.join(sorted(self.actors))} rigged")
-        self._puppet_turn: Optional[int] = None
 
     # ═══════════════════════════════════════
     # MAIN STREAMING LOOP
@@ -384,34 +393,13 @@ class StreamingCompositor(CinematicCompositor):
         # Layer 3: characters / explanation content
         if speaker == "explanation":
             frame = self._render_explanation_v5(frame, span, local_frame)
+        elif self.actors:
+            frame = self._render_puppet_frame(
+                frame, global_frame, span, frame_audio, timeline,
+                t_ms=t_ms)
         else:
-            if self.actors:
-                frame = self._render_puppet_frame(
-                    frame, global_frame, span, frame_audio, timeline,
-                    t_ms=t_ms)
-            else:
-                frame = self._render_character_frame_pro(
-                    frame, local_frame, speaker, emotion, span, t_ms)
-
-            # Layer 4: kinetic captions (word pops, live-word glow)
-            chunk, active = timeline.active_caption(span, t_ms)
-            if chunk:
-                accent = (self.dna.palette["secondary"] if self.dna
-                          else brand.TEXT_CAPTION_ACTIVE)
-                emph = (self.dna.palette["accent"] if self.dna
-                        else brand.ACCENT)
-                if frame.mode != "RGBA":
-                    frame = frame.convert("RGBA")
-                draw_kinetic_caption(
-                    frame,
-                    [w.text for w in chunk.words],
-                    [w.start_ms for w in chunk.words],
-                    active, t_ms,
-                    self.caption_font,
-                    y=int(self.height * getattr(self, "caption_y_frac",
-                                                settings.CAPTION_Y_POSITION)),
-                    accent=accent, emphasis=emph,
-                )
+            frame = self._render_character_frame_pro(
+                frame, local_frame, speaker, emotion, span, t_ms)
 
         # Flatten to RGB for the encoder
         if frame.mode == "RGBA":
@@ -420,23 +408,46 @@ class StreamingCompositor(CinematicCompositor):
             frame = rgb
 
         # ─── LENS STACK (order matters, like a real post chain) ───
+        # Everything here is "the camera": it acts on the SCENE only.
         # 1. whip-pan motion blur on cut frames
         if self._xform["whip_blur"] > 0.0:
             frame = whip_blur(frame, self._xform["whip_blur"],
                               self._xform["whip_dir"])
-        # 2. bloom: true highlights halo (captions, formulas, sparks)
+        # 2. bloom: true highlights halo (eye catchlights, formulas, sparks)
         if self.bloom_enabled:
-            frame = bloom(frame, threshold=200, strength=0.45)
+            frame = bloom(frame, threshold=settings.BLOOM_THRESHOLD,
+                          strength=settings.BLOOM_STRENGTH)
             # 2b. halation: film's warm bleed around the same highlights
-            frame = halation(frame, threshold=225, strength=0.35)
+            frame = halation(frame, threshold=settings.HALATION_THRESHOLD,
+                             strength=settings.HALATION_STRENGTH)
         # 3. chromatic aberration at the edges (subliminal lens truth)
         frame = chromatic_aberration(frame, self.ca_strength)
-        # 4. gate weave: 0.35px mechanical wobble — the film transport
+        # 4. gate weave: sub-pixel mechanical wobble — the film transport
         frame = gate_weave(frame, global_frame,
                            self.dna.seed if self.dna else 29)
-        # 5. per-DNA film grade + grain, always last
+        # 5. per-DNA film grade + grain
         if self.grade is not None:
             frame = self.grade.apply(frame, global_frame)
+
+        # ─── GRAPHICS LAYER: captions ride ABOVE the lens ───
+        # Broadcast rule: titles are burned in AFTER the picture is graded.
+        # Composited here, the text never blooms into a soft haze, never
+        # picks up R/B chromatic fringes, never wobbles with the gate, and
+        # never gets grain. Crisp white on every frame.
+        if speaker != "explanation":
+            chunk, active = timeline.active_caption(span, t_ms)
+            if chunk:
+                frame = self.caption_renderer.draw(
+                    frame,
+                    [w.text for w in chunk.words],
+                    [w.start_ms for w in chunk.words],
+                    active, t_ms,
+                    accent=(self.dna.palette["secondary"] if self.dna
+                            else brand.TEXT_CAPTION_ACTIVE),
+                    emphasis=(self.dna.palette["accent"] if self.dna
+                              else brand.ACCENT),
+                    y_frac=self.caption_y_frac,
+                )
         return frame
 
     # ═══════════════════════════════════════
