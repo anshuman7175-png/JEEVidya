@@ -37,6 +37,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from engine import head_transform as ht
+from engine.alpha import bleed_edges, resize_premultiplied
 from engine.eye_model import EyeGeometry, EyePair, EyeState
 from engine.mouth_model import MouthParams
 from engine.mouth_raster import MouthRasterizer
@@ -185,11 +186,14 @@ class HeadAssembly:
     # ─── loading helpers ──────────────────────────────────
 
     def _load(self, path: str) -> Image.Image:
-        img = Image.open(path).convert("RGBA")
+        # bleed_edges BEFORE any resample: transparent pixels carry the
+        # colour of the nearest artwork, so LANCZOS/affine never averages
+        # a real edge with (0,0,0) — that averaging is the dark fringe.
+        img = bleed_edges(Image.open(path).convert("RGBA"))
         if self.scale != 1.0:
-            img = img.resize((max(1, int(img.width * self.scale)),
-                              max(1, int(img.height * self.scale))),
-                             Image.LANCZOS)
+            img = resize_premultiplied(
+                img, (max(1, int(img.width * self.scale)),
+                      max(1, int(img.height * self.scale))))
         return img
 
     def _pts(self, pts) -> list:
@@ -272,22 +276,25 @@ class HeadAssembly:
 
     def body(self, from_pose: str, to_pose: str, blend_t: float
              ) -> Optional[Image.Image]:
-        """Cross-fade two HEADLESS bodies smoothly without 1-frame pops."""
+        """The HEADLESS body for this frame of a pose transition.
+
+        Two poses are two different SILHOUETTES (arms crossed vs. arms
+        out). Any pixel cross-fade between them — straight or premul —
+        shows both silhouettes at partial opacity for the whole blend: a
+        translucent second body with its own arms and legs, i.e. the
+        "ghost / shadow form" artefact. Cut-out animation never dissolves
+        a pose; it CUTS on the beat. So the body switches once, at the
+        eased midpoint, while the head affine (which lerps on the same
+        `blend_t`) keeps travelling — the head motion carries the cut.
+        Every frame is 100 % solid artwork.
+        """
         a = self.headless(from_pose) or self.headless(self.rig.canonical_pose)
         b = self.headless(to_pose) or a
         if a is None:
             return None
         if b is None or b is a:
             return a.copy()
-        t = max(0.0, min(1.0, blend_t))
-        if t <= 0.01:
-            return a.copy()
-        if t >= 0.99:
-            return b.copy()
-        a_arr = np.array(a, dtype=np.float32)
-        b_arr = np.array(b, dtype=np.float32)
-        blended = a_arr * (1.0 - t) + b_arr * t
-        return Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8))
+        return (b if blend_t >= 0.5 else a).copy()
 
     # ─── step 2: the composed plate (D3/D5/D9/D10) ────────
 
@@ -455,27 +462,13 @@ class HeadAssembly:
         head_img = self._xcache.transform(plate, ch.key(), aff, canvas_size)
         body.alpha_composite(head_img, (0, 0))
 
-        # Step 5: occluder cross-fade — hands/props that must render IN FRONT of the head
-        t = max(0.0, min(1.0, blend_t))
-        occ_a = self.occluder(from_pose)
-        occ_b = self.occluder(to_pose) if to_pose != from_pose else occ_a
-        if occ_a is not None or occ_b is not None:
-            if occ_a is None:
-                occ_a = occ_b
-            if occ_b is None:
-                occ_b = occ_a
-            if occ_a is occ_b or t <= 0.01:
-                body.alpha_composite(occ_a, (0, 0))
-            elif t >= 0.99:
-                body.alpha_composite(occ_b, (0, 0))
-            else:
-                oa = np.array(occ_a, dtype=np.float32)
-                ob = np.array(occ_b, dtype=np.float32)
-                if oa.shape == ob.shape:
-                    occ_blend = np.clip(oa * (1.0 - t) + ob * t, 0, 255).astype(np.uint8)
-                    body.alpha_composite(Image.fromarray(occ_blend), (0, 0))
-                else:
-                    body.alpha_composite(occ_b if t >= 0.5 else occ_a, (0, 0))
+        # Step 5: occluder — hands/props that render IN FRONT of the head.
+        # Cuts on the SAME midpoint as the body (see `body()`): a hand that
+        # belongs to pose B must never float translucently over body A.
+        shown_pose = to_pose if blend_t >= 0.5 else from_pose
+        occ = self.occluder(shown_pose)
+        if occ is not None:
+            body.alpha_composite(occ, (0, 0))
         return body
 
     # ─── QC surface ───────────────────────���───────────────

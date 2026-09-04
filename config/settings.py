@@ -186,8 +186,13 @@ HALATION_THRESHOLD: int = 236
 HALATION_STRENGTH: float = 0.16
 CHROMATIC_ABERRATION_MAX: float = 0.35  # max px R/B splay AT the frame corners (0 = off)
 GATE_WEAVE_AMP: float = 0.0             # full-frame wobble resamples every frame → softens art. Off.
+# Rim light: a lit EDGE on hair/shoulder, contained inside the silhouette
+# (engine.light.rim_light masks by alpha). Neutral-warm white, not cyan —
+# the cyan rim at 0.72 was the "glowing outline" halo.
 RIM_LIGHT_STRENGTH_ACTIVE: float = 0.34
 RIM_LIGHT_STRENGTH_LISTENER: float = 0.18
+RIM_LIGHT_COLOR_ACTIVE: tuple = (232, 238, 255)
+RIM_LIGHT_COLOR_LISTENER: tuple = (190, 205, 235)
 
 # === rembg Settings ===
 REMBG_MODEL: str = "isnet-general-use"

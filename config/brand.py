@@ -125,36 +125,48 @@ AUDIO_BGM_DB: float = -20.0        # Barely audible warmth
 # (char_x, char_y, char_scale, char_opacity) per character
 # ═══════════════════════════════════════════
 
+#
+# SHORTS SAFE-ZONE FRAMING (1080×1920, character height = 0.55·H·scale)
+#   caption band (settings.CAPTION_Y_POSITION 0.40, 2 lines) : y 669–867
+#   head clear line (band bottom + 40 px clearance)            : y 907
+#   YouTube UI: right button column x>960 @ y 1050–1500, title row y>1560
+# Feet sit at the bottom edge (y≈1910): the legs stand behind the title
+# row exactly as every professional Short is framed, and the FACE lands in
+# the clean middle band between the caption and the UI. Every preset below
+# is solved so that  y − 1056·scale ≥ 907  (head top never under the text).
+#   two_shot active   : 1910 − 1056·0.95 = 907  ✓
+#   two_shot listener : 1895 − 1056·0.78 = 1071 ✓ (one plane back, smaller)
+#   extreme_closeup   : 1985 − 1056·1.02 = 908  ✓ (shoes crop: a real MCU)
+# pipeline/compositor_v5._below_caption enforces the same rule at run time
+# for camera push-ins, so no shot can ever break it.
 SHOT_PRESETS: Dict[str, Dict] = {
-    # Normal dialogue: character anchored to dedicated side (Gudiya Left, Chintu Right).
-    # Active speaker steps forward into foreground (scale 0.98, y 1735).
-    # Inactive listener steps back into background (scale 0.76, y 1680).
-    # Center corridor [360, 720] strictly reserved for dynamic captions.
+    # Normal dialogue: Gudiya left, Chintu right. Speaker forward & large,
+    # listener one plane back (smaller, feet slightly higher = further).
     "two_shot": {
-        "girl_active":   {"x": 230, "y": 1735, "scale": 0.98, "opacity": 1.0},
-        "girl_inactive": {"x": 180, "y": 1680, "scale": 0.76, "opacity": 1.0},
-        "boy_active":    {"x": 850, "y": 1735, "scale": 0.98, "opacity": 1.0},
-        "boy_inactive":  {"x": 900, "y": 1680, "scale": 0.76, "opacity": 1.0},
-        "active":        {"x": 230, "y": 1735, "scale": 0.98, "opacity": 1.0},
-        "inactive":      {"x": 900, "y": 1680, "scale": 0.76, "opacity": 1.0},
+        "girl_active":   {"x": 250, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "girl_inactive": {"x": 195, "y": 1895, "scale": 0.78, "opacity": 1.0},
+        "boy_active":    {"x": 830, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "boy_inactive":  {"x": 885, "y": 1895, "scale": 0.78, "opacity": 1.0},
+        "active":        {"x": 250, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "inactive":      {"x": 885, "y": 1895, "scale": 0.78, "opacity": 1.0},
     },
-    # Speaker solo medium shot: side-framed on character's native side
+    # Speaker solo medium shot: side-framed on the character's native side
     "medium": {
-        "girl_active":   {"x": 240, "y": 1730, "scale": 0.95, "opacity": 1.0},
-        "girl_inactive": {"x": 180, "y": 1720, "scale": 0.0,  "opacity": 0.0},
-        "boy_active":    {"x": 840, "y": 1730, "scale": 0.95, "opacity": 1.0},
-        "boy_inactive":  {"x": 900, "y": 1720, "scale": 0.0,  "opacity": 0.0},
-        "active":        {"x": 240, "y": 1730, "scale": 0.95, "opacity": 1.0},
-        "inactive":      {"x": 900, "y": 1720, "scale": 0.0,  "opacity": 0.0},
+        "girl_active":   {"x": 270, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "girl_inactive": {"x": 195, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "boy_active":    {"x": 810, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "boy_inactive":  {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "active":        {"x": 270, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "inactive":      {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
     },
-    # Hook / Dramatic closeup: speaker extra prominent on native side
+    # Hook / dramatic close-up: bigger face, shoes crop below the frame
     "extreme_closeup": {
-        "girl_active":   {"x": 260, "y": 1745, "scale": 1.10, "opacity": 1.0},
-        "girl_inactive": {"x": 180, "y": 1720, "scale": 0.0,  "opacity": 0.0},
-        "boy_active":    {"x": 820, "y": 1745, "scale": 1.10, "opacity": 1.0},
-        "boy_inactive":  {"x": 900, "y": 1720, "scale": 0.0,  "opacity": 0.0},
-        "active":        {"x": 260, "y": 1745, "scale": 1.10, "opacity": 1.0},
-        "inactive":      {"x": 900, "y": 1720, "scale": 0.0,  "opacity": 0.0},
+        "girl_active":   {"x": 290, "y": 1985, "scale": 1.02, "opacity": 1.0},
+        "girl_inactive": {"x": 195, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "boy_active":    {"x": 790, "y": 1985, "scale": 1.02, "opacity": 1.0},
+        "boy_inactive":  {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "active":        {"x": 290, "y": 1985, "scale": 1.02, "opacity": 1.0},
+        "inactive":      {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
     },
     # Full-screen explanation: characters tiny in corners
     "fullscreen_explain": {
@@ -167,21 +179,21 @@ SHOT_PRESETS: Dict[str, Dict] = {
     },
     # Reaction cut: reacting listener prominent on their native side
     "reaction_cut": {
-        "girl_active":   {"x": 240, "y": 1730, "scale": 0.95, "opacity": 1.0},
-        "girl_inactive": {"x": 180, "y": 1720, "scale": 0.0,  "opacity": 0.0},
-        "boy_active":    {"x": 840, "y": 1730, "scale": 0.95, "opacity": 1.0},
-        "boy_inactive":  {"x": 900, "y": 1720, "scale": 0.0,  "opacity": 0.0},
-        "active":        {"x": 840, "y": 1730, "scale": 0.95, "opacity": 1.0},
-        "inactive":      {"x": 210, "y": 1720, "scale": 0.0,  "opacity": 0.0},
+        "girl_active":   {"x": 270, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "girl_inactive": {"x": 195, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "boy_active":    {"x": 810, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "boy_inactive":  {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "active":        {"x": 810, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "inactive":      {"x": 230, "y": 1895, "scale": 0.0,  "opacity": 0.0},
     },
-    # Reveal: both characters small at bottom, content big above
+    # Reveal: both characters small at the bottom edge, content big above
     "reveal": {
-        "girl_active":   {"x": 350, "y": 1750, "scale": 0.50, "opacity": 1.0},
-        "girl_inactive": {"x": 350, "y": 1750, "scale": 0.50, "opacity": 1.0},
-        "boy_active":    {"x": 730, "y": 1750, "scale": 0.50, "opacity": 1.0},
-        "boy_inactive":  {"x": 730, "y": 1750, "scale": 0.50, "opacity": 1.0},
-        "active":        {"x": 350, "y": 1750, "scale": 0.50, "opacity": 1.0},
-        "inactive":      {"x": 730, "y": 1750, "scale": 0.50, "opacity": 1.0},
+        "girl_active":   {"x": 350, "y": 1900, "scale": 0.50, "opacity": 1.0},
+        "girl_inactive": {"x": 350, "y": 1900, "scale": 0.50, "opacity": 1.0},
+        "boy_active":    {"x": 730, "y": 1900, "scale": 0.50, "opacity": 1.0},
+        "boy_inactive":  {"x": 730, "y": 1900, "scale": 0.50, "opacity": 1.0},
+        "active":        {"x": 350, "y": 1900, "scale": 0.50, "opacity": 1.0},
+        "inactive":      {"x": 730, "y": 1900, "scale": 0.50, "opacity": 1.0},
     },
 }
 

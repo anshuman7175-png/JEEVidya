@@ -21,6 +21,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image
 
+from engine.alpha import bleed_edges, resize_premultiplied
+
 from config import settings
 
 # Timing is derived from the ACTUAL frame rate, read lazily because
@@ -73,7 +75,9 @@ class PoseLibrary:
             name = os.path.splitext(fname)[0]
             path = os.path.join(poses_dir, fname)
             try:
-                img = Image.open(path).convert("RGBA")
+                # Bleed edge colour into the transparent margin once, at
+                # load — every later LANCZOS crop/scale stays fringe-free.
+                img = bleed_edges(Image.open(path).convert("RGBA"))
                 self._poses[name] = img
                 self._available.append(name)
             except Exception as e:
@@ -133,7 +137,7 @@ class PoseLibrary:
         target_w = int(body.width * s) if (s != 0 and s != 1.0) else body.width
         target_h = th
         if cropped.size != (target_w, target_h):
-            cropped = cropped.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            cropped = resize_premultiplied(cropped, (target_w, target_h))
 
         self._torsos[name] = cropped
         return cropped
