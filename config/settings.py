@@ -157,17 +157,24 @@ REACTION_CUT_DURATION: float = 0.5     # Quick reaction shots
 INTER_TURN_PADDING_MS: int = 300       # Silence between dialogue turns
 
 # === Caption Settings (YouTube Shorts safe-zone layout) =============
-# Shorts UI on a 1080x1920 frame (measured on the 2025 app):
-#   • top    0–~250 px : "Shorts" label, search & camera icons
-#   • right  x>960, y 1050–1500 : like / dislike / comment / share column
-#   • bottom y>1560 : channel row, title, description, audio pill
-# The caption band therefore lives in the upper-middle of the frame — the
-# same zone every top-performing Shorts creator uses — with the two
-# characters standing BELOW it. Nothing of ours is ever under a button.
+# Shorts UI on a 1080x1920 frame. Published 2025–26 safe-zone guides
+# disagree by device/app version, so we take the CONSERVATIVE end of every
+# range (tools/shorts_overlay.py draws the same zones for QA):
+#   • top    y <  250          : status bar, "Shorts" header, search/camera
+#   • right  x ≥  900, y 900–1560 : like / dislike / comment / share / remix
+#                                   (guides quote 120–200 px; we use 180)
+#   • bottom y ≥ 1500          : @channel · Subscribe · 2-line title ·
+#                                 hashtags · audio ticker (guides: 350–420 px)
+#   • nav    y ≥ 1810          : Home / Shorts / + / Subs / You
+# Caption sizing follows the same guides: 60–75 px at 1080 wide, ≤ 2
+# lines, kept inside the centre ~860 px so it never touches the rail.
+# The band sits at 0.36 H — the upper-middle zone eye-tracking shows draws
+# the most attention on vertical video — and the two characters stand
+# BELOW it, faces landing in the 43–56 % band. Nothing is under a button.
 CAPTION_FONT_SIZE: int = 68            # px at 1080 wide (Baloo 2 ExtraBold)
 CAPTION_STROKE_WIDTH: int = 7          # true FreeType round-joined outline
-CAPTION_Y_POSITION: float = 0.40       # band CENTER as a frame fraction (y=768)
-CAPTION_MAX_WIDTH_FRAC: float = 0.84   # never wider than this (clears the button column)
+CAPTION_Y_POSITION: float = 0.36       # band CENTER as a frame fraction (y=691)
+CAPTION_MAX_WIDTH_FRAC: float = 0.80   # 864 px centred → x 108–972; clears the rail
 CAPTION_MAX_LINES: int = 2             # 1–2 lines, 3–4 words: Shorts pacing
 CAPTION_LINE_HEIGHT: float = 1.12      # × font size
 CAPTION_MAX_CHARS_PER_LINE: int = 18   # legacy chunker hint (pipeline/caption_engine)

@@ -804,7 +804,7 @@ class StreamingCompositor(CinematicCompositor):
                 else "state continuous, channels coherent"))
         return gates
 
-    # ═══════════════════════════════════════
+    # ═════════���═════════════════════════════
     # EXPLANATION SCENES (real LaTeX)
     # ═══════════════════════════════════════
 
@@ -925,10 +925,17 @@ class StreamingCompositor(CinematicCompositor):
                     p3 = (x2 - hs * math.cos(angle + 0.5), y2 - hs * math.sin(angle + 0.5))
                     draw.polygon([p1, p2, p3], fill=arrow_color + (255,))
 
-        # Corner characters watching the explanation
-        for lib, x in ((self.gudiya, 120), (self.chintu, 960)):
+        # Corner characters watching the explanation. Placement comes from
+        # the brand preset so the Shorts safe-zone contract (Chintu left of
+        # the action rail, both faces above the metadata row) is enforced in
+        # ONE place — the old literals (x=960, y=1760) put Chintu inside the
+        # like/share column and both ghosts fully under the title row.
+        corners = brand.SHOT_PRESETS["fullscreen_explain"]
+        for lib, p in ((self.gudiya, corners["girl_active"]),
+                       (self.chintu, corners["boy_active"])):
             img = lib.get("neutral")
             if img:
-                frame = self._paste_character(frame, img, int(x * rs),
-                                              int(1760 * rs), 0.26, 0.90)
+                frame = self._paste_character(frame, img, int(p["x"] * rs),
+                                              int(p["y"] * rs), p["scale"],
+                                              0.90)
         return frame
