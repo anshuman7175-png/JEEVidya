@@ -126,91 +126,99 @@ AUDIO_BGM_DB: float = -20.0        # Barely audible warmth
 # ═══════════════════════════════════════════
 
 #
-# SHORTS SAFE-ZONE FRAMING (1080×1920, character height = 0.55·H·scale)
-#   caption band (settings.CAPTION_Y_POSITION 0.40, 2 lines) : y 692–844
-#   head clear line (band bottom + 40 px clearance)            : y 884+
-#   YouTube Shorts player UI (measured, portrait phone):
-#     top bar        y <230
-#     ACTION RAIL    x ≥930 @ y 980–1600  (like / comments / share / remix)
-#     metadata row   y ≥1590             (@channel · title · audio ticker)
+# SHORTS SAFE-ZONE FRAMING (1080×1920, character height h = 0.55·H·scale)
+#   caption band (settings.CAPTION_Y_POSITION 0.36, 2 lines + stroke/shadow
+#   padding, as compositor_v5 computes it)                     : y 592–790
+#   head clear line (band bottom + 40 px clearance)            : y 830+
+#   YouTube Shorts player UI — conservative end of the published 2025–26
+#   safe-zone ranges, since the overlay shifts by device/app version:
+#     top bar        y <250
+#     ACTION RAIL    x ≥900 @ y 900–1560  (like / dislike / comment / share / remix)
+#     metadata row   y ≥1500             (@channel · Subscribe · title · audio)
 #     nav bar        y ≥1810
-# Feet sit at the bottom edge (y≈1910): the legs stand behind the title
+# Feet sit at the bottom edge (y≈1835): the legs stand behind the title
 # row exactly as every professional Short is framed, and the FACE lands in
-# the clean middle band between the caption and the UI.
+# the 43–56 % band — the upper-middle zone vertical-video eye-tracking
+# shows draws the most attention — between the caption and the UI.
 #
-# Two constraints solve every preset below:
-#   (1) head top never under the text:   y − 1056·scale ≥ 907
-#       two_shot active   : 1910 − 1056·0.95 = 907  ✓
-#       two_shot listener : 1895 − 1056·0.78 = 1071 ✓ (one plane back)
-#       extreme_closeup   : 1985 − 1056·1.02 = 908  ✓ (shoes crop: real MCU)
+# Two constraints solve every talking preset below:
+#   (1) head top never under the text:   y − 1056·scale ≥ 830
+#       two_shot active   : 1835 − 1056·0.95 = 832 ✓
+#       two_shot listener : 1820 − 1056·0.78 = 996 ✓ (one plane back)
+#       extreme_closeup   : 1910 − 1056·1.02 = 833 ✓ (shoes crop: real MCU)
 #   (2) Chintu's OPAQUE body never under the action rail:
-#       x + 0.1475·h ≤ 930   (his body is 0.295·h wide — measured from
+#       x + 0.1475·h ≤ 900   (his body is 0.295·h wide — measured from
 #       assets/characters/chintu/body.png; Gudiya's is 0.485·h)
-#       two_shot active   : 775 + 148 = 923 ✓   listener : 800 + 121 = 921 ✓
-#       extreme_closeup   : 765 + 159 = 924 ✓
+#       two_shot active   : 750 + 148 = 898 ✓   listener : 775 + 121 = 896 ✓
+#       extreme_closeup   : 740 + 159 = 899 ✓
 #     Gudiya has no rail on her side, so she keeps the mirror-ish offset;
-#     the resulting slight left weight is the correct Shorts convention.
-#     Arm gestures may still flick past x=930 — transient, and the rail
+#     the pair's centre (≈500) sits slightly LEFT of frame centre — the
+#     "shift left of the rail" convention every safe-zone guide recommends.
+#     Arm gestures may still flick past x=900 — transient, and the rail
 #     only has icons at discrete points, so that is acceptable.
+#   (3) Small-character presets keep the FACE above the metadata row
+#       (face = top 24 % of h):  y − 0.76·h ≤ 1500.
 # pipeline/compositor_v5._below_caption + compositor._safe_anchor enforce
 # (1) and on-screen bounds at run time for camera push-ins.
 SHOT_PRESETS: Dict[str, Dict] = {
     # Normal dialogue: Gudiya left, Chintu right. Speaker forward & large,
     # listener one plane back (smaller, feet slightly higher = further).
     "two_shot": {
-        "girl_active":   {"x": 250, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "girl_inactive": {"x": 195, "y": 1895, "scale": 0.78, "opacity": 1.0},
-        "boy_active":    {"x": 775, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "boy_inactive":  {"x": 800, "y": 1895, "scale": 0.78, "opacity": 1.0},
-        "active":        {"x": 250, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "inactive":      {"x": 800, "y": 1895, "scale": 0.78, "opacity": 1.0},
+        "girl_active":   {"x": 250, "y": 1835, "scale": 0.95, "opacity": 1.0},
+        "girl_inactive": {"x": 195, "y": 1820, "scale": 0.78, "opacity": 1.0},
+        "boy_active":    {"x": 750, "y": 1835, "scale": 0.95, "opacity": 1.0},
+        "boy_inactive":  {"x": 775, "y": 1820, "scale": 0.78, "opacity": 1.0},
+        "active":        {"x": 250, "y": 1835, "scale": 0.95, "opacity": 1.0},
+        "inactive":      {"x": 775, "y": 1820, "scale": 0.78, "opacity": 1.0},
     },
     # Speaker solo medium shot: side-framed on the character's native side
     "medium": {
-        "girl_active":   {"x": 270, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "girl_inactive": {"x": 195, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "boy_active":    {"x": 775, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "boy_inactive":  {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "active":        {"x": 270, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "inactive":      {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "girl_active":   {"x": 270, "y": 1835, "scale": 0.95, "opacity": 1.0},
+        "girl_inactive": {"x": 195, "y": 1820, "scale": 0.0,  "opacity": 0.0},
+        "boy_active":    {"x": 750, "y": 1835, "scale": 0.95, "opacity": 1.0},
+        "boy_inactive":  {"x": 775, "y": 1820, "scale": 0.0,  "opacity": 0.0},
+        "active":        {"x": 270, "y": 1835, "scale": 0.95, "opacity": 1.0},
+        "inactive":      {"x": 775, "y": 1820, "scale": 0.0,  "opacity": 0.0},
     },
     # Hook / dramatic close-up: bigger face, shoes crop below the frame
     "extreme_closeup": {
-        "girl_active":   {"x": 290, "y": 1985, "scale": 1.02, "opacity": 1.0},
-        "girl_inactive": {"x": 195, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "boy_active":    {"x": 765, "y": 1985, "scale": 1.02, "opacity": 1.0},
-        "boy_inactive":  {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "active":        {"x": 290, "y": 1985, "scale": 1.02, "opacity": 1.0},
-        "inactive":      {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "girl_active":   {"x": 290, "y": 1910, "scale": 1.02, "opacity": 1.0},
+        "girl_inactive": {"x": 195, "y": 1820, "scale": 0.0,  "opacity": 0.0},
+        "boy_active":    {"x": 740, "y": 1910, "scale": 1.02, "opacity": 1.0},
+        "boy_inactive":  {"x": 775, "y": 1820, "scale": 0.0,  "opacity": 0.0},
+        "active":        {"x": 290, "y": 1910, "scale": 1.02, "opacity": 1.0},
+        "inactive":      {"x": 775, "y": 1820, "scale": 0.0,  "opacity": 0.0},
     },
     # Full-screen explanation: characters tiny in the bottom corners, feet
-    # just ABOVE the metadata row (y 1590) and Chintu left of the rail —
-    # at the old y=1850 both ghosts were completely hidden by the title row.
+    # just ABOVE the metadata row (y 1500) and Chintu left of the rail.
+    # h = 316 → heads at y 1174, well below the board content (which the
+    # renderer centres around y 860 and never draws past ≈1300).
     "fullscreen_explain": {
-        "girl_active":   {"x": 150, "y": 1580, "scale": 0.30, "opacity": 0.4},
-        "girl_inactive": {"x": 150, "y": 1580, "scale": 0.30, "opacity": 0.4},
-        "boy_active":    {"x": 870, "y": 1580, "scale": 0.30, "opacity": 0.4},
-        "boy_inactive":  {"x": 870, "y": 1580, "scale": 0.30, "opacity": 0.4},
-        "active":        {"x": 150, "y": 1580, "scale": 0.30, "opacity": 0.4},
-        "inactive":      {"x": 870, "y": 1580, "scale": 0.30, "opacity": 0.4},
+        "girl_active":   {"x": 150, "y": 1490, "scale": 0.30, "opacity": 0.4},
+        "girl_inactive": {"x": 150, "y": 1490, "scale": 0.30, "opacity": 0.4},
+        "boy_active":    {"x": 850, "y": 1490, "scale": 0.30, "opacity": 0.4},
+        "boy_inactive":  {"x": 850, "y": 1490, "scale": 0.30, "opacity": 0.4},
+        "active":        {"x": 150, "y": 1490, "scale": 0.30, "opacity": 0.4},
+        "inactive":      {"x": 850, "y": 1490, "scale": 0.30, "opacity": 0.4},
     },
     # Reaction cut: reacting listener prominent on their native side
     "reaction_cut": {
-        "girl_active":   {"x": 270, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "girl_inactive": {"x": 195, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "boy_active":    {"x": 775, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "boy_inactive":  {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "active":        {"x": 775, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "inactive":      {"x": 230, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "girl_active":   {"x": 270, "y": 1835, "scale": 0.95, "opacity": 1.0},
+        "girl_inactive": {"x": 195, "y": 1820, "scale": 0.0,  "opacity": 0.0},
+        "boy_active":    {"x": 750, "y": 1835, "scale": 0.95, "opacity": 1.0},
+        "boy_inactive":  {"x": 775, "y": 1820, "scale": 0.0,  "opacity": 0.0},
+        "active":        {"x": 750, "y": 1835, "scale": 0.95, "opacity": 1.0},
+        "inactive":      {"x": 230, "y": 1820, "scale": 0.0,  "opacity": 0.0},
     },
-    # Reveal: both characters small at the bottom edge, content big above
+    # Reveal: both characters small, content big above. h = 528 → faces at
+    # y 1172–1300, fully clear of the metadata row; legs stand behind it.
     "reveal": {
-        "girl_active":   {"x": 350, "y": 1900, "scale": 0.50, "opacity": 1.0},
-        "girl_inactive": {"x": 350, "y": 1900, "scale": 0.50, "opacity": 1.0},
-        "boy_active":    {"x": 730, "y": 1900, "scale": 0.50, "opacity": 1.0},
-        "boy_inactive":  {"x": 730, "y": 1900, "scale": 0.50, "opacity": 1.0},
-        "active":        {"x": 350, "y": 1900, "scale": 0.50, "opacity": 1.0},
-        "inactive":      {"x": 730, "y": 1900, "scale": 0.50, "opacity": 1.0},
+        "girl_active":   {"x": 350, "y": 1700, "scale": 0.50, "opacity": 1.0},
+        "girl_inactive": {"x": 350, "y": 1700, "scale": 0.50, "opacity": 1.0},
+        "boy_active":    {"x": 730, "y": 1700, "scale": 0.50, "opacity": 1.0},
+        "boy_inactive":  {"x": 730, "y": 1700, "scale": 0.50, "opacity": 1.0},
+        "active":        {"x": 350, "y": 1700, "scale": 0.50, "opacity": 1.0},
+        "inactive":      {"x": 730, "y": 1700, "scale": 0.50, "opacity": 1.0},
     },
 }
 

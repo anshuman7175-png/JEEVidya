@@ -423,17 +423,17 @@ class CinematicCompositor:
                         (x2 + head_size, y2 - head_size),
                     ], fill=color + (255,))
 
-        # Tiny characters in corners during explanation — same anchors as
-        # brand.SHOT_PRESETS["fullscreen_explain"] (above the Shorts
-        # metadata row, Chintu left of the action rail).
-        gudiya_img = self.gudiya.get("neutral")
-        chintu_img = self.chintu.get("neutral")
-        if gudiya_img:
-            frame = self._paste_character(frame, gudiya_img,
-                                          150, 1580, 0.30, 0.4)
-        if chintu_img:
-            frame = self._paste_character(frame, chintu_img,
-                                          870, 1580, 0.30, 0.4)
+        # Tiny characters in corners during explanation — read straight from
+        # brand.SHOT_PRESETS["fullscreen_explain"] so the Shorts safe-zone
+        # contract (above the metadata row, Chintu left of the action rail)
+        # is defined in one place.
+        corners = brand.SHOT_PRESETS["fullscreen_explain"]
+        for lib, p in ((self.gudiya, corners["girl_active"]),
+                       (self.chintu, corners["boy_active"])):
+            img = lib.get("neutral")
+            if img:
+                frame = self._paste_character(frame, img, p["x"], p["y"],
+                                              p["scale"], p["opacity"])
 
         return frame
 

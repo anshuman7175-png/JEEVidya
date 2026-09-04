@@ -223,28 +223,66 @@ def test_oversized_sprite_centres_instead_of_oscillating():
 
 
 # ── YouTube Shorts player UI contract ────────────────────────────────────
-# Measured on the 2025 Shorts player, portrait phone, 1080×1920 canvas.
-# The player paints these over the video; faces and captions must avoid
-# them or the viewer never sees what we rendered.
-SHORTS_TOP_BAR_Y1 = 230
-SHORTS_RAIL_X0, SHORTS_RAIL_Y0, SHORTS_RAIL_Y1 = 930, 980, 1600
-SHORTS_META_Y0 = 1590
+# Conservative end of the published 2025–26 safe-zone ranges (the overlay
+# shifts by device/app version): top 250, rail 180 px wide from y 900,
+# bottom 420. Must match tools/shorts_overlay.py ZONES. The player paints
+# these over the video; faces and captions must avoid them or the viewer
+# never sees what we rendered.
+SHORTS_TOP_BAR_Y1 = 250
+SHORTS_RAIL_X0, SHORTS_RAIL_Y0, SHORTS_RAIL_Y1 = 900, 900, 1560
+SHORTS_META_Y0 = 1500
 # Opaque body half-width as a fraction of sprite height (assets/…/body.png)
 BODY_HALF = {"girl": 0.2425, "boy": 0.1475}
 FACE_FRAC = 0.24    # head occupies the top ~24 % of the sprite
 
 
+def test_shorts_zones_match_the_overlay_tool():
+    """One set of numbers: QA overlay, tests and configs cannot drift."""
+    from tools import shorts_overlay as so
+    assert so.ZONES["TOP_BAR"][3] == SHORTS_TOP_BAR_Y1
+    assert so.ZONES["ACTION_RAIL"][0] == SHORTS_RAIL_X0
+    assert so.ZONES["ACTION_RAIL"][1] == SHORTS_RAIL_Y0
+    assert so.ZONES["ACTION_RAIL"][3] == SHORTS_RAIL_Y1
+    assert so.ZONES["METADATA"][1] == SHORTS_META_Y0
+
+
 def test_caption_band_sits_in_the_shorts_safe_window():
     from config import settings
-    H = 1920
+    W, H = 1080, 1920
     band_h = settings.CAPTION_FONT_SIZE * settings.CAPTION_LINE_HEIGHT \
         * settings.CAPTION_MAX_LINES
     top = settings.CAPTION_Y_POSITION * H - band_h / 2
     bot = settings.CAPTION_Y_POSITION * H + band_h / 2
     assert top > SHORTS_TOP_BAR_Y1, "caption under the Shorts header"
     assert bot < SHORTS_RAIL_Y0, "caption drops into the action-rail rows"
-    # Upper-middle eye-line — the Shorts caption convention is 0.35–0.45 H
+    # Upper-middle band — where vertical-video eye-tracking puts attention
     assert 0.35 <= settings.CAPTION_Y_POSITION <= 0.45
+    # Mobile legibility: every 2025–26 guide lands on 60–75 px @ 1080 wide
+    assert 60 <= settings.CAPTION_FONT_SIZE <= 75
+    assert settings.CAPTION_MAX_LINES <= 2
+    # Centred caption must stay inside the ~900 px centre column
+    assert settings.CAPTION_MAX_WIDTH_FRAC * W <= 900
+
+
+def test_v5_head_clear_line_matches_the_presets():
+    """compositor_v5 pushes heads below caption_clear_y at run time; the
+    presets must already satisfy it or every cut hops on frame 1."""
+    from config import brand, settings
+    from engine.captions import CaptionStyle
+    # Same formula as CompositorV5.__init__ (caption_clear_y)
+    st = CaptionStyle.for_frame(1080, 1920)
+    pad = st.stroke_px + st.shadow_blur * 2 + 4
+    band_h = st.font_px * st.line_height * st.max_lines + pad * 2
+    clear_y = int(1920 * settings.CAPTION_Y_POSITION + band_h / 2
+                  + settings.CAPTION_MIN_HEAD_CLEARANCE)
+    f = _Frame()
+    for shot in ("two_shot", "medium", "extreme_closeup", "reaction_cut"):
+        for key, p in brand.SHOT_PRESETS[shot].items():
+            if p["scale"] <= 0.01:
+                continue
+            th = f._char_target_h(p["scale"])
+            assert p["y"] - th >= clear_y, \
+                f"{shot}.{key}: head top {p['y'] - th} above clear line {clear_y}"
 
 
 def test_no_face_or_body_under_the_shorts_ui():
