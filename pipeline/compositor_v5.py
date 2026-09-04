@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional
 from PIL import Image, ImageDraw
 
 from config import settings, brand
+from engine.alpha import resize_premultiplied, scale_alpha
 from engine.backgrounds import render_chalkboard_overlay
 from engine.cinematics import (CameraDynamics, apply_frame_transform,
                                whip_blur)
@@ -120,6 +121,18 @@ class StreamingCompositor(CinematicCompositor):
         self.caption_style = CaptionStyle.for_frame(
             self.width, self.height, font_scale=cap_scale)
         self.caption_renderer = CaptionRenderer(self.caption_style)
+        # Shorts safe-zone contract: no head may rise above this line while
+        # a caption can be on screen. It is the WORST-CASE (2-line) band
+        # bottom + clearance, fixed for the whole render — a per-chunk
+        # value would make the characters hop between 1- and 2-line
+        # chunks, which reads as a glitch.
+        st = self.caption_style
+        pad = st.stroke_px + st.shadow_blur * 2 + 4
+        band_h = st.font_px * st.line_height * st.max_lines + pad * 2
+        self.caption_clear_y = int(self.height * self.caption_y_frac
+                                   + band_h / 2.0
+                                   + settings.CAPTION_MIN_HEAD_CLEARANCE
+                                   * self.res_scale)
         self._formula_cache: Dict[str, Image.Image] = {}
         self._last_word_ms = -1.0
 
@@ -143,7 +156,10 @@ class StreamingCompositor(CinematicCompositor):
         self._focus = 0.0                     # rack-focus state (smoothed)
         self._xform = {"dx": 0.0, "dy": 0.0, "zoom": 1.0,
                        "whip_blur": 0.0, "whip_dir": 0.0}
-        self.ca_strength = 0.6 + 0.6 * energy  # lens fingerprint
+        # Lens fingerprint: `strength` × 0.55 px is the R/B splay at the
+        # frame CORNER (zero at centre). 0.6–0.9 → 0.33–0.50 px: felt as
+        # "glass", never seen as a coloured fringe on hair or eyes.
+        self.ca_strength = 0.6 + 0.3 * energy
         self.bloom_enabled = True
 
     def _build_motif_field(self, seed: int) -> None:
@@ -347,6 +363,9 @@ class StreamingCompositor(CinematicCompositor):
             t_ms = timeline.frame_ms(global_frame)
         speaker = span.turn["speaker"]
         emotion = span.turn.get("emotion", "neutral")
+        # Captions are suppressed on explanation turns, so the head clamp
+        # (see _below_caption) is lifted there.
+        self._caption_exempt = (speaker == "explanation")
 
         # Layer 1: background
         if speaker == "explanation":
@@ -420,11 +439,18 @@ class StreamingCompositor(CinematicCompositor):
             # 2b. halation: film's warm bleed around the same highlights
             frame = halation(frame, threshold=settings.HALATION_THRESHOLD,
                              strength=settings.HALATION_STRENGTH)
-        # 3. chromatic aberration at the edges (subliminal lens truth)
-        frame = chromatic_aberration(frame, self.ca_strength)
-        # 4. gate weave: sub-pixel mechanical wobble — the film transport
-        frame = gate_weave(frame, global_frame,
-                           self.dna.seed if self.dna else 29)
+        # 3. chromatic aberration: true radial R/G/B magnification, zero at
+        #    centre, CHROMATIC_ABERRATION_MAX px at the corner (settings)
+        if settings.CHROMATIC_ABERRATION_MAX > 0.0:
+            frame = chromatic_aberration(
+                frame, self.ca_strength,
+                corner_px=settings.CHROMATIC_ABERRATION_MAX)
+        # 4. gate weave: sub-pixel mechanical wobble. Off by default — a
+        #    full-frame bilinear resample every frame softens line art.
+        if settings.GATE_WEAVE_AMP > 0.0:
+            frame = gate_weave(frame, global_frame,
+                               self.dna.seed if self.dna else 29,
+                               amp=settings.GATE_WEAVE_AMP)
         # 5. per-DNA film grade + grain
         if self.grade is not None:
             frame = self.grade.apply(frame, global_frame)
@@ -511,10 +537,12 @@ class StreamingCompositor(CinematicCompositor):
             side = 1.0 if key == "girl" else -1.0   # lit from center
             if is_active:
                 img = ambient_wrap(img, wrap_color, amount=0.12)
-                img = rim_light(img, side=side, color=rim_color, strength=0.72)
+                img = rim_light(img, side=side, color=rim_color,
+                                strength=settings.RIM_LIGHT_STRENGTH_ACTIVE)
             else:
                 img = ambient_wrap(img, wrap_color, amount=0.22)
-                img = rim_light(img, side=side, color=(120, 170, 210), strength=0.35)
+                img = rim_light(img, side=side, color=settings.RIM_LIGHT_COLOR_LISTENER,
+                                strength=settings.RIM_LIGHT_STRENGTH_LISTENER)
                 if img.mode == "RGBA":
                     r, g, b, a = img.split()
                     r = r.point(lambda p: int(p * 0.86))
@@ -534,6 +562,7 @@ class StreamingCompositor(CinematicCompositor):
             target_h = self._char_target_h(scale)
             target_w = int(target_h * img.width / img.height)
             x, y = self._safe_anchor(x, y, target_w, target_h)
+            y = self._below_caption(y, target_h)
 
             # Ground the character: soft contact shadow (lifts on rises)
             if target_w > 4 and params["opacity"] > 0.15:
@@ -552,11 +581,8 @@ class StreamingCompositor(CinematicCompositor):
             # Scale to final size ONCE, apply opacity
             th = max(2, self._char_target_h(scale, extra=state.sy))
             tw = max(2, int(th * img.width / img.height))
-            sprite = img.resize((tw, th), Image.Resampling.LANCZOS)
-            if params["opacity"] < 0.99:
-                a = sprite.split()[3].point(
-                    lambda p, o=params["opacity"]: int(p * o))
-                sprite.putalpha(a)
+            sprite = resize_premultiplied(img, (tw, th))
+            sprite = scale_alpha(sprite, params["opacity"])
 
             # Velocity (real, from the smoothed camera+body position)
             px, py = self._char_prev.get(key, (x, y))
@@ -658,16 +684,20 @@ class StreamingCompositor(CinematicCompositor):
             is_active = (key == speaker)
             actor = self.actors.get(key)
 
-            # Ground every character with contact shadow (deeper for active speaker)
+            # Ground every character with a contact shadow. Its y is the
+            # SAME clamped feet line the sprite will use, so shadow and
+            # feet can never separate when the head clamp engages.
             th = self._char_target_h(params["scale"])
             if th > 8 and params["opacity"] > 0.15:
-                shadow_op = 75 if is_active else 45
-                shadow = contact_shadow(int(th * (0.52 if is_active else 0.45)), opacity=shadow_op)
+                shadow_op = 62 if is_active else 38
+                shadow = contact_shadow(int(th * (0.50 if is_active else 0.44)),
+                                        opacity=shadow_op)
+                feet_y = self._below_caption(params["y"], th)
                 if frame.mode != "RGBA":
                     frame = frame.convert("RGBA")
                 frame.alpha_composite(
                     shadow, (int(params["x"] - shadow.width / 2),
-                             int(params["y"] - shadow.height * 0.55)))
+                             int(feet_y - shadow.height * 0.55)))
 
             if actor is None:                       # V2 fallback, per character
                 lib = self.gudiya if key == "girl" else self.chintu
@@ -692,50 +722,65 @@ class StreamingCompositor(CinematicCompositor):
                 frame_audio if is_active else None, look)
             img, dxr, dyr = actor.render(pose)
 
-            # High-quality LANCZOS scaling to target resolution
+            # Premultiplied LANCZOS to target resolution: the puppet canvas
+            # is straight RGBA with transparent (0,0,0,0) regions created
+            # by compositing, so a plain resize would darken every edge.
             target_h = self._char_target_h(params["scale"])
             target_w = max(2, int(target_h * img.width / img.height))
-            scaled_puppet = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            scaled_puppet = resize_premultiplied(img, (target_w, target_h))
+            scaled_puppet = scale_alpha(scaled_puppet, params["opacity"])
 
-            if params["opacity"] < 0.99 and scaled_puppet.mode == "RGBA":
-                r, g, b, a = scaled_puppet.split()
-                a = a.point(lambda p, o=params["opacity"]: int(p * o))
-                scaled_puppet = Image.merge("RGBA", (r, g, b, a))
-
-            # Studio Light Pass: 3D Volumetric Relighting + scene bounce wrap + key-side rim light
+            # Studio light pass: volumetric key + scene bounce + key-side
+            # rim. The rim is CONTAINED in the silhouette (engine.light) and
+            # kept at broadcast levels — it should read as a lit edge on
+            # the hair and shoulder, never as a glowing outline.
             side = 1.0 if key == "girl" else -1.0
             if is_active:
-                # Foreground Active Speaker: Studio key light + crisp rim + eye specular
                 scaled_puppet = relight_character_3d(
                     scaled_puppet,
                     light_dir=(-side * 0.45, -0.55, 0.77),
-                    key_intensity=0.55,
-                    specular_strength=0.30)
-                scaled_puppet = ambient_wrap(scaled_puppet, (20, 25, 45), amount=0.12)
-                scaled_puppet = rim_light(scaled_puppet, side=side, color=(160, 220, 255), strength=0.72)
+                    key_intensity=0.45,
+                    specular_strength=0.22)
+                scaled_puppet = ambient_wrap(scaled_puppet, (20, 25, 45), amount=0.10)
+                scaled_puppet = rim_light(scaled_puppet, side=side,
+                                          color=settings.RIM_LIGHT_COLOR_ACTIVE,
+                                          strength=settings.RIM_LIGHT_STRENGTH_ACTIVE)
             else:
-                # Background Inactive Listener: Atmospheric depth attenuation
                 scaled_puppet = relight_character_3d(
                     scaled_puppet,
                     light_dir=(-side * 0.45, -0.55, 0.77),
                     key_intensity=0.25,
-                    specular_strength=0.10)
-                scaled_puppet = ambient_wrap(scaled_puppet, (18, 22, 40), amount=0.22)
-                scaled_puppet = rim_light(scaled_puppet, side=side, color=(120, 170, 210), strength=0.35)
-                # Subtle depth dimming (~14%) to establish photographic depth-of-field
+                    specular_strength=0.08)
+                scaled_puppet = ambient_wrap(scaled_puppet, (18, 22, 40), amount=0.20)
+                scaled_puppet = rim_light(scaled_puppet, side=side,
+                                          color=settings.RIM_LIGHT_COLOR_LISTENER,
+                                          strength=settings.RIM_LIGHT_STRENGTH_LISTENER)
+                # Depth attenuation (~12 %): the listener sits one plane back
                 if scaled_puppet.mode == "RGBA":
                     r, g, b, a = scaled_puppet.split()
-                    r = r.point(lambda p: int(p * 0.86))
-                    g = g.point(lambda p: int(p * 0.86))
-                    b = b.point(lambda p: int(p * 0.88))
+                    r = r.point(lambda p: int(p * 0.88))
+                    g = g.point(lambda p: int(p * 0.88))
+                    b = b.point(lambda p: int(p * 0.90))
                     scaled_puppet = Image.merge("RGBA", (r, g, b, a))
 
-            # Continuous sub-pixel placement (prevents integer motion judder)
+            # Continuous sub-pixel placement (prevents integer motion judder).
+            # Anchor is the FEET (bottom-centre); the head clamp keeps the
+            # whole figure under the caption band on every frame.
             px = params["x"] + dxr * target_h
             py = params["y"] + dyr * target_h
             ax, ay = self._safe_anchor(px, py, target_w, target_h)
+            ay = self._below_caption(ay, target_h)
             frame = paste_subpixel(frame, scaled_puppet, ax, ay)
         return frame
+
+    def _below_caption(self, y: float, target_h: int) -> float:
+        """Push a bottom-anchored sprite down until its top clears the
+        caption safe line. Feet may leave the frame (a medium shot) — a
+        head under the text may not. Explanation shots are exempt: their
+        captions are suppressed and the characters sit in the corners."""
+        if getattr(self, "_caption_exempt", False):
+            return y
+        return max(y, self.caption_clear_y + target_h)
 
     # ═══════════════════════════════════════
     # AFFECT QC (§XVII) — performance-level gates

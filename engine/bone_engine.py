@@ -30,6 +30,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from config import settings
 from engine import head_transform as ht
+from engine.alpha import bleed_edges, resize_premultiplied
 from engine.eye_model import EyeState, couple
 from engine.head_assembly import FaceChannels, HeadAssembly
 from engine.mouth_model import DEFAULT_TARGETS, MouthParams
@@ -258,11 +259,14 @@ class BoneEngine:
         d = rig_dir(rig.character)
 
         def load(path: str) -> Image.Image:
-            img = Image.open(path).convert("RGBA")
+            # Alpha hygiene (engine/alpha.py): bleed colour into the
+            # transparent margin, then resample premultiplied — no dark
+            # fringe can be born here or in any later resample.
+            img = bleed_edges(Image.open(path).convert("RGBA"))
             if self.scale != 1.0:
-                img = img.resize((max(1, int(img.width * self.scale)),
-                                  max(1, int(img.height * self.scale))),
-                                 Image.Resampling.LANCZOS)
+                img = resize_premultiplied(
+                    img, (max(1, int(img.width * self.scale)),
+                          max(1, int(img.height * self.scale))))
             return img
 
         def pt(p) -> Tuple[float, float]:

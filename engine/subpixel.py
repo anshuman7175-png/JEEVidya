@@ -29,9 +29,19 @@ from PIL import Image
 def _fractional_shift(sprite: Image.Image, fx: float, fy: float
                       ) -> Image.Image:
     """Shift an RGBA sprite by a sub-pixel amount via bilinear weights.
-    Returns a sprite 1px larger in each axis containing the shifted image."""
+    Returns a sprite 1px larger in each axis containing the shifted image.
+
+    Done in PREMULTIPLIED alpha. In straight alpha the four taps average
+    real colour with the (0,0,0,0) of the transparent neighbour, and the
+    silhouette picks up a dark 1-px fringe on every frame — the most
+    persistent "shadow outline" a cut-out character can have.
+    """
     arr = np.asarray(sprite, dtype=np.float32)
     h, w = arr.shape[:2]
+    has_alpha = arr.shape[2] == 4
+    if has_alpha:
+        a = arr[..., 3:4] / 255.0
+        arr = np.concatenate([arr[..., :3] * a, arr[..., 3:4]], axis=2)
     out = np.zeros((h + 1, w + 1, arr.shape[2]), dtype=np.float32)
 
     w00 = (1 - fx) * (1 - fy)
@@ -42,7 +52,14 @@ def _fractional_shift(sprite: Image.Image, fx: float, fy: float
     out[:h, 1:] += arr * w10
     out[1:, :w] += arr * w01
     out[1:, 1:] += arr * w11
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8),
+
+    if has_alpha:
+        oa = out[..., 3:4]
+        safe = np.where(oa > 0.5, oa, 1.0)
+        rgb = np.clip(out[..., :3] * 255.0 / safe, 0, 255)
+        out = np.concatenate([np.where(oa > 0.5, rgb, out[..., :3]), oa],
+                             axis=2)
+    return Image.fromarray(np.clip(out + 0.5, 0, 255).astype(np.uint8),
                            sprite.mode)
 
 

@@ -172,23 +172,47 @@ def halation(frame: Image.Image, threshold: int = 215,
 
 
 def chromatic_aberration(frame: Image.Image,
-                         strength: float = 1.0) -> Image.Image:
-    """Edge-weighted R/B channel splay (px shift grows toward edges).
-    strength ≈ 1 → max 2px at the frame border: felt, not seen."""
+                         strength: float = 1.0,
+                         corner_px: float = 0.55) -> Image.Image:
+    """TRUE lateral chromatic aberration — the red image is very slightly
+    larger than the green, which is very slightly larger than the blue
+    (glass disperses exactly this way). Modelled as a per-channel radial
+    magnification about the optical centre:
+
+        shift(r) = r / r_corner × corner_px × strength
+
+    so a face at the centre gets ZERO splay and the frame corner gets a
+    sub-pixel one (0.55 px at strength 1). Every channel is MAGNIFIED,
+    never minified, so no channel ever samples outside the frame and no
+    dark border row appears. Bilinear, so the shift is continuous — the
+    old integer whole-block channel copy is what produced the hard
+    coloured fringes on hair and text.
+    """
     if strength <= 0.05:
         return frame
     rgb = frame if frame.mode == "RGB" else frame.convert("RGB")
-    arr = np.asarray(rgb)
-    shift = max(1, int(round(2 * strength)))
-    h, w = arr.shape[:2]
+    w, h = rgb.size
+    corner = max(0.0, min(1.0, corner_px * strength))     # hard cap: 1 px
+    if corner < 0.05:
+        return rgb
+    half_diag = math.hypot(w / 2.0, h / 2.0)
+    k = corner / half_diag                                  # relative Δscale
 
-    out = arr.copy()
-    # Horizontal splay, masked to the outer thirds so faces stay clean
-    edge = w // 3
-    out[:, :edge, 0] = arr[:, :edge, 0]                      # keep
-    out[:, shift:edge, 0] = arr[:, :edge - shift, 0]         # R inward L
-    out[:, w - edge:w - shift, 2] = arr[:, w - edge + shift:, 2]  # B inward R
-    return Image.fromarray(out)
+    r, g, b = rgb.split()
+
+    def magnify(ch: Image.Image, s: float) -> Image.Image:
+        if abs(s - 1.0) < 1e-7:
+            return ch
+        a = 1.0 / s                                         # inverse map
+        cx, cy = w / 2.0, h / 2.0
+        return ch.transform(
+            (w, h), Image.Transform.AFFINE,
+            (a, 0.0, cx - a * cx, 0.0, a, cy - a * cy),
+            resample=Image.Resampling.BILINEAR)
+
+    r = magnify(r, 1.0 + k)
+    g = magnify(g, 1.0 + k * 0.5)
+    return Image.merge("RGB", (r, g, b))
 
 
 def god_rays(size: Tuple[int, int],
