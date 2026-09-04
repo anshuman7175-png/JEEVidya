@@ -161,28 +161,29 @@ AUDIO_BGM_DB: float = -20.0        # Barely audible warmth
 #     "shift left of the rail" convention every safe-zone guide recommends.
 #     Arm gestures may still flick past x=900 — transient, and the rail
 #     only has icons at discrete points, so that is acceptable.
-#   Gudiya's listener x (220) is the smallest that survives
-#   compositor._safe_anchor's reach clamp (0.31·h − 6 % slack) unmoved.
+#   Gudiya's anchor (310 active, 285 listener) ensures her maximum arm
+#   reach (0.310·h = 304 px / 278 px) stays strictly inside the frame
+#   (x ≥ 0) even under dynamic camera push-in with EDGE_SLACK_FRAC = 0.00.
 # pipeline/compositor_v5._below_caption + compositor._safe_anchor enforce
 # (1) and on-screen bounds at run time for camera push-ins.
 SHOT_PRESETS: Dict[str, Dict] = {
     # Normal dialogue: Gudiya left, Chintu right. Speaker forward & large,
     # listener one plane back (smaller, feet slightly higher = further).
     "two_shot": {
-        "girl_active":   {"x": 250, "y": 1480, "scale": 0.93, "opacity": 1.0},
-        "girl_inactive": {"x": 220, "y": 1468, "scale": 0.85, "opacity": 1.0},
+        "girl_active":   {"x": 310, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "girl_inactive": {"x": 285, "y": 1468, "scale": 0.85, "opacity": 1.0},
         "boy_active":    {"x": 750, "y": 1480, "scale": 0.93, "opacity": 1.0},
         "boy_inactive":  {"x": 765, "y": 1468, "scale": 0.85, "opacity": 1.0},
-        "active":        {"x": 250, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "active":        {"x": 310, "y": 1480, "scale": 0.93, "opacity": 1.0},
         "inactive":      {"x": 765, "y": 1468, "scale": 0.85, "opacity": 1.0},
     },
     # Speaker solo medium shot: side-framed on the character's native side
     "medium": {
-        "girl_active":   {"x": 270, "y": 1480, "scale": 0.93, "opacity": 1.0},
-        "girl_inactive": {"x": 220, "y": 1468, "scale": 0.0,  "opacity": 0.0},
+        "girl_active":   {"x": 310, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "girl_inactive": {"x": 285, "y": 1468, "scale": 0.0,  "opacity": 0.0},
         "boy_active":    {"x": 750, "y": 1480, "scale": 0.93, "opacity": 1.0},
         "boy_inactive":  {"x": 765, "y": 1468, "scale": 0.0,  "opacity": 0.0},
-        "active":        {"x": 270, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "active":        {"x": 310, "y": 1480, "scale": 0.93, "opacity": 1.0},
         "inactive":      {"x": 765, "y": 1468, "scale": 0.0,  "opacity": 0.0},
     },
     # Hook / dramatic close-up: the speaker alone, pulled toward centre
@@ -190,11 +191,11 @@ SHOT_PRESETS: Dict[str, Dict] = {
     # comes from the centred framing plus the cinematics rack-focus /
     # push-in that engine.cinematics applies to this shot type.
     "extreme_closeup": {
-        "girl_active":   {"x": 330, "y": 1480, "scale": 0.93, "opacity": 1.0},
-        "girl_inactive": {"x": 220, "y": 1468, "scale": 0.0,  "opacity": 0.0},
+        "girl_active":   {"x": 340, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "girl_inactive": {"x": 285, "y": 1468, "scale": 0.0,  "opacity": 0.0},
         "boy_active":    {"x": 720, "y": 1480, "scale": 0.93, "opacity": 1.0},
         "boy_inactive":  {"x": 765, "y": 1468, "scale": 0.0,  "opacity": 0.0},
-        "active":        {"x": 330, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "active":        {"x": 340, "y": 1480, "scale": 0.93, "opacity": 1.0},
         "inactive":      {"x": 765, "y": 1468, "scale": 0.0,  "opacity": 0.0},
     },
     # Full-screen explanation: characters tiny in the bottom corners, feet
@@ -211,12 +212,12 @@ SHOT_PRESETS: Dict[str, Dict] = {
     },
     # Reaction cut: reacting listener prominent on their native side
     "reaction_cut": {
-        "girl_active":   {"x": 270, "y": 1480, "scale": 0.93, "opacity": 1.0},
-        "girl_inactive": {"x": 220, "y": 1468, "scale": 0.0,  "opacity": 0.0},
+        "girl_active":   {"x": 310, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "girl_inactive": {"x": 285, "y": 1468, "scale": 0.0,  "opacity": 0.0},
         "boy_active":    {"x": 750, "y": 1480, "scale": 0.93, "opacity": 1.0},
         "boy_inactive":  {"x": 765, "y": 1468, "scale": 0.0,  "opacity": 0.0},
         "active":        {"x": 750, "y": 1480, "scale": 0.93, "opacity": 1.0},
-        "inactive":      {"x": 230, "y": 1468, "scale": 0.0,  "opacity": 0.0},
+        "inactive":      {"x": 310, "y": 1468, "scale": 0.0,  "opacity": 0.0},
     },
     # Reveal: both characters small, content big above. h = 528 → heads at
     # y 952, faces to ≈1079; feet at 1480 keep the legs clear of the title.

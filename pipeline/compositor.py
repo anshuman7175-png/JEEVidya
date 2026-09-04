@@ -271,7 +271,7 @@ class CinematicCompositor:
     #     reach — a pose-independent constant, so the clamp never jitters
     #     with pose changes and only engages near the edge / during zooms.
     HEADROOM_FRAC = 0.02      # minimum clear space above the head
-    EDGE_SLACK_FRAC = 0.06    # allowed horizontal overhang per side (~65 px)
+    EDGE_SLACK_FRAC = 0.00    # zero overhang: fingers/limbs must never crop past canvas edge
     REACH_FRAC = 0.31         # worst-case opaque half-extent, in units of
                               # target_h (measured: girl 0.310 L / 0.297 R,
                               # boy 0.281 L/R — tools/pose_envelope)
