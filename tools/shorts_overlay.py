@@ -63,9 +63,16 @@ def overlay(path: str, out_dir: str) -> str:
 
 
 def main() -> int:
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    out_dir = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv \
-        else os.path.dirname(args[0])
+    argv = sys.argv[1:]
+    out_dir = None
+    if "--out" in argv:
+        i = argv.index("--out")
+        out_dir = argv[i + 1]
+        del argv[i:i + 2]          # don't treat the directory as a frame
+    args = [a for a in argv if not a.startswith("--")]
+    if out_dir is None:
+        out_dir = os.path.dirname(args[0])
+    os.makedirs(out_dir, exist_ok=True)
     for p in args:
         print("wrote", overlay(p, out_dir))
     return 0
