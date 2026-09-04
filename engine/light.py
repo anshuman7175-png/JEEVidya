@@ -41,25 +41,36 @@ def rim_light(char_img: Image.Image, side: float = 1.0,
               strength: float = 0.75) -> Image.Image:
     """Key-side edge light from the alpha silhouette.
     side: +1 light from the right, −1 from the left."""
+    if strength <= 0.01:
+        return char_img
     if char_img.mode != "RGBA":
         char_img = char_img.convert("RGBA")
-    alpha = np.asarray(char_img.split()[3], dtype=np.float32) / 255.0
+    arr = np.asarray(char_img, dtype=np.float32)
+    alpha = arr[..., 3] / 255.0
 
-    # Edge on the lit side: alpha minus alpha shifted AWAY from the light
-    shift = max(2, char_img.width // 90)
+    # Edge on the lit side: alpha minus alpha shifted AWAY from the light.
+    # The band is a few px wide and — critically — lives INSIDE the
+    # silhouette: it is masked by the original alpha after blurring so
+    # the glow can never spill onto the background as a cyan halo.
+    shift = max(2, char_img.width // 110)
     moved = np.roll(alpha, int(-side * shift), axis=1)
     edge = np.clip(alpha - moved, 0.0, 1.0)
-    # Soften vertically too (top rim from the sky light)
-    top = np.clip(alpha - np.roll(alpha, shift, axis=0), 0.0, 1.0) * 0.5
+    # A faint sky rim on top only (one third of the key rim)
+    top = np.clip(alpha - np.roll(alpha, shift, axis=0), 0.0, 1.0) * 0.33
     edge = np.clip(edge + top, 0.0, 1.0)
+    edge_img = Image.fromarray((edge * 255).astype(np.uint8), "L").filter(
+        ImageFilter.GaussianBlur(max(1.0, shift * 0.6)))
+    edge = np.asarray(edge_img, dtype=np.float32) / 255.0
+    edge *= alpha * strength                     # ← contained in the body
 
-    rim = np.zeros((*alpha.shape, 4), dtype=np.uint8)
-    rim[..., 0], rim[..., 1], rim[..., 2] = color
-    rim[..., 3] = (edge * 255 * strength).astype(np.uint8)
-    rim_img = Image.fromarray(rim).filter(
-        ImageFilter.GaussianBlur(max(1, shift // 2)))
-
-    return Image.alpha_composite(char_img, rim_img)
+    # Screen-blend the light colour into the artwork's own pixels.
+    # Alpha is untouched, so the silhouette is exactly what it was.
+    col = np.array(color, dtype=np.float32)[None, None, :]
+    rgb = arr[..., :3]
+    lit = 255.0 - (255.0 - rgb) * (255.0 - col * edge[..., None]) / 255.0
+    out = arr.copy()
+    out[..., :3] = np.clip(lit, 0, 255)
+    return Image.fromarray(out.astype(np.uint8), "RGBA")
 
 
 def ambient_wrap(char_img: Image.Image,

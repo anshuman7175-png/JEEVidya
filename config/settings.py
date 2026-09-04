@@ -156,11 +156,38 @@ PAUSE_AFTER_REVEAL: float = 1.5
 REACTION_CUT_DURATION: float = 0.5     # Quick reaction shots
 INTER_TURN_PADDING_MS: int = 300       # Silence between dialogue turns
 
-# === Caption Settings ===
-CAPTION_FONT_SIZE: int = 60
-CAPTION_STROKE_WIDTH: int = 6
-CAPTION_Y_POSITION: float = 0.63  # Lower safe zone (y=1210px): 240px above Shorts title, between characters
-CAPTION_MAX_CHARS_PER_LINE: int = 18   # Punchy 2-3 words per line for Shorts
+# === Caption Settings (YouTube Shorts safe-zone layout) =============
+# Shorts UI on a 1080x1920 frame (measured on the 2025 app):
+#   • top    0–~250 px : "Shorts" label, search & camera icons
+#   • right  x>960, y 1050–1500 : like / dislike / comment / share column
+#   • bottom y>1560 : channel row, title, description, audio pill
+# The caption band therefore lives in the upper-middle of the frame — the
+# same zone every top-performing Shorts creator uses — with the two
+# characters standing BELOW it. Nothing of ours is ever under a button.
+CAPTION_FONT_SIZE: int = 68            # px at 1080 wide (Baloo 2 ExtraBold)
+CAPTION_STROKE_WIDTH: int = 7          # true FreeType round-joined outline
+CAPTION_Y_POSITION: float = 0.40       # band CENTER as a frame fraction (y=768)
+CAPTION_MAX_WIDTH_FRAC: float = 0.84   # never wider than this (clears the button column)
+CAPTION_MAX_LINES: int = 2             # 1–2 lines, 3–4 words: Shorts pacing
+CAPTION_LINE_HEIGHT: float = 1.12      # × font size
+CAPTION_MAX_CHARS_PER_LINE: int = 18   # legacy chunker hint (pipeline/caption_engine)
+CAPTION_MIN_HEAD_CLEARANCE: int = 40   # px kept between band bottom and any head
+CAPTION_SHADOW_OPACITY: int = 110      # soft drop-shadow alpha (0 = off). No offset "3D" shadow.
+CAPTION_SHADOW_BLUR: int = 6
+CAPTION_POP_MS: int = 140              # per-word pop-in duration
+CAPTION_ACTIVE_SCALE: float = 1.06     # spoken word grows this much (crisp, not blurred)
+
+# === Lens / post stack (broadcast-subtle) ============================
+# These sit AFTER the characters are composited and BEFORE captions.
+# Tuned so highlights glow without hazing the artwork.
+BLOOM_THRESHOLD: int = 222
+BLOOM_STRENGTH: float = 0.26
+HALATION_THRESHOLD: int = 236
+HALATION_STRENGTH: float = 0.16
+CHROMATIC_ABERRATION_MAX: float = 0.35  # max px R/B splay AT the frame corners (0 = off)
+GATE_WEAVE_AMP: float = 0.0             # full-frame wobble resamples every frame → softens art. Off.
+RIM_LIGHT_STRENGTH_ACTIVE: float = 0.34
+RIM_LIGHT_STRENGTH_LISTENER: float = 0.18
 
 # === rembg Settings ===
 REMBG_MODEL: str = "isnet-general-use"
