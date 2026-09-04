@@ -112,7 +112,9 @@ class StreamingCompositor(CinematicCompositor):
         self.fast_particles = FastParticleRenderer()
         # Critic-agent overrides: caption size/position, hologram scale
         cap_scale = 1.0 + self.overrides.get("caption_font_scale", 0.0)
-        self.caption_y_frac = min(0.85, max(0.18, settings.CAPTION_Y_POSITION
+        # Floor keeps the band's glyphs under the Shorts header (y 250)
+        # even after a critic nudge; the base value already sits near it.
+        self.caption_y_frac = min(0.85, max(0.17, settings.CAPTION_Y_POSITION
                                   + self.overrides.get("caption_y_position", 0.0)))
         self.hologram_scale = max(0.4, 1.0
                                   + self.overrides.get("hologram_scale", 0.0))
