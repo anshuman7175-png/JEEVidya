@@ -222,6 +222,64 @@ def test_oversized_sprite_centres_instead_of_oscillating():
     assert ax == pytest.approx(f.width / 2)
 
 
+# ── YouTube Shorts player UI contract ────────────────────────────────────
+# Measured on the 2025 Shorts player, portrait phone, 1080×1920 canvas.
+# The player paints these over the video; faces and captions must avoid
+# them or the viewer never sees what we rendered.
+SHORTS_TOP_BAR_Y1 = 230
+SHORTS_RAIL_X0, SHORTS_RAIL_Y0, SHORTS_RAIL_Y1 = 930, 980, 1600
+SHORTS_META_Y0 = 1590
+# Opaque body half-width as a fraction of sprite height (assets/…/body.png)
+BODY_HALF = {"girl": 0.2425, "boy": 0.1475}
+FACE_FRAC = 0.24    # head occupies the top ~24 % of the sprite
+
+
+def test_caption_band_sits_in_the_shorts_safe_window():
+    from config import settings
+    H = 1920
+    band_h = settings.CAPTION_FONT_SIZE * settings.CAPTION_LINE_HEIGHT \
+        * settings.CAPTION_MAX_LINES
+    top = settings.CAPTION_Y_POSITION * H - band_h / 2
+    bot = settings.CAPTION_Y_POSITION * H + band_h / 2
+    assert top > SHORTS_TOP_BAR_Y1, "caption under the Shorts header"
+    assert bot < SHORTS_RAIL_Y0, "caption drops into the action-rail rows"
+    # Upper-middle eye-line — the Shorts caption convention is 0.35–0.45 H
+    assert 0.35 <= settings.CAPTION_Y_POSITION <= 0.45
+
+
+def test_no_face_or_body_under_the_shorts_ui():
+    """Every visible preset: face clear of the metadata row, and the
+    right-hand character's opaque body clear of the action rail."""
+    from config import brand
+    f = _Frame()
+    for shot in ("two_shot", "medium", "extreme_closeup",
+                 "reaction_cut", "reveal", "fullscreen_explain"):
+        for key, p in brand.SHOT_PRESETS[shot].items():
+            who = key.split("_")[0]
+            if who not in BODY_HALF or p["scale"] <= 0.01:
+                continue
+            th = f._char_target_h(p["scale"])
+            head_top = p["y"] - th
+            face_bot = head_top + FACE_FRAC * th
+            body_r = p["x"] + BODY_HALF[who] * th
+            assert face_bot <= SHORTS_META_Y0, \
+                f"{shot}.{key}: face (to y={face_bot:.0f}) under metadata row"
+            if face_bot >= SHORTS_RAIL_Y0 and head_top <= SHORTS_RAIL_Y1:
+                assert body_r <= SHORTS_RAIL_X0, \
+                    f"{shot}.{key}: body edge x={body_r:.0f} under action rail"
+
+
+def test_two_shot_keeps_the_characters_apart():
+    """Pulling Chintu off the rail must not make the pair collide."""
+    from config import brand
+    f = _Frame()
+    ts = brand.SHOT_PRESETS["two_shot"]
+    g, b = ts["girl_active"], ts["boy_inactive"]
+    gh, bh = f._char_target_h(g["scale"]), f._char_target_h(b["scale"])
+    gap = (b["x"] - BODY_HALF["boy"] * bh) - (g["x"] + BODY_HALF["girl"] * gh)
+    assert gap >= 100, f"bodies only {gap:.0f}px apart"
+
+
 def test_size_ceiling_holds():
     f = _Frame()
     assert f._char_target_h(99.0) <= int(f.height * f.CHAR_H_CEILING)

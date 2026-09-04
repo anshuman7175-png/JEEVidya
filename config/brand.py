@@ -127,63 +127,80 @@ AUDIO_BGM_DB: float = -20.0        # Barely audible warmth
 
 #
 # SHORTS SAFE-ZONE FRAMING (1080×1920, character height = 0.55·H·scale)
-#   caption band (settings.CAPTION_Y_POSITION 0.40, 2 lines) : y 669–867
-#   head clear line (band bottom + 40 px clearance)            : y 907
-#   YouTube UI: right button column x>960 @ y 1050–1500, title row y>1560
+#   caption band (settings.CAPTION_Y_POSITION 0.40, 2 lines) : y 692–844
+#   head clear line (band bottom + 40 px clearance)            : y 884+
+#   YouTube Shorts player UI (measured, portrait phone):
+#     top bar        y <230
+#     ACTION RAIL    x ≥930 @ y 980–1600  (like / comments / share / remix)
+#     metadata row   y ≥1590             (@channel · title · audio ticker)
+#     nav bar        y ≥1810
 # Feet sit at the bottom edge (y≈1910): the legs stand behind the title
 # row exactly as every professional Short is framed, and the FACE lands in
-# the clean middle band between the caption and the UI. Every preset below
-# is solved so that  y − 1056·scale ≥ 907  (head top never under the text).
-#   two_shot active   : 1910 − 1056·0.95 = 907  ✓
-#   two_shot listener : 1895 − 1056·0.78 = 1071 ✓ (one plane back, smaller)
-#   extreme_closeup   : 1985 − 1056·1.02 = 908  ✓ (shoes crop: a real MCU)
-# pipeline/compositor_v5._below_caption enforces the same rule at run time
-# for camera push-ins, so no shot can ever break it.
+# the clean middle band between the caption and the UI.
+#
+# Two constraints solve every preset below:
+#   (1) head top never under the text:   y − 1056·scale ≥ 907
+#       two_shot active   : 1910 − 1056·0.95 = 907  ✓
+#       two_shot listener : 1895 − 1056·0.78 = 1071 ✓ (one plane back)
+#       extreme_closeup   : 1985 − 1056·1.02 = 908  ✓ (shoes crop: real MCU)
+#   (2) Chintu's OPAQUE body never under the action rail:
+#       x + 0.1475·h ≤ 930   (his body is 0.295·h wide — measured from
+#       assets/characters/chintu/body.png; Gudiya's is 0.485·h)
+#       two_shot active   : 775 + 148 = 923 ✓   listener : 800 + 121 = 921 ✓
+#       extreme_closeup   : 765 + 159 = 924 ✓
+#     Gudiya has no rail on her side, so she keeps the mirror-ish offset;
+#     the resulting slight left weight is the correct Shorts convention.
+#     Arm gestures may still flick past x=930 — transient, and the rail
+#     only has icons at discrete points, so that is acceptable.
+# pipeline/compositor_v5._below_caption + compositor._safe_anchor enforce
+# (1) and on-screen bounds at run time for camera push-ins.
 SHOT_PRESETS: Dict[str, Dict] = {
     # Normal dialogue: Gudiya left, Chintu right. Speaker forward & large,
     # listener one plane back (smaller, feet slightly higher = further).
     "two_shot": {
         "girl_active":   {"x": 250, "y": 1910, "scale": 0.95, "opacity": 1.0},
         "girl_inactive": {"x": 195, "y": 1895, "scale": 0.78, "opacity": 1.0},
-        "boy_active":    {"x": 830, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "boy_inactive":  {"x": 885, "y": 1895, "scale": 0.78, "opacity": 1.0},
+        "boy_active":    {"x": 775, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "boy_inactive":  {"x": 800, "y": 1895, "scale": 0.78, "opacity": 1.0},
         "active":        {"x": 250, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "inactive":      {"x": 885, "y": 1895, "scale": 0.78, "opacity": 1.0},
+        "inactive":      {"x": 800, "y": 1895, "scale": 0.78, "opacity": 1.0},
     },
     # Speaker solo medium shot: side-framed on the character's native side
     "medium": {
         "girl_active":   {"x": 270, "y": 1910, "scale": 0.95, "opacity": 1.0},
         "girl_inactive": {"x": 195, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "boy_active":    {"x": 810, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "boy_inactive":  {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "boy_active":    {"x": 775, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "boy_inactive":  {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
         "active":        {"x": 270, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "inactive":      {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "inactive":      {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
     },
     # Hook / dramatic close-up: bigger face, shoes crop below the frame
     "extreme_closeup": {
         "girl_active":   {"x": 290, "y": 1985, "scale": 1.02, "opacity": 1.0},
         "girl_inactive": {"x": 195, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "boy_active":    {"x": 790, "y": 1985, "scale": 1.02, "opacity": 1.0},
-        "boy_inactive":  {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "boy_active":    {"x": 765, "y": 1985, "scale": 1.02, "opacity": 1.0},
+        "boy_inactive":  {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
         "active":        {"x": 290, "y": 1985, "scale": 1.02, "opacity": 1.0},
-        "inactive":      {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "inactive":      {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
     },
-    # Full-screen explanation: characters tiny in corners
+    # Full-screen explanation: characters tiny in the bottom corners, feet
+    # just ABOVE the metadata row (y 1590) and Chintu left of the rail —
+    # at the old y=1850 both ghosts were completely hidden by the title row.
     "fullscreen_explain": {
-        "girl_active":   {"x": 150, "y": 1850, "scale": 0.30, "opacity": 0.4},
-        "girl_inactive": {"x": 150, "y": 1850, "scale": 0.30, "opacity": 0.4},
-        "boy_active":    {"x": 930, "y": 1850, "scale": 0.30, "opacity": 0.4},
-        "boy_inactive":  {"x": 930, "y": 1850, "scale": 0.30, "opacity": 0.4},
-        "active":        {"x": 150, "y": 1850, "scale": 0.30, "opacity": 0.4},
-        "inactive":      {"x": 930, "y": 1850, "scale": 0.30, "opacity": 0.4},
+        "girl_active":   {"x": 150, "y": 1580, "scale": 0.30, "opacity": 0.4},
+        "girl_inactive": {"x": 150, "y": 1580, "scale": 0.30, "opacity": 0.4},
+        "boy_active":    {"x": 870, "y": 1580, "scale": 0.30, "opacity": 0.4},
+        "boy_inactive":  {"x": 870, "y": 1580, "scale": 0.30, "opacity": 0.4},
+        "active":        {"x": 150, "y": 1580, "scale": 0.30, "opacity": 0.4},
+        "inactive":      {"x": 870, "y": 1580, "scale": 0.30, "opacity": 0.4},
     },
     # Reaction cut: reacting listener prominent on their native side
     "reaction_cut": {
         "girl_active":   {"x": 270, "y": 1910, "scale": 0.95, "opacity": 1.0},
         "girl_inactive": {"x": 195, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "boy_active":    {"x": 810, "y": 1910, "scale": 0.95, "opacity": 1.0},
-        "boy_inactive":  {"x": 885, "y": 1895, "scale": 0.0,  "opacity": 0.0},
-        "active":        {"x": 810, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "boy_active":    {"x": 775, "y": 1910, "scale": 0.95, "opacity": 1.0},
+        "boy_inactive":  {"x": 800, "y": 1895, "scale": 0.0,  "opacity": 0.0},
+        "active":        {"x": 775, "y": 1910, "scale": 0.95, "opacity": 1.0},
         "inactive":      {"x": 230, "y": 1895, "scale": 0.0,  "opacity": 0.0},
     },
     # Reveal: both characters small at the bottom edge, content big above
