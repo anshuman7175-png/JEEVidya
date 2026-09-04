@@ -255,8 +255,11 @@ def test_caption_band_sits_in_the_shorts_safe_window():
     bot = settings.CAPTION_Y_POSITION * H + band_h / 2
     assert top > SHORTS_TOP_BAR_Y1, "caption under the Shorts header"
     assert bot < SHORTS_RAIL_Y0, "caption drops into the action-rail rows"
-    # Upper-middle band — where vertical-video eye-tracking puts attention
-    assert 0.35 <= settings.CAPTION_Y_POSITION <= 0.45
+    # The band hugs the header so the full safe window below it goes to
+    # the characters (no dead space above, feet above the title row).
+    # Too high and the glyphs slide under the header; too low and the
+    # heads it pushes down drag the feet into the metadata block.
+    assert 0.17 <= settings.CAPTION_Y_POSITION <= 0.26
     # Mobile legibility: every 2025–26 guide lands on 60–75 px @ 1080 wide
     assert 60 <= settings.CAPTION_FONT_SIZE <= 75
     assert settings.CAPTION_MAX_LINES <= 2
@@ -305,6 +308,41 @@ def test_no_face_or_body_under_the_shorts_ui():
             if face_bot >= SHORTS_RAIL_Y0 and head_top <= SHORTS_RAIL_Y1:
                 assert body_r <= SHORTS_RAIL_X0, \
                     f"{shot}.{key}: body edge x={body_r:.0f} under action rail"
+
+
+def test_legs_never_hide_behind_the_title_block():
+    """Every visible preset stands with its FEET above the metadata row:
+    the title / @channel / Subscribe block must never cover the legs."""
+    from config import brand
+    for shot, presets in brand.SHOT_PRESETS.items():
+        for key, p in presets.items():
+            if p["scale"] <= 0.01:
+                continue
+            assert p["y"] <= SHORTS_META_Y0, \
+                f"{shot}.{key}: feet at y={p['y']} under the title block"
+
+
+def test_safe_window_is_used_top_to_bottom():
+    """No dead band above the caption, no dead band under the heads: the
+    caption starts within ~60 px of the header and the tallest speaker's
+    head starts within ~40 px of the caption clear line, so the whole
+    250→1500 window is picture."""
+    from config import brand, settings
+    from engine.captions import CaptionStyle
+    st = CaptionStyle.for_frame(1080, 1920)
+    pad = st.stroke_px + st.shadow_blur * 2 + 4
+    band_h = st.font_px * st.line_height * st.max_lines + pad * 2
+    band_top = 1920 * settings.CAPTION_Y_POSITION - band_h / 2
+    glyph_top = band_top + pad
+    assert SHORTS_TOP_BAR_Y1 < glyph_top <= SHORTS_TOP_BAR_Y1 + 60, \
+        f"caption glyphs start at y={glyph_top:.0f}; dead space above"
+    clear_y = int(1920 * settings.CAPTION_Y_POSITION + band_h / 2
+                  + settings.CAPTION_MIN_HEAD_CLEARANCE)
+    f = _Frame()
+    p = brand.SHOT_PRESETS["two_shot"]["girl_active"]
+    head_top = p["y"] - f._char_target_h(p["scale"])
+    assert clear_y <= head_top <= clear_y + 40, \
+        f"speaker head at y={head_top}; gap to caption {head_top - clear_y}px"
 
 
 def test_two_shot_keeps_the_characters_apart():

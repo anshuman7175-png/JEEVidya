@@ -168,17 +168,25 @@ INTER_TURN_PADDING_MS: int = 300       # Silence between dialogue turns
 #   • nav    y ≥ 1810          : Home / Shorts / + / Subs / You
 # Caption sizing follows the same guides: 60–75 px at 1080 wide, ≤ 2
 # lines, kept inside the centre ~860 px so it never touches the rail.
-# The band sits at 0.36 H — the upper-middle zone eye-tracking shows draws
-# the most attention on vertical video — and the two characters stand
-# BELOW it, faces landing in the 43–56 % band. Nothing is under a button.
+#
+# VERTICAL STACK — the whole safe window (y 250 → 1500) is used, top to
+# bottom, with nothing wasted and nothing under a button:
+#   header (<250) → caption band (≈289–441) → clearance → heads (≈498)
+#   → full bodies → FEET at 1480, just above the title/metadata row.
+# The band hugs the header so the characters can be as large as the
+# window allows while their legs stay fully visible; faces then land in
+# the 26–38 % band, the upper-middle zone vertical-video eye-tracking
+# shows draws the most attention.
 CAPTION_FONT_SIZE: int = 68            # px at 1080 wide (Baloo 2 ExtraBold)
 CAPTION_STROKE_WIDTH: int = 7          # true FreeType round-joined outline
-CAPTION_Y_POSITION: float = 0.36       # band CENTER as a frame fraction (y=691)
+CAPTION_Y_POSITION: float = 0.19       # band CENTER as a frame fraction (y=365)
 CAPTION_MAX_WIDTH_FRAC: float = 0.80   # 864 px centred → x 108–972; clears the rail
 CAPTION_MAX_LINES: int = 2             # 1–2 lines, 3–4 words: Shorts pacing
 CAPTION_LINE_HEIGHT: float = 1.12      # × font size
 CAPTION_MAX_CHARS_PER_LINE: int = 18   # legacy chunker hint (pipeline/caption_engine)
-CAPTION_MIN_HEAD_CLEARANCE: int = 40   # px kept between band bottom and any head
+CAPTION_MIN_HEAD_CLEARANCE: int = 30   # px kept between band bottom and any head
+                                       # (the band already carries ~23 px of
+                                       # stroke/shadow padding below the glyphs)
 CAPTION_SHADOW_OPACITY: int = 110      # soft drop-shadow alpha (0 = off). No offset "3D" shadow.
 CAPTION_SHADOW_BLUR: int = 6
 CAPTION_POP_MS: int = 140              # per-word pop-in duration
