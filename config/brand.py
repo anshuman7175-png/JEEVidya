@@ -169,12 +169,12 @@ SHOT_PRESETS: Dict[str, Dict] = {
     # listener one plane back. Anchored at y=1680 with asset-calibrated scales (Gudiya 0.78, Chintu 0.62)
     # guaranteeing >240px head clearance under cards and natural sibling height proportion.
     "two_shot": {
-        "girl_active":   {"x": 300, "y": 1680, "scale": 0.98, "opacity": 1.0},
-        "girl_inactive": {"x": 280, "y": 1670, "scale": 0.92, "opacity": 0.95},
-        "boy_active":    {"x": 780, "y": 1680, "scale": 0.90, "opacity": 1.0},
-        "boy_inactive":  {"x": 790, "y": 1670, "scale": 0.85, "opacity": 0.95},
-        "active":        {"x": 300, "y": 1680, "scale": 0.98, "opacity": 1.0},
-        "inactive":      {"x": 790, "y": 1670, "scale": 0.85, "opacity": 0.95},
+        "girl_active":   {"x": 310, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "girl_inactive": {"x": 285, "y": 1468, "scale": 0.85, "opacity": 0.95},
+        "boy_active":    {"x": 750, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "boy_inactive":  {"x": 765, "y": 1468, "scale": 0.85, "opacity": 0.95},
+        "active":        {"x": 310, "y": 1480, "scale": 0.93, "opacity": 1.0},
+        "inactive":      {"x": 765, "y": 1468, "scale": 0.85, "opacity": 0.95},
     },
     # Speaker solo medium shot: side-framed on the character's native side
     "medium": {
