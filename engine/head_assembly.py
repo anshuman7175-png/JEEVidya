@@ -65,7 +65,7 @@ class FaceChannels:
     brow: float = 0.0
 
     def key(self) -> Tuple:
-        v_blend_q = round(self.viseme_blend * 4) / 4.0 if (self.viseme_to and self.viseme_to != self.viseme_class) else 0.0
+        v_blend_q = round(self.viseme_blend * 6) / 6.0 if (self.viseme_to and self.viseme_to != self.viseme_class) else 0.0
         v_to = self.viseme_to if v_blend_q > 0.0 else None
         return (self.mouth.quantized_key(), self.viseme_class, v_to, v_blend_q,
                 self.eyes.quantized_key(), round(self.brow / _Q_BROW) * _Q_BROW)
@@ -316,14 +316,41 @@ class HeadAssembly:
         plate = self.plate.copy()
         self._draw_brows(plate, ch.brow)
         self.eyes.composite(plate, ch.eyes)
-        art = self.art.get(ch.viseme_class)
-        if art is not None:
-            anchor = self.art_anchors.get(ch.viseme_class, (art.width / 2.0, 4.0 * self.scale))
-            # Anatomical jaw follow (expands only downwards toward chin!)
+        art1 = self.art.get(ch.viseme_class)
+        art2 = self.art.get(ch.viseme_to) if (ch.viseme_to and ch.viseme_to != ch.viseme_class) else None
+        blend = round(ch.viseme_blend * 6) / 6.0 if art2 is not None else 0.0
+
+        if art1 is not None and art2 is not None and blend > 0.02:
+            jaw_dy = ch.mouth.jaw * 1.5 * self.scale
+            anchor1 = self.art_anchors.get(ch.viseme_class, (art1.width / 2.0, 4.0 * self.scale))
+            px1 = int(round(self.lip_top[0] - anchor1[0]))
+            py1 = int(round(self.lip_top[1] - anchor1[1] + jaw_dy))
+
+            anchor2 = self.art_anchors.get(ch.viseme_to, (art2.width / 2.0, 4.0 * self.scale))
+            px2 = int(round(self.lip_top[0] - anchor2[0]))
+            py2 = int(round(self.lip_top[1] - anchor2[1] + jaw_dy))
+
+            bx0 = min(px1, px2)
+            by0 = min(py1, py2)
+            bx1 = max(px1 + art1.width, px2 + art2.width)
+            by1 = max(py1 + art1.height, py2 + art2.height)
+            bw = max(1, bx1 - bx0)
+            bh = max(1, by1 - by0)
+
+            patch1 = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+            patch1.alpha_composite(art1, (px1 - bx0, py1 - by0))
+
+            patch2 = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+            patch2.alpha_composite(art2, (px2 - bx0, py2 - by0))
+
+            blended_patch = Image.blend(patch1, patch2, blend)
+            plate.alpha_composite(blended_patch, (bx0, by0))
+        elif art1 is not None:
+            anchor = self.art_anchors.get(ch.viseme_class, (art1.width / 2.0, 4.0 * self.scale))
             jaw_dy = ch.mouth.jaw * 1.5 * self.scale
             px = int(round(self.lip_top[0] - anchor[0]))
             py = int(round(self.lip_top[1] - anchor[1] + jaw_dy))
-            plate.alpha_composite(art, (px, py))
+            plate.alpha_composite(art1, (px, py))
         else:
             self.mouth.composite(plate, ch.mouth, ch.viseme_class)
         return plate

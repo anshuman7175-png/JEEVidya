@@ -68,6 +68,12 @@ def set_fps(fps: int) -> None:
 
 
 # === Voice Profiles ===
+# ElevenLabs Canonical Voices (Visual Bible v1 & Season 2)
+ELEVENLABS_VOICE_GUDIYA: str = "Chutki - Cute Young Kids Storyteller"
+ELEVENLABS_VOICE_CHINTU: str = "Bhola - Soft, Innocent and Cheerful"
+ELEVENLABS_MODEL_ID: str = "eleven_multilingual_v2"
+
+# Edge-TTS Fallback Profiles (used when ElevenLabs key not provided or offline)
 # Girl (Gudiya): young, curious, high-pitched
 VOICE_GIRL: str = "hi-IN-SwaraNeural"
 VOICE_GIRL_RATE: str = "+8%"
@@ -102,7 +108,7 @@ def amplitude_smoothing_frames(fps: int | None = None) -> int:
 
 
 # === Particle System ===
-PARTICLE_COUNT: int = 25
+PARTICLE_COUNT: int = 10
 # Speeds are PER SECOND (px/s). Use settings.per_frame() at the call site.
 PARTICLE_SPEED_MIN_PS: float = 0.3 * _REFERENCE_FPS   # px/s upward drift
 PARTICLE_SPEED_MAX_PS: float = 1.2 * _REFERENCE_FPS

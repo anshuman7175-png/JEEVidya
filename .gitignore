@@ -15,9 +15,10 @@ __pycache__/
 *.webm
 *.gif
 output/
-
-output/
+uploads/
+artifacts_proofs/
 tests/golden/
 combined_code.txt
 scratch/
 face_qc_report.json
+

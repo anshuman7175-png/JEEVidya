@@ -4,8 +4,10 @@ Generates per-turn audio with character-specific voice profiles.
 Girl (Gudiya): hi-IN-SwaraNeural with pitch shift for younger sound.
 Boy (Chintu): hi-IN-MadhurNeural with pitch shift for younger sound.
 """
+import hashlib
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -272,22 +274,190 @@ VOICE_PROFILES = {
 }
 
 
+KNOWN_EMOTION_TAGS = {
+    "curious", "confidently", "deadpan", "surprised", "excited", "confused",
+    "cheerfully", "thoughtful", "elated", "proudly", "mischievously", "sighs",
+    "sarcastic", "laughs", "gasps", "dramatic tone", "shocked", "intrigued",
+    "whispers", "shouting", "puzzled", "annoyed", "happy", "wonder"
+}
+
+
+def sanitize_spoken_text(text: str) -> str:
+    """
+    Sanitize dialogue line so speaker labels, metadata lines, turn numbers,
+    and stage direction / emotion tags are NEVER spoken by TTS or rendered into captions.
+    """
+    if not text:
+        return ""
+    t = text.strip()
+    # 1. Detect & drop metadata lines
+    if re.match(r"^(?:tags|hashtags|keywords|title|topic|description|subject|scene|setting|sfx|sound effect|bgm|music)\s*[:：\-–]", t, re.I):
+        return ""
+    if re.match(r"^(?:#[\w\-]+\s*)+$", t):
+        return ""
+    if re.match(r"^\[(?:scene|setting|sfx|sound effect|bgm|music)[:\s].*\]$", t, re.I):
+        return ""
+    if re.match(r"^\((?:scene|setting|sfx|sound effect|bgm|music)[:\s].*\)$", t, re.I):
+        return ""
+
+    # 2. Strip leading turn numbers: '1. ', 'Turn 1: ', '1) '
+    t = re.sub(r"^(?:turn\s*\d+[\.\:\-–\s]*|\d+[\.\)\-–]\s*)", "", t, flags=re.I)
+
+    # 3. Strip speaker prefixes: '**Gudiya:**', 'Speaker 1:', 'Gudiya (curious):', '[Chintu]:'
+    prefix_pattern = r"^(?:\*{1,2}|\[)?(?:speaker\s*\d+|gudiya|chintu|girl|boy|didi|bhai|character\s*\d+|person\s*\d+|s[12])(?:\*{1,2}|\])?\s*(?:\([^\)]+\)|\[[^\]]+\])?\s*[:：\-–]\s*"
+    t = re.sub(prefix_pattern, "", t, flags=re.I)
+
+    # 4. Strip outer quotes
+    t = t.strip('"\'*` ')
+
+    # 5. Strip ALL bracketed or parenthesized emotion tags / stage directions anywhere in text
+    # e.g., '[curious]', '[gasps]', '(laughs)', '[deadpan]', '[dramatic tone]'
+    def _strip_emotion(m: re.Match) -> str:
+        content = m.group(1).strip().lower()
+        if content in KNOWN_EMOTION_TAGS or any(em in content for em in KNOWN_EMOTION_TAGS):
+            return ""
+        # Also strip short single/double word stage cues
+        if len(content.split()) <= 3 and not any(c in content for c in "=+-*/^0123456789"):
+            return ""
+        return m.group(0)
+
+    t = re.sub(r"\[([a-zA-Z\s,]+)\]", _strip_emotion, t)
+    t = re.sub(r"\(([a-zA-Z\s,]+)\)", _strip_emotion, t)
+
+    # Clean up any leftover double spaces
+    t = re.sub(r"\s{2,}", " ", t)
+    return t.strip()
+
+
+def synthesize_elevenlabs(text: str, speaker: str, output_path: str,
+                          api_key: Optional[str] = None) -> bool:
+    """
+    Synthesize audio using ElevenLabs API:
+      - Gudiya: Chutki (Cute Young Kids Storyteller)
+      - Chintu: Bhola (Soft, Innocent and Cheerful)
+    Returns True if synthesis succeeded and output_path exists.
+    """
+    import json
+    import urllib.request
+    import urllib.error
+
+    key = api_key or os.environ.get("ELEVENLABS_API_KEY")
+    if not key:
+        return False
+
+    is_girl = speaker.lower() in ("girl", "gudiya", "s1", "chutki")
+    target_voice_name = settings.ELEVENLABS_VOICE_GUDIYA if is_girl else settings.ELEVENLABS_VOICE_CHINTU
+
+    # Cache for voice IDs to avoid repeated /v1/voices lookups
+    voice_cache_file = os.path.join(settings.PROJECT_ROOT, "uploads", "elevenlabs_voices.json")
+    voice_id = None
+
+    if os.path.exists(voice_cache_file):
+        try:
+            with open(voice_cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+                voice_id = cached.get(target_voice_name)
+        except Exception:
+            pass
+
+    if not voice_id:
+        # Query ElevenLabs voices
+        try:
+            req = urllib.request.Request(
+                "https://api.elevenlabs.io/v1/voices",
+                headers={"xi-api-key": key, "Accept": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                voices = data.get("voices", [])
+                cache_dict = {}
+                for v in voices:
+                    v_name = v.get("name", "")
+                    v_id = v.get("voice_id", "")
+                    cache_dict[v_name] = v_id
+                    if target_voice_name.lower() in v_name.lower() or v_name.lower() in target_voice_name.lower():
+                        voice_id = v_id
+
+                os.makedirs(os.path.dirname(voice_cache_file), exist_ok=True)
+                with open(voice_cache_file, "w", encoding="utf-8") as f:
+                    json.dump(cache_dict, f, indent=2)
+        except Exception as e:
+            print(f"  [Voice] ElevenLabs voice lookup failed: {e}")
+
+    if not voice_id:
+        print(f"  [Voice] ElevenLabs voice '{target_voice_name}' not found; falling back")
+        return False
+
+    # Perform synthesis
+    try:
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        payload = {
+            "text": text,
+            "model_id": getattr(settings, "ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"),
+            "voice_settings": {
+                "stability": 0.55,
+                "similarity_boost": 0.80,
+                "style": 0.20,
+                "use_speaker_boost": True
+            }
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "xi-api-key": key,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            audio_data = resp.read()
+            with open(output_path, "wb") as f:
+                f.write(audio_data)
+        return True
+    except Exception as e:
+        print(f"  [Voice] ElevenLabs TTS synthesis error: {e}")
+        return False
+
+
 class VoiceEngine:
     """Generates character-specific audio and subtitles from dialogue turns."""
 
     def generate_turn_audio(self, turn_id: int, text: str, speaker: str,
                             output_dir: str,
-                            voice: Optional[str] = None) -> Dict[str, Any]:
+                            voice: Optional[str] = None,
+                            custom_audio: Optional[str] = None) -> Dict[str, Any]:
         """
         Generate audio and VTT subtitles for a single dialogue turn.
-        Uses the correct voice profile based on speaker.
+        If custom_audio is provided and exists on disk, standardizes the MP3
+        and aligns word cues via engine.align. Otherwise uses edge-tts.
         
-        Returns: {"audio": path, "vtt": path, "duration_ms": int}
+        Returns: {"audio": path, "vtt": path, "duration_ms": int, "key": str}
         """
         os.makedirs(output_dir, exist_ok=True)
 
         audio_path = os.path.join(output_dir, f"turn_{turn_id:03d}.mp3")
         vtt_path = os.path.join(output_dir, f"turn_{turn_id:03d}.vtt")
+
+        # Sanitize text so speaker labels or tags never leak into TTS or captions
+        text = sanitize_spoken_text(text)
+
+        # ─── Custom audio path (user-supplied line-by-line MP3) ───
+        resolved_custom = None
+        if custom_audio:
+            if os.path.isabs(custom_audio) and os.path.exists(custom_audio):
+                resolved_custom = custom_audio
+            else:
+                # Try relative to uploads/audio
+                bn = os.path.basename(custom_audio)
+                cand = os.path.join(settings.PROJECT_ROOT, "uploads", "audio", bn)
+                if os.path.exists(cand):
+                    resolved_custom = cand
+                elif os.path.exists(os.path.join(settings.PROJECT_ROOT, custom_audio)):
+                    resolved_custom = os.path.join(settings.PROJECT_ROOT, custom_audio)
+
+        if resolved_custom:
+            return self._process_custom_audio(turn_id, text, resolved_custom, audio_path, vtt_path)
 
         if not text or not text.strip():
             return {"audio": None, "vtt": None, "duration_ms": 0}
@@ -299,8 +469,10 @@ class VoiceEngine:
             profile["voice"] = voice
 
         # ─── Content-addressed cache: identical text+voice never hits TTS twice ───
+        use_elevenlabs = bool(os.environ.get("ELEVENLABS_API_KEY") or voice == "elevenlabs")
+        voice_id_str = "elevenlabs-bhola-chutki" if use_elevenlabs else (voice or profile["voice"])
         cache = BuildCache()
-        cache_key = tts_cache_key(text, speaker, voice)
+        cache_key = key_of("tts-v3", text.strip(), speaker, voice_id_str)
         if cache.fetch(cache_key, "mp3", audio_path) and cache.fetch(cache_key, "vtt", vtt_path):
             # Duration sidecar: a hit skips audio decoding entirely
             ms_text = cache.get_text(cache_key, "ms")
@@ -315,13 +487,39 @@ class VoiceEngine:
 
         print(f"  [Voice] Turn {turn_id} ({speaker}): generating audio...")
 
-        try:
-            synthesize_with_word_boundaries(
-                text.strip(), profile["voice"], profile["rate"],
-                profile["pitch"], audio_path, vtt_path)
-        except Exception as e:
-            print(f"  [Voice] Error on turn {turn_id}: {e}")
-            raise RuntimeError(f"edge-tts failed for turn {turn_id}: {e}") from e
+        generated_via_eleven = False
+        if use_elevenlabs:
+            print(f"  [Voice] Synthesizing turn {turn_id} via ElevenLabs ({speaker})...")
+            if synthesize_elevenlabs(text.strip(), speaker, audio_path):
+                # Run forced alignment on ElevenLabs audio
+                try:
+                    tmp_wav = audio_path + ".align.wav"
+                    subprocess.run(["ffmpeg", "-y", "-i", audio_path, "-vn", "-ar", "16000",
+                                    "-ac", "1", tmp_wav], capture_output=True, check=True)
+                    from engine.align import align_turn
+                    aligned = align_turn(tmp_wav, text.strip() or "shabd")
+                    words = aligned.words
+                    with open(vtt_path, "w", encoding="utf-8") as vf:
+                        vf.write("WEBVTT\n\n")
+                        for w in words:
+                            start_str = _ms_to_vtt(int(round(w.start_ms)))
+                            end_str = _ms_to_vtt(int(round(w.end_ms)))
+                            vf.write(f"{start_str} --> {end_str}\n{w.text}\n\n")
+                    generated_via_eleven = True
+                    if os.path.exists(tmp_wav):
+                        os.remove(tmp_wav)
+                except Exception as e:
+                    print(f"  [Voice] ElevenLabs alignment fallback for turn {turn_id}: {e}")
+                    generated_via_eleven = True  # audio exists, fallback VTT if needed
+
+        if not generated_via_eleven:
+            try:
+                synthesize_with_word_boundaries(
+                    text.strip(), profile["voice"], profile["rate"],
+                    profile["pitch"], audio_path, vtt_path)
+            except Exception as e:
+                print(f"  [Voice] Error on turn {turn_id}: {e}")
+                raise RuntimeError(f"TTS synthesis failed for turn {turn_id}: {e}") from e
 
         # Get actual duration from the generated file
         duration_ms = 0
@@ -334,6 +532,67 @@ class VoiceEngine:
         cache.put_text(cache_key, "ms", str(duration_ms))
 
         print(f"  [Voice] Turn {turn_id}: {duration_ms}ms")
+        return {
+            "audio": audio_path,
+            "vtt": vtt_path,
+            "duration_ms": duration_ms,
+            "key": cache_key,
+        }
+
+    def _process_custom_audio(self, turn_id: int, text: str,
+                              custom_audio: str, audio_path: str,
+                              vtt_path: str) -> Dict[str, Any]:
+        """Process user-supplied audio: transcode to standard MP3, measure duration,
+        and generate word-level VTT cues via waveform alignment."""
+        # Convert / standardize to 44.1kHz stereo MP3
+        if os.path.abspath(custom_audio) != os.path.abspath(audio_path):
+            cmd = ["ffmpeg", "-y", "-i", custom_audio, "-vn", "-ar", "44100",
+                   "-ac", "2", "-b:a", "192k", audio_path]
+            try:
+                subprocess.run(cmd, capture_output=True, check=True)
+            except Exception as e:
+                print(f"  [Voice] FFmpeg transcode warning for turn {turn_id}: {e}; copying directly")
+                shutil.copy2(custom_audio, audio_path)
+
+        duration_ms = _get_audio_duration_ms(audio_path)
+
+        # Cache key based on audio file hash and text
+        with open(audio_path, "rb") as f:
+            h = hashlib.sha256(f.read()).hexdigest()[:24]
+        cache_key = key_of("custom-audio-v3", h, text.strip())
+
+        # Align words to waveform using engine.align
+        tmp_wav = audio_path + ".align.wav"
+        try:
+            subprocess.run(["ffmpeg", "-y", "-i", audio_path, "-vn", "-ar", "16000",
+                            "-ac", "1", tmp_wav], capture_output=True, check=True)
+            from engine.align import align_turn
+            aligned = align_turn(tmp_wav, text.strip() or "shabd")
+            words = aligned.words
+        except Exception as e:
+            print(f"  [Voice] Alignment warning for turn {turn_id}: {e}; using proportional word spacing")
+            tokens = [t for t in text.strip().split() if t]
+            if not tokens:
+                tokens = ["..."]
+            step = max(50.0, float(duration_ms) / len(tokens))
+            from engine.align import AlignedWord
+            words = [AlignedWord(text=tok, start_ms=i * step, end_ms=(i + 1) * step)
+                     for i, tok in enumerate(tokens)]
+        finally:
+            if os.path.exists(tmp_wav):
+                try:
+                    os.remove(tmp_wav)
+                except OSError:
+                    pass
+
+        with open(vtt_path, "w", encoding="utf-8") as vf:
+            vf.write("WEBVTT\n\n")
+            for w in words:
+                start_str = _ms_to_vtt(int(round(w.start_ms)))
+                end_str = _ms_to_vtt(int(round(w.end_ms)))
+                vf.write(f"{start_str} --> {end_str}\n{w.text}\n\n")
+
+        print(f"  [Voice] Turn {turn_id} (custom audio): {duration_ms}ms, {len(words)} aligned words")
         return {
             "audio": audio_path,
             "vtt": vtt_path,
@@ -355,15 +614,16 @@ class VoiceEngine:
         turns = dialogue.get("turns", [])
         voices = dialogue.get("voices") or {}      # localizer overrides
 
-        # ─── Fire all speaking-turn TTS jobs in parallel (order preserved) ───
+        # ─── Fire all speaking-turn TTS / custom audio jobs in parallel ───
         futures: Dict[int, Any] = {}
         with ThreadPoolExecutor(max_workers=TTS_WORKERS) as pool:
             for turn in turns:
                 if turn["speaker"] != "explanation":
+                    custom_aud = turn.get("custom_audio") or turn.get("audio_file") or turn.get("audio")
                     futures[turn["turn_id"]] = pool.submit(
                         self.generate_turn_audio, turn["turn_id"],
                         turn.get("text", ""), turn["speaker"], voice_dir,
-                        voices.get(turn["speaker"]))
+                        voices.get(turn["speaker"]), custom_audio=custom_aud)
 
             results = []
             for turn in turns:
@@ -446,6 +706,26 @@ class VoiceEngine:
                          + turn.get("pause_after", 1.0)) * 1000)),
                 })
             else:
+                custom_aud = turn.get("custom_audio") or turn.get("audio_file")
+                if custom_aud and os.path.exists(custom_aud):
+                    with open(custom_aud, "rb") as f:
+                        h = hashlib.sha256(f.read()).hexdigest()[:24]
+                    key = key_of("custom-audio-v3", h, turn.get("text", "").strip())
+                    audio_ms = _get_audio_duration_ms(custom_aud)
+                    padding_ms = quantize_padding(audio_ms, settings.INTER_TURN_PADDING_MS)
+                    duration_ms = audio_ms + padding_ms
+                    base.update({
+                        "tts_key": key,
+                        "cached": True,
+                        "duration_ms": duration_ms,
+                        "audio_duration_ms": audio_ms,
+                        "padding_ms": padding_ms,
+                        "shot_type": turn.get("shot_type"),
+                        "gesture": turn.get("gesture"),
+                    })
+                    plan.append(base)
+                    continue
+
                 key = tts_cache_key(turn.get("text", ""), turn["speaker"],
                                     voices.get(turn["speaker"]))
                 hit = (cache.get(key, "mp3") is not None

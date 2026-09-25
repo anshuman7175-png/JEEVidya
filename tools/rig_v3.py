@@ -1338,34 +1338,43 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
         src_subnasale_y = float(lm[164, 1])
         src_lip_top = lm[0]
 
-        # Bounded crop: top NEVER encroaches into subnasale or nostrils!
-        pad_top = min(0.025 * local_fh, max(3.0, (min_y - src_subnasale_y) * 0.40))
+        # Detect true upper lip peak using color gradient along mouth center column
+        # to ensure puckered/rounded shapes (where MediaPipe lands too low) are never sliced.
+        img_arr = np.array(img)
+        cx = float((min_x + max_x) / 2.0)
+        col_x = int(round(cx))
+        true_top_y = min_y
+        for y in range(int(min_y), max(0, int(min_y - 35)), -1):
+            r, g, b = img_arr[y, col_x, :3].astype(float)
+            if r / max(1.0, g) > 1.45 and r / max(1.0, b) > 1.45:
+                true_top_y = y
+            else:
+                break
+        effective_min_y = min(min_y, float(true_top_y))
+
+        # Bounded crop: headroom captures full upper lip vermilion without encroaching nostrils
+        pad_top = max(4.0, min(0.035 * local_fh, (effective_min_y - src_subnasale_y) * 0.70))
         pad_bot = 0.035 * local_fh
         pad_side = 0.050 * local_fh
 
-        cx = float((min_x + max_x) / 2.0)
         x0 = int(cx - (max_x - min_x) / 2.0 - pad_side)
         x1 = int(cx + (max_x - min_x) / 2.0 + pad_side)
-        y0 = max(int(src_subnasale_y + 2.0), int(min_y - pad_top))
+        y0 = max(0, int(effective_min_y - pad_top))
         y1 = int(max_y + pad_bot)
 
         crop = img.crop((x0, y0, x1, y1))
         cw, ch = crop.size
 
-        # Soft anatomical super-ellipse mask (order 3.5: solid inner 75%, smoothstep falloff in outer 25%)
+        # Smooth anatomical ellipse centered directly on the mouth
         yy, xx = np.ogrid[:ch, :cw]
-        rx = cw / 2.0
-        ry = ch / 2.0
-        norm_dist = ((np.abs(xx - rx) / rx)**3.5 + (np.abs(yy - ry) / ry)**3.5)**(1.0 / 3.5)
+        mcx = cx - x0
+        mcy = (effective_min_y + max_y) / 2.0 - y0
+        rx = (max_x - min_x) / 2.0 + pad_side * 0.5
+        ry = (max_y - effective_min_y) / 2.0 + pad_top * 0.5
 
+        norm_dist = ((np.abs(xx - mcx) / rx)**2.4 + (np.abs(yy - mcy) / ry)**2.4)**(1.0 / 2.4)
         mask = np.clip((1.0 - norm_dist) / 0.25, 0.0, 1.0)
-        mask = mask * mask * (3 - 2 * mask)  # smoothstep
-
-        # Smooth feather across top pad region to ensure zero residue above lip vermilion
-        top_fade_h = max(2, int((min_y - y0) * 0.8))
-        for r in range(min(top_fade_h, ch)):
-            f = (r / top_fade_h) ** 1.5
-            mask[r, :] *= f
+        mask = mask * mask * (3.0 - 2.0 * mask)  # smoothstep falloff at outer rim
 
         crop_arr = np.array(crop).copy()
         crop_arr[..., 3] = (mask * 255).astype(np.uint8)
@@ -1380,7 +1389,7 @@ def _bake_viseme_plates(rig: Rig, detect, canon_fh: float,
 
         # Canonical mouth-center and upper-lip anchor in sprite pixels
         anchor_x = float((cx - x0) * ratio)
-        anchor_y = float((min_y - y0) * ratio)
+        anchor_y = float((effective_min_y - y0) * ratio)
         rig.viseme_anchors[vis] = (anchor_x, anchor_y)
         plates += 1
     return plates, targets

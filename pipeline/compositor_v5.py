@@ -44,7 +44,13 @@ from engine.render_fast import (
     _is_emphasis_word,
 )
 from engine.captions import CaptionRenderer, CaptionStyle
+from engine.stages import StageGeometry
+from engine.sims import get_simulation
+from engine.signature_overlays import (
+    ConceptCard, VoronoiShatter, LiveCounter, GudiyasNotebook, TeaserCard
+)
 from pipeline.compositor import CinematicCompositor
+from pipeline.director import AutoDirector, DirectedTimeline
 from pipeline.lipsync import (analyze_audio, compute_body_animation,
                               select_expression)
 from pipeline.puppet import PuppetActor
@@ -163,6 +169,60 @@ class StreamingCompositor(CinematicCompositor):
         # "glass", never seen as a coloured fringe on hair or eyes.
         self.ca_strength = 0.6 + 0.3 * energy
         self.bloom_enabled = True
+
+        # ─── Visual Bible 3-Stage & Signature Inventions Systems ───
+        self.stage_geom = StageGeometry(width=1080, height=1920, res_scale=self.res_scale)
+        self._sim_instances: Dict[str, Any] = {}
+        self._overlay_instances: Dict[str, Any] = {}
+        self._current_stage: str = "DUO"
+
+    def _get_sim_instance(self, sim_type: str, sim_params: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+        """Lazy-load or retrieve cached procedural physics simulation."""
+        if not sim_type:
+            return None
+        p = sim_params or {}
+        key = f"{sim_type}_{p.get('mode', '')}"
+        if key not in self._sim_instances:
+            self._sim_instances[key] = get_simulation(sim_type, **p)
+        return self._sim_instances[key]
+
+    def _get_overlay_instance(self, ev: Any) -> Optional[Any]:
+        """Instantiate signature overlay component for an active overlay event."""
+        ev_id = f"{ev.event_type}_{ev.start_ms}"
+        if ev_id not in self._overlay_instances:
+            p = ev.params
+            if ev.event_type == "card":
+                self._overlay_instances[ev_id] = ConceptCard(
+                    text=p.get("text", ""),
+                    kind=p.get("kind", "belief")
+                )
+            elif ev.event_type == "shatter":
+                self._overlay_instances[ev_id] = VoronoiShatter(
+                    text=p.get("text", "WRONG!")
+                )
+            elif ev.event_type == "counter":
+                self._overlay_instances[ev_id] = LiveCounter(
+                    target_value=str(p.get("target_val", "8.7")),
+                    unit=p.get("unit", "m/s²"),
+                    source=p.get("label", ""),
+                    from_val=float(p.get("start_val", 0.0)),
+                    subtitle=p.get("subtitle")
+                )
+            elif ev.event_type == "notebook":
+                self._overlay_instances[ev_id] = GudiyasNotebook(
+                    title=p.get("takeaway", "Important Formula"),
+                    formula_latex=p.get("formula", ""),
+                    chapter=p.get("topic", "Physics Mechanics"),
+                    tags="JEE · NEET"
+                )
+            elif ev.event_type == "teaser":
+                self._overlay_instances[ev_id] = TeaserCard(
+                    next_episode_num=p.get("next_episode_num"),
+                    next_question=p.get("question", "Agli baar kya hoga?"),
+                    pinned_comment=p.get("loop_cue", "Comment karo!"),
+                    badge_label=p.get("badge_label")
+                )
+        return self._overlay_instances.get(ev_id)
 
     def _build_motif_field(self, seed: int) -> None:
         """Physics-driven floating motif background (Tier 2)."""
@@ -369,6 +429,19 @@ class StreamingCompositor(CinematicCompositor):
         # (see _below_caption) is lifted there.
         self._caption_exempt = (speaker == "explanation")
 
+        # Directed timeline lookup for Visual Bible 3-Stage & Signature Overlays
+        d_timeline = getattr(timeline, "directed_timeline", None)
+        if d_timeline is None:
+            turn_dicts = [s.turn for s in timeline.spans]
+            scene_meta = getattr(timeline, "scene_meta", {})
+            d_timeline = AutoDirector().direct_scene(turn_dicts, scene_meta=scene_meta)
+            timeline.directed_timeline = d_timeline
+
+        stage_name, cam_mode, sim_type, sim_params = d_timeline.get_stage_at(int(t_ms))
+        if stage_name != getattr(self, "_current_stage", ""):
+            self._stage_changed = True
+        self._current_stage = stage_name
+
         # Layer 1: background
         if speaker == "explanation":
             frame = self.chalkboard_bg.copy()
@@ -399,6 +472,21 @@ class StreamingCompositor(CinematicCompositor):
             self.physics.step()
             if speaker != "explanation":
                 frame = self._render_physics_layer(frame)
+
+        # Layer 1.6: Lab stage procedural physics simulation canvas (Visual Bible §6)
+        if stage_name == "LAB" and sim_type and speaker != "explanation":
+            sim = self._get_sim_instance(sim_type, sim_params)
+            if sim:
+                sim_img = sim.render(
+                    t_seconds=t_ms / 1000.0,
+                    params=sim_params,
+                    width=int(1080 * self.res_scale),
+                    height=int(820 * self.res_scale),
+                    res_scale=self.res_scale
+                )
+                if frame.mode != "RGBA":
+                    frame = frame.convert("RGBA")
+                frame.paste(sim_img, (0, 0), sim_img)
 
         # Layer 2: particles (sprite-stamped glow)
         self.particles.update()
@@ -462,9 +550,19 @@ class StreamingCompositor(CinematicCompositor):
         # Composited here, the text never blooms into a soft haze, never
         # picks up R/B chromatic fringes, never wobbles with the gate, and
         # never gets grain. Crisp white on every frame.
-        if speaker != "explanation":
+        active_overlays = d_timeline.get_active_overlays(int(t_ms))
+        has_focal_overlay = any(
+            ov.event_type in ("card", "shatter", "teaser", "notebook", "counter")
+            for ov in active_overlays
+        )
+
+        if speaker != "explanation" and not has_focal_overlay:
             chunk, active = timeline.active_caption(span, t_ms)
             if chunk:
+                # In LAB stage: Simulation viewport occupies top zone (y 0 to 820 px).
+                # Position captions at y_frac = 0.53 (y = 1018 px), safely between
+                # the simulation divider (y = 820) and character presenter busts (heads at y >= 1380).
+                eff_caption_y_frac = 0.53 if stage_name == "LAB" else self.caption_y_frac
                 frame = self.caption_renderer.draw(
                     frame,
                     [w.text for w in chunk.words],
@@ -474,8 +572,30 @@ class StreamingCompositor(CinematicCompositor):
                             else brand.TEXT_CAPTION_ACTIVE),
                     emphasis=(self.dna.palette["accent"] if self.dna
                               else brand.ACCENT),
-                    y_frac=self.caption_y_frac,
+                    y_frac=eff_caption_y_frac,
                 )
+
+        # ─── Layer 5: Signature Brand Overlays (Visual Bible §5) ───
+        for ov_ev in active_overlays:
+            ov_obj = self._get_overlay_instance(ov_ev)
+            if ov_obj:
+                rel_t = (t_ms - ov_ev.start_ms) / 1000.0
+                dur_s = (ov_ev.end_ms - ov_ev.start_ms) / 1000.0
+                auto_nb_dir = os.path.join(settings.OUTPUT_DIR, "notebooks")
+                kwargs = {"auto_export_dir": auto_nb_dir} if ov_ev.event_type == "notebook" else {}
+                ov_frame = ov_obj.render_full_frame(
+                    t_seconds=rel_t,
+                    duration_seconds=dur_s,
+                    canvas_w=int(self.width / self.res_scale),
+                    canvas_h=int(self.height / self.res_scale),
+                    res_scale=self.res_scale,
+                    **kwargs
+                )
+                if ov_frame:
+                    if frame.mode != "RGBA":
+                        frame = frame.convert("RGBA")
+                    frame.paste(ov_frame, (0, 0), ov_frame)
+
         return frame
 
     # ═══════════════════════════════════════
@@ -490,7 +610,22 @@ class StreamingCompositor(CinematicCompositor):
         spring camera → body dynamics (squash/lean/breath) → continuous
         viseme mouth blend → ambient wrap + rim light → contact shadow.
         """
-        g_target, c_target = self.camera.get_both_characters(speaker)
+        if self._current_stage == "LAB":
+            layout_stage = self.stage_geom.get_layout("LAB", t_seconds=t_ms / 1000.0)
+            g_target = {"x": layout_stage.gudiya_x, "y": layout_stage.gudiya_y,
+                        "scale": layout_stage.gudiya_scale, "opacity": 1.0}
+            c_target = {"x": layout_stage.chintu_x, "y": layout_stage.chintu_y,
+                        "scale": layout_stage.chintu_scale, "opacity": 1.0}
+        else:
+            g_target, c_target = self.camera.get_both_characters(speaker)
+
+        if getattr(self, "_stage_changed", False):
+            if "girl" in self.cine._chars:
+                self.cine._chars["girl"].snap(g_target)
+            if "boy" in self.cine._chars:
+                self.cine._chars["boy"].snap(c_target)
+            self._stage_changed = False
+
         cx, cy = self.width / 2, self.height / 2
         pal = self.dna.palette if self.dna else None
         wrap_color = pal["bg_bottom"] if pal else brand.BG_BOTTOM
@@ -614,6 +749,9 @@ class StreamingCompositor(CinematicCompositor):
                 draw.ellipse((b.x - s, b.y - s, b.x + s, b.y + s),
                              fill=b.color)
             elif b.kind != "dot":
+                # In LAB stage, keep the viewport clean and focused on the scientific simulation
+                if getattr(self, "_current_stage", "") == "LAB":
+                    continue
                 sprite = render_motif(b.kind, max(24, int(b.size)),
                                       b.color[:3], alpha=b.color[3])
                 if abs(b.angle) > 0.02:
@@ -662,7 +800,22 @@ class StreamingCompositor(CinematicCompositor):
                 if key != speaker:
                     actor.track_speaker(t_ms, talker.affect)
 
-        g_raw, c_raw = self.camera.get_both_characters(speaker)
+        if self._current_stage == "LAB":
+            layout_stage = self.stage_geom.get_layout("LAB", t_seconds=t_ms / 1000.0)
+            g_raw = {"x": layout_stage.gudiya_x, "y": layout_stage.gudiya_y,
+                     "scale": layout_stage.gudiya_scale, "opacity": 1.0}
+            c_raw = {"x": layout_stage.chintu_x, "y": layout_stage.chintu_y,
+                     "scale": layout_stage.chintu_scale, "opacity": 1.0}
+        else:
+            g_raw, c_raw = self.camera.get_both_characters(speaker)
+
+        if getattr(self, "_stage_changed", False):
+            if "girl" in self.cine._chars:
+                self.cine._chars["girl"].snap(g_raw)
+            if "boy" in self.cine._chars:
+                self.cine._chars["boy"].snap(c_raw)
+            self._stage_changed = False
+
         # Spring-smoothed camera + global drift/push-in (pro path)
         cx, cy = self.width / 2, self.height / 2
         g_params = self.cine.smooth_char("girl", g_raw)
@@ -782,6 +935,11 @@ class StreamingCompositor(CinematicCompositor):
         captions are suppressed and the characters sit in the corners."""
         if getattr(self, "_caption_exempt", False):
             return y
+        if getattr(self, "_current_stage", "") == "LAB":
+            # Safe floor for LAB: Character head (y - target_h) must stay at or below y = 1120 px
+            # guaranteeing >60 px of clean clearance below caption band (y ~ 1018-1060 px).
+            min_y = (1120.0 * self.res_scale) + target_h
+            return max(y, min_y)
         return max(y, self.caption_clear_y + target_h)
 
     # ═══════════════════════════════════════

@@ -1,0 +1,184 @@
+{
+  "belief_card_text": "CHEESEIN ZAMEEN KO MISS KARTI HAIN?",
+  "channel_video_num": 8,
+  "clean_script": "Gudiya: Chintu, tumne bola cheezein zameen ko \"miss\" kar jaati hain. Matlab kya?\nChintu: Ek ball seedha chhodo, neeche girti hai. Ab usse zor se aage phenko?\nGudiya: Aage jaake girti hai. Obviously.\nChintu: Aur zor se phenko?\nGudiya: Aur aage jaake girti hai...\nChintu: Ab ITNI zor se phenko ki jitna woh girti hai, utni hi zameen neeche curve ho jaaye!\nGudiya: Toh woh kabhi zameen pe pahunchegi hi nahi?!\nChintu: Exactly! Woh girti rahegi... aur Earth ka chakkar lagaati rahegi. Isko bolte hain ORBIT!\nGudiya: Toh Moon bhi?\nChintu: Moon har second Earth ki taraf 1 point 4 millimetre girta hai!\nGudiya: Bas 1 point 4 millimetre?\nChintu: Haan! Lekin saath mein 1 kilometre per second se side mein bhaag raha hai. Toh girta hai, par miss karta hai. Har second. 4 arab saal se!\nGudiya: Matlab Moon gir rahe hue Earth ko miss kar raha hai?! Itna simple?!\nChintu: Newton ne yahi socha tha. 1687 mein.\nGudiya: Toh kitni speed chahiye Earth ko hamesha ke liye chhodne ke liye?\nChintu: Woh next video mein!",
+  "concept": "An orbit is falling so fast sideways that you keep missing the ground.",
+  "description": "Season 2 Episode 2: An orbit is falling so fast sideways that you keep missing the ground.",
+  "elevenlabs_script": "Gudiya: [curious] Chintu, tumne bola cheezein zameen ko \"miss\" kar jaati hain. Matlab kya?\nChintu: [excited] Ek ball seedha chhodo, neeche girti hai. Ab usse zor se aage phenko?\nGudiya: [confidently] Aage jaake girti hai. Obviously.\nChintu: [mischievously] Aur zor se phenko?\nGudiya: [thoughtful] Aur aage jaake girti hai...\nChintu: [dramatic tone] Ab ITNI zor se phenko ki jitna woh girti hai, utni hi zameen neeche curve ho jaaye!\nGudiya: [gasps] Toh woh kabhi zameen pe pahunchegi hi nahi?!\nChintu: [excited] Exactly! Woh girti rahegi... aur Earth ka chakkar lagaati rahegi. Isko bolte hain ORBIT!\nGudiya: [surprised] Toh Moon bhi?\nChintu: [excited] Moon har second Earth ki taraf 1 point 4 millimetre girta hai!\nGudiya: [confused] Bas 1 point 4 millimetre?\nChintu: [cheerfully] Haan! Lekin saath mein 1 kilometre per second se side mein bhaag raha hai. Toh girta hai, par miss karta hai. Har second. 4 arab saal se!\nGudiya: [elated] Matlab Moon gir rahe hue Earth ko miss kar raha hai?! Itna simple?!\nChintu: [proudly] Newton ne yahi socha tha. 1687 mein.\nGudiya: [curious] Toh kitni speed chahiye Earth ko hamesha ke liye chhodne ke liye?\nChintu: [mischievously] Woh next video mein!",
+  "episode": 2,
+  "exam_focus": "JEE/NEET: orbital velocity, satellites",
+  "force": false,
+  "formula": "a_c = \\frac{v^2}{R} = \\frac{(1000)^2}{3.84 \\times 10^8} \\approx 1.4\\text{ mm/s}^2",
+  "golden_rule": "ORBIT = GIRNA + MISS KARNA",
+  "hook_text": "Moon har second 1.4 mm GIRTA hai 🌙",
+  "id": "s02e02",
+  "ncert_chapter": "NCERT XI Ch 7 (orbital motion, centripetal acceleration)",
+  "next_episode_num": 3,
+  "on_screen_cues": "ball thrown harder ×3 (drawings) → \"ORBIT = girna + miss karna\" → \"Moon: 1.4 mm/s down, 1 km/s sideways\" → \"NCERT XI · Ch 7\"",
+  "output_filename": "Chaand_har_second_Earth_pe_gir_raha_hai_1790076618.mp4",
+  "pinned_comment": "Agar Moon achanak RUK jaaye... kya hoga? 🤔 (Hint: 5 din)",
+  "preview": false,
+  "season": 2,
+  "simulation": "newton_mountain",
+  "suggested_titles": "\"Moon Earth pe kyun nahi girta? (Woh gir raha hai!)\" / \"Orbit kya hai? 60 second mein\"",
+  "tags": [
+    "shorts",
+    "physics",
+    "moon",
+    "gravity",
+    "class11",
+    "jee",
+    "neet",
+    "science"
+  ],
+  "takeaway": "Moon falls 1.4 mm/s, but moves 1 km/s sideways!",
+  "teaser_question": "ESCAPE VELOCITY: Earth chhodne ke liye kitni speed?",
+  "title": "Chaand har second Earth pe gir raha hai",
+  "topic": "Newton's Mountain & Moon's Free-Fall",
+  "turns": [
+    {
+      "turn_id": 1,
+      "speaker": "girl",
+      "text": "Chintu, tumne bola cheezein zameen ko \"miss\" kar jaati hain. Matlab kya?",
+      "emotion": "curious",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_1_1790059437071.mp3"
+    },
+    {
+      "turn_id": 2,
+      "speaker": "boy",
+      "text": "Ek ball seedha chhodo, neeche girti hai. Ab usse zor se aage phenko?",
+      "emotion": "excited",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_2_1790059464472.mp3"
+    },
+    {
+      "turn_id": 3,
+      "speaker": "girl",
+      "text": "Aage jaake girti hai. Obviously.",
+      "emotion": "confidently",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_3_1790059470036.mp3"
+    },
+    {
+      "turn_id": 4,
+      "speaker": "boy",
+      "text": "Aur zor se phenko?",
+      "emotion": "mischievously",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_4_1790059479380.mp3"
+    },
+    {
+      "turn_id": 5,
+      "speaker": "girl",
+      "text": "Aur aage jaake girti hai...",
+      "emotion": "thoughtful",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_5_1790059486164.mp3"
+    },
+    {
+      "turn_id": 6,
+      "speaker": "boy",
+      "text": "Ab ITNI zor se phenko ki jitna woh girti hai, utni hi zameen neeche curve ho jaaye!",
+      "emotion": "dramatic tone",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_6_1790059615829.mp3"
+    },
+    {
+      "turn_id": 7,
+      "speaker": "girl",
+      "text": "Toh woh kabhi zameen pe pahunchegi hi nahi?!",
+      "emotion": "gasps",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_7_1790059645970.mp3"
+    },
+    {
+      "turn_id": 8,
+      "speaker": "boy",
+      "text": "Exactly! Woh girti rahegi... aur Earth ka chakkar lagaati rahegi. Isko bolte hain ORBIT!",
+      "emotion": "excited",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_8_1790059678889.mp3"
+    },
+    {
+      "turn_id": 9,
+      "speaker": "girl",
+      "text": "Toh Moon bhi?",
+      "emotion": "surprised",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_9_1790062892193.mp3"
+    },
+    {
+      "turn_id": 10,
+      "speaker": "boy",
+      "text": "Moon har second Earth ki taraf 1 point 4 millimetre girta hai!",
+      "emotion": "excited",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_10_1790062908754.mp3"
+    },
+    {
+      "turn_id": 11,
+      "speaker": "girl",
+      "text": "Bas 1 point 4 millimetre?",
+      "emotion": "confused",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_11_1790062917710.mp3"
+    },
+    {
+      "turn_id": 12,
+      "speaker": "boy",
+      "text": "Haan! Lekin saath mein 1 kilometre per second se side mein bhaag raha hai. Toh girta hai, par miss karta hai. Har second. 4 arab saal se!",
+      "emotion": "cheerfully",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_12_1790062927010.mp3"
+    },
+    {
+      "turn_id": 13,
+      "speaker": "girl",
+      "text": "Matlab Moon gir rahe hue Earth ko miss kar raha hai?! Itna simple?!",
+      "emotion": "elated",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_13_1790063209997.mp3"
+    },
+    {
+      "turn_id": 14,
+      "speaker": "boy",
+      "text": "Newton ne yahi socha tha. 1687 mein.",
+      "emotion": "proudly",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_14_1790063216542.mp3"
+    },
+    {
+      "turn_id": 15,
+      "speaker": "girl",
+      "text": "Toh kitni speed chahiye Earth ko hamesha ke liye chhodne ke liye?",
+      "emotion": "curious",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_15_1790063223815.mp3"
+    },
+    {
+      "turn_id": 16,
+      "speaker": "boy",
+      "text": "Woh next video mein!",
+      "emotion": "mischievously",
+      "pose": "auto",
+      "shot_type": "two_shot",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_16_1790063229234.mp3"
+    }
+  ]
+}

@@ -1,0 +1,183 @@
+{
+  "id": "s02e01",
+  "season": 2,
+  "episode": 1,
+  "channel_video_num": 7,
+  "title": "Astronaut float kyun karte hain?",
+  "description": "Season 2 Episode 1: Astronauts float because they are falling *with* their spaceship — not because gravity is missing.",
+  "ncert_chapter": "NCERT XI Ch 7 (g at height) + Ch 4 (free fall)",
+  "exam_focus": "JEE/NEET: variation of g with altitude, weightlessness in orbit",
+  "hook_text": "Space mein gravity NAHI hoti? ❌",
+  "concept": "Astronauts float because they are falling *with* their spaceship — not because gravity is missing.",
+  "on_screen_cues": "\"ISS = 400 km up\" → \"g ≈ 8.7 m/s² (≈ 90%)\" → \"FREE FALL\" → \"NCERT XI · Ch 7 Gravitation\"",
+  "pinned_comment": "Lift ki rassi toot jaaye aur tum last second JUMP karo — bachoge? 😏 Comment karo, answer Script 8 mein.",
+  "suggested_titles": "\"Space mein gravity nahi hoti? WRONG 🚀\" / \"Astronaut float kyun karte hain? Asli reason\"",
+  "tags": [
+    "shorts",
+    "physics",
+    "class11",
+    "gravity",
+    "space",
+    "jee",
+    "neet",
+    "ncert"
+  ],
+  "elevenlabs_script": "Gudiya: [confidently] Chintu, space mein gravity nahi hoti, isliye astronaut float karte hain. Right?\nChintu: [deadpan] Wrong!\nGudiya: [surprised] Kya?! Sab yahi bolte hain!\nChintu: [excited] Space Station sirf 400 kilometre upar hai. Wahan gravity Earth ki almost 90 PERCENT hai!\nGudiya: [confused] 90 percent?! Toh woh float kaise kar rahe hain?\nChintu: [mischievously] Kyunki woh float nahi kar rahe... woh GIR rahe hain!\nGudiya: [gasps] Gir rahe hain?!\nChintu: [excited] Haan! Station bhi gir raha hai, astronaut bhi gir raha hai. Dono saath saath gir rahe hain, isliye floating lagta hai!\nGudiya: [thoughtful] Jaise lift ki rassi toot jaaye... toh andar sab float karenge?\nChintu: [elated] EXACTLY! Isko bolte hain FREE FALL!\nGudiya: [curious] Lekin agar woh gir rahe hain... toh zameen pe kyun nahi aate?\nChintu: [whispers] Kyunki woh itni tezi se side mein bhaag rahe hain... ki zameen miss ho jaati hai.\nGudiya: [excited] Miss ho jaati hai?! Matlab?!\nChintu: [mischievously] Woh next video mein!",
+  "clean_script": "Gudiya: Chintu, space mein gravity nahi hoti, isliye astronaut float karte hain. Right?\nChintu: Wrong!\nGudiya: Kya?! Sab yahi bolte hain!\nChintu: Space Station sirf 400 kilometre upar hai. Wahan gravity Earth ki almost 90 PERCENT hai!\nGudiya: 90 percent?! Toh woh float kaise kar rahe hain?\nChintu: Kyunki woh float nahi kar rahe... woh GIR rahe hain!\nGudiya: Gir rahe hain?!\nChintu: Haan! Station bhi gir raha hai, astronaut bhi gir raha hai. Dono saath saath gir rahe hain, isliye floating lagta hai!\nGudiya: Jaise lift ki rassi toot jaaye... toh andar sab float karenge?\nChintu: EXACTLY! Isko bolte hain FREE FALL!\nGudiya: Lekin agar woh gir rahe hain... toh zameen pe kyun nahi aate?\nChintu: Kyunki woh itni tezi se side mein bhaag rahe hain... ki zameen miss ho jaati hai.\nGudiya: Miss ho jaati hai?! Matlab?!\nChintu: Woh next video mein!",
+  "turns": [
+    {
+      "turn_id": 1,
+      "speaker": "girl",
+      "speaker_name": "Gudiya",
+      "emotion": "confidently",
+      "shot_type": "two_shot",
+      "text": "Chintu, space mein gravity nahi hoti, isliye astronaut float karte hain. Right?",
+      "elevenlabs_line": "[confidently] Chintu, space mein gravity nahi hoti, isliye astronaut float karte hain. Right?",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 2,
+      "speaker": "boy",
+      "speaker_name": "Chintu",
+      "emotion": "deadpan",
+      "shot_type": "two_shot",
+      "text": "Wrong!",
+      "elevenlabs_line": "[deadpan] Wrong!",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 3,
+      "speaker": "girl",
+      "speaker_name": "Gudiya",
+      "emotion": "surprised",
+      "shot_type": "two_shot",
+      "text": "Kya?! Sab yahi bolte hain!",
+      "elevenlabs_line": "[surprised] Kya?! Sab yahi bolte hain!",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 4,
+      "speaker": "boy",
+      "speaker_name": "Chintu",
+      "emotion": "excited",
+      "shot_type": "two_shot",
+      "text": "Space Station sirf 400 kilometre upar hai. Wahan gravity Earth ki almost 90 PERCENT hai!",
+      "elevenlabs_line": "[excited] Space Station sirf 400 kilometre upar hai. Wahan gravity Earth ki almost 90 PERCENT hai!",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 5,
+      "speaker": "girl",
+      "speaker_name": "Gudiya",
+      "emotion": "confused",
+      "shot_type": "two_shot",
+      "text": "90 percent?! Toh woh float kaise kar rahe hain?",
+      "elevenlabs_line": "[confused] 90 percent?! Toh woh float kaise kar rahe hain?",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 6,
+      "speaker": "boy",
+      "speaker_name": "Chintu",
+      "emotion": "mischievously",
+      "shot_type": "two_shot",
+      "text": "Kyunki woh float nahi kar rahe... woh GIR rahe hain!",
+      "elevenlabs_line": "[mischievously] Kyunki woh float nahi kar rahe... woh GIR rahe hain!",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 7,
+      "speaker": "girl",
+      "speaker_name": "Gudiya",
+      "emotion": "gasps",
+      "shot_type": "two_shot",
+      "text": "Gir rahe hain?!",
+      "elevenlabs_line": "[gasps] Gir rahe hain?!",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 8,
+      "speaker": "boy",
+      "speaker_name": "Chintu",
+      "emotion": "excited",
+      "shot_type": "two_shot",
+      "text": "Haan! Station bhi gir raha hai, astronaut bhi gir raha hai. Dono saath saath gir rahe hain, isliye floating lagta hai!",
+      "elevenlabs_line": "[excited] Haan! Station bhi gir raha hai, astronaut bhi gir raha hai. Dono saath saath gir rahe hain, isliye floating lagta hai!",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 9,
+      "speaker": "girl",
+      "speaker_name": "Gudiya",
+      "emotion": "thoughtful",
+      "shot_type": "two_shot",
+      "text": "Jaise lift ki rassi toot jaaye... toh andar sab float karenge?",
+      "elevenlabs_line": "[thoughtful] Jaise lift ki rassi toot jaaye... toh andar sab float karenge?",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 10,
+      "speaker": "boy",
+      "speaker_name": "Chintu",
+      "emotion": "elated",
+      "shot_type": "two_shot",
+      "text": "EXACTLY! Isko bolte hain FREE FALL!",
+      "elevenlabs_line": "[elated] EXACTLY! Isko bolte hain FREE FALL!",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 11,
+      "speaker": "girl",
+      "speaker_name": "Gudiya",
+      "emotion": "curious",
+      "shot_type": "two_shot",
+      "text": "Lekin agar woh gir rahe hain... toh zameen pe kyun nahi aate?",
+      "elevenlabs_line": "[curious] Lekin agar woh gir rahe hain... toh zameen pe kyun nahi aate?",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 12,
+      "speaker": "boy",
+      "speaker_name": "Chintu",
+      "emotion": "whispers",
+      "shot_type": "two_shot",
+      "text": "Kyunki woh itni tezi se side mein bhaag rahe hain... ki zameen miss ho jaati hai.",
+      "elevenlabs_line": "[whispers] Kyunki woh itni tezi se side mein bhaag rahe hain... ki zameen miss ho jaati hai.",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 13,
+      "speaker": "girl",
+      "speaker_name": "Gudiya",
+      "emotion": "excited",
+      "shot_type": "two_shot",
+      "text": "Miss ho jaati hai?! Matlab?!",
+      "elevenlabs_line": "[excited] Miss ho jaati hai?! Matlab?!",
+      "custom_audio": null,
+      "audio_url": null
+    },
+    {
+      "turn_id": 14,
+      "speaker": "boy",
+      "speaker_name": "Chintu",
+      "emotion": "mischievously",
+      "shot_type": "two_shot",
+      "text": "Woh next video mein!",
+      "elevenlabs_line": "[mischievously] Woh next video mein!",
+      "custom_audio": null,
+      "audio_url": null
+    }
+  ]
+}

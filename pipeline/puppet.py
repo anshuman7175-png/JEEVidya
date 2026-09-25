@@ -35,7 +35,7 @@ from engine.gestures import (GestureTrack, semantic_pose_for,
 from engine.pose_library import PoseLibrary, PoseState, DEFAULT_POSE
 from engine.rig import Rig, has_rig  # noqa: F401  (has_rig re-exported)
 from engine.visemes import (AmplitudeEnvelope, VisemeTrack,
-                            mouth_openness_blend)
+                            mouth_openness_blend, V)
 
 # Character name → dialogue speaker key
 SPEAKER_OF = {"gudiya": "girl", "chintu": "boy"}
@@ -241,8 +241,11 @@ class PuppetActor:
         safe = self._safe_poses()
         self._span_words = list(span.words) if is_my_turn else []
 
-        first_pose = None
-        if is_my_turn and span.words:
+        # Check for explicit pose override from turn payload (e.g. "pose": "b")
+        explicit_pose = span.turn.get("pose") or span.turn.get("body_pose")
+        first_pose = explicit_pose if (explicit_pose and explicit_pose != "auto") else None
+
+        if not first_pose and is_my_turn and span.words:
             first_pose = semantic_pose_for(span.words[0].text, self.character)
 
         if first_pose and first_pose in safe and first_pose in self.pose_lib.pose_names and first_pose in self.rig.poses:
@@ -337,12 +340,11 @@ class PuppetActor:
     # ─── blink scheduler (measured human profile) ──────
 
     def _next_blink_interval(self) -> float:
-        """Human resting blink distribution: 3.8 to 6.5 seconds.
-        Gentle modulation with affect's blink_rate_mult (clamped 0.8-1.25)
-        to avoid rapid flutter while preserving emotional expression."""
+        """Human resting blink distribution: 3.8 to 6.5 seconds,
+        modulated by affect's blink_rate_mult."""
         base = self._rng.uniform(3800.0, 6200.0)
-        rate = max(0.8, min(1.25, self.channels.get("blink_rate_mult", 1.0)))
-        return max(3200.0, min(7000.0, base / rate))
+        rate = max(0.6, min(2.0, self.channels.get("blink_rate_mult", 1.0)))
+        return max(2000.0, min(8000.0, base / rate))
 
     def _blink_amount(self, t_ms: float, fps: int) -> float:
         if t_ms >= self._next_blink_ms:
@@ -540,29 +542,49 @@ class PuppetActor:
             pose.body_pose_blend = _bt
 
         # 4 · Mouth: coarticulated viseme glide × enveloped amplitude.
-        #     Agile tracking at 40ms syllable rates without artificial hold lag.
+        #     Agile tracking at 55ms syllable rates without artificial hold lag.
         amp_level = self._env.step(fa.get("db", -80.0))
-        if is_speaking and self._viseme_track is not None:
+
+        # Check if speech has ended for this turn (prevents mouth lingering open into silence)
+        speech_end_ms = 0.0
+        if hasattr(self, "_span_words") and self._span_words:
+            speech_end_ms = self._span_words[-1].end_ms
+        elif self._viseme_track and self._viseme_track.events:
+            speech_end_ms = self._viseme_track.events[-1].end_ms
+
+        is_past_speech = (speech_end_ms > 0.0 and t_ms > speech_end_ms + 25.0)
+
+        # Word-level pause gating: mouth closes when between words
+        is_in_word = True
+        if hasattr(self, "_span_words") and self._span_words:
+            is_in_word = any((w.start_ms - 25.0 <= t_ms <= w.end_ms + 20.0)
+                             for w in self._span_words)
+
+        if is_speaking and self._viseme_track is not None and not is_past_speech:
             wt_dict, jaw = self._viseme_track.weights_at(t_ms, energy)
             sorted_v = sorted(wt_dict.items(), key=lambda x: x[1], reverse=True)
             primary = sorted_v[0][0].value if sorted_v else "REST"
             secondary = sorted_v[1][0].value if len(sorted_v) > 1 else primary
             blend = sorted_v[1][1] if len(sorted_v) > 1 else 0.0
 
-            raw_open = jaw * (0.22 + 0.78 * max(0.0, min(1.0, amp_level)))
-            # Organic muscle filter: attack 0.28, release 0.12
-            k = 0.28 if raw_open > self._mouth_smooth else 0.12
-            self._mouth_smooth += (raw_open - self._mouth_smooth) * k
+            # Silence or inter-word pause: close mouth promptly
+            is_audio_silent = (not fa.get("is_speaking", True)) or (fa.get("db", -80.0) < -38.0)
+            is_track_rest = (wt_dict.get(V.REST, 0.0) > 0.70) or (primary == "REST")
+
+            if not is_in_word or (is_audio_silent and is_track_rest):
+                raw_open = 0.0
+                self._mouth_smooth *= 0.50
+            else:
+                raw_open = jaw * max(0.0, min(1.0, amp_level))
+                k = 0.40 if raw_open > self._mouth_smooth else 0.28
+                self._mouth_smooth += (raw_open - self._mouth_smooth) * k
+
+            if self._mouth_smooth < 0.02 or not is_in_word:
+                self._mouth_smooth = 0.0
             pose.mouth_open = self._mouth_smooth
 
-            # Quiet tracking for inter-word pause hysteresis
-            if self._mouth_smooth < 0.10:
-                self._quiet_frames += 1
-            else:
-                self._quiet_frames = 0
-
-            # Inter-word closure: close to REST only after sustained pause
-            if self._quiet_frames >= 3 or self._mouth_smooth < 0.08:
+            # Inter-word closure: close to REST when mouth opening is small or in pause
+            if self._mouth_smooth < 0.04 or primary == "REST" or not is_in_word:
                 pose.viseme = "REST"
                 pose.viseme_to = "REST"
                 pose.viseme_blend = 0.0
@@ -573,18 +595,18 @@ class PuppetActor:
                 pose.viseme_blend = blend
                 self._current_viseme = primary
 
-            # Speech-beat nod: only on amplitude peaks (> 0.6)
-            if self._viseme_track.word_started_within(t_ms) \
+            # Speech-beat nod: only on amplitude peaks (> 0.6) inside active words
+            if is_in_word and self._viseme_track.word_started_within(t_ms) \
                     and fa.get("is_speaking", False) \
                     and amp_level > 0.6:
                 pose.head_nod += 0.12 * energy
         else:
             pose.viseme, pose.viseme_to = "REST", "REST"
-            # Release toward closed instead of snapping shut mid-frame
-            self._mouth_smooth *= 0.72
-            if self._mouth_smooth < 0.01:
+            pose.viseme_blend = 0.0
+            self._mouth_smooth *= 0.50
+            if self._mouth_smooth < 0.02:
                 self._mouth_smooth = 0.0
-            pose.viseme_blend, pose.mouth_open = 0.0, self._mouth_smooth
+            pose.mouth_open = self._mouth_smooth
 
         # 5 · Blink (measured human ease-in, hold, ease-out)
         pose.blink = self._blink_amount(t_ms, fps)

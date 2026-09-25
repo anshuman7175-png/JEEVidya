@@ -48,10 +48,8 @@ AXIS_COLOR: Tuple[int, int, int] = (80, 80, 120)
 # PARTICLE SYSTEM COLORS
 # ═══════════════════════════════════════════
 PARTICLE_COLORS = [
-    (0, 212, 255, 80),     # Cyan, 30% opacity
-    (255, 215, 0, 60),     # Gold, 25% opacity
-    (255, 51, 102, 50),    # Pink, 20% opacity
-    (0, 230, 118, 40),     # Green, 15% opacity
+    (220, 225, 235, 28),   # Cool white, barely visible — reads as ambient dust
+    (200, 210, 230, 22),   # Warm silver, subtle — never draws the eye
 ]
 
 # ═══════════════════════════════════════════
@@ -168,14 +166,15 @@ AUDIO_BGM_DB: float = -20.0        # Barely audible warmth
 # (1) and on-screen bounds at run time for camera push-ins.
 SHOT_PRESETS: Dict[str, Dict] = {
     # Normal dialogue: Gudiya left, Chintu right. Speaker forward & large,
-    # listener one plane back (smaller, feet slightly higher = further).
+    # listener one plane back. Anchored at y=1680 with asset-calibrated scales (Gudiya 0.78, Chintu 0.62)
+    # guaranteeing >240px head clearance under cards and natural sibling height proportion.
     "two_shot": {
-        "girl_active":   {"x": 310, "y": 1480, "scale": 0.93, "opacity": 1.0},
-        "girl_inactive": {"x": 285, "y": 1468, "scale": 0.85, "opacity": 1.0},
-        "boy_active":    {"x": 750, "y": 1480, "scale": 0.93, "opacity": 1.0},
-        "boy_inactive":  {"x": 765, "y": 1468, "scale": 0.85, "opacity": 1.0},
-        "active":        {"x": 310, "y": 1480, "scale": 0.93, "opacity": 1.0},
-        "inactive":      {"x": 765, "y": 1468, "scale": 0.85, "opacity": 1.0},
+        "girl_active":   {"x": 300, "y": 1680, "scale": 0.98, "opacity": 1.0},
+        "girl_inactive": {"x": 280, "y": 1670, "scale": 0.92, "opacity": 0.95},
+        "boy_active":    {"x": 780, "y": 1680, "scale": 0.90, "opacity": 1.0},
+        "boy_inactive":  {"x": 790, "y": 1670, "scale": 0.85, "opacity": 0.95},
+        "active":        {"x": 300, "y": 1680, "scale": 0.98, "opacity": 1.0},
+        "inactive":      {"x": 790, "y": 1670, "scale": 0.85, "opacity": 0.95},
     },
     # Speaker solo medium shot: side-framed on the character's native side
     "medium": {

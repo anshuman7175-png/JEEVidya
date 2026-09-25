@@ -1,0 +1,120 @@
+{
+  "title": "Aasman blue kyu hai",
+  "description": "Gudiya and Chintu discuss Rayleigh scattering and why the sky appears blue",
+  "tags": [
+    "Physics",
+    "Optics",
+    "JEE",
+    "Class 10"
+  ],
+  "turns": [
+    {
+      "turn_id": 1,
+      "speaker": "girl",
+      "emotion": "curious",
+      "shot_type": "two_shot",
+      "text": "Chintu ek aasaan sawaal hai aasman blue kyun hai",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_1_1788549552792.mp3",
+      "audio_url": "/audio/turn_1_1788549552792.mp3"
+    },
+    {
+      "turn_id": 2,
+      "speaker": "boy",
+      "emotion": "enthusiastic",
+      "shot_type": "two_shot",
+      "text": "Tum bolo pehle",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_2_1788549559429.mp3",
+      "audio_url": "/audio/turn_2_1788549559429.mp3"
+    },
+    {
+      "turn_id": 3,
+      "speaker": "girl",
+      "emotion": "curious",
+      "shot_type": "two_shot",
+      "text": "Sunlight mein saare colours hote hain aur blue sabse zyada scatter hota hai Bas Class 10",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_3_1788549568455.mp3",
+      "audio_url": "/audio/turn_3_1788549568455.mp3"
+    },
+    {
+      "turn_id": 4,
+      "speaker": "boy",
+      "emotion": "enthusiastic",
+      "shot_type": "two_shot",
+      "text": "Toh violet kyun nahi",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_4_1788549583936.mp3",
+      "audio_url": "/audio/turn_4_1788549583936.mp3"
+    },
+    {
+      "turn_id": 5,
+      "speaker": "girl",
+      "emotion": "curious",
+      "shot_type": "two_shot",
+      "text": "kya matlab",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_5_1788549591268.mp3",
+      "audio_url": "/audio/turn_5_1788549591268.mp3"
+    },
+    {
+      "turn_id": 6,
+      "speaker": "boy",
+      "emotion": "enthusiastic",
+      "shot_type": "two_shot",
+      "text": "Violet blue se bhi zyada scatter hota hai",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_6_1788549599143.mp3",
+      "audio_url": "/audio/turn_6_1788549599143.mp3"
+    },
+    {
+      "turn_id": 7,
+      "speaker": "girl",
+      "emotion": "curious",
+      "shot_type": "two_shot",
+      "text": "Toh phir aasman blue kyun dikhta hai",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_7_1788549606856.mp3",
+      "audio_url": "/audio/turn_7_1788549606856.mp3"
+    },
+    {
+      "turn_id": 8,
+      "speaker": "boy",
+      "emotion": "enthusiastic",
+      "shot_type": "two_shot",
+      "text": "Kyunki hamari aankhein blue ko violet se zyada strongly detect karti hain",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_8_1788549613966.mp3",
+      "audio_url": "/audio/turn_8_1788549613966.mp3"
+    },
+    {
+      "turn_id": 9,
+      "speaker": "girl",
+      "emotion": "curious",
+      "shot_type": "two_shot",
+      "text": "Matlab jo colour sabse zyada scatter hota hai zaroori nahi wahi sabse zyada dikhe",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_9_1788549621948.mp3",
+      "audio_url": "/audio/turn_9_1788549621948.mp3"
+    },
+    {
+      "turn_id": 10,
+      "speaker": "boy",
+      "emotion": "enthusiastic",
+      "shot_type": "two_shot",
+      "text": "Exactly",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_10_1788549628781.mp3",
+      "audio_url": "/audio/turn_10_1788549628781.mp3"
+    },
+    {
+      "turn_id": 11,
+      "speaker": "girl",
+      "emotion": "curious",
+      "shot_type": "two_shot",
+      "text": "Toh sunset orange kyun hota hai",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_11_1788549639892.mp3",
+      "audio_url": "/audio/turn_11_1788549639892.mp3"
+    },
+    {
+      "turn_id": 12,
+      "speaker": "boy",
+      "emotion": "enthusiastic",
+      "shot_type": "two_shot",
+      "text": "Woh next video mein",
+      "custom_audio": "/Users/anshuman/an39/JEEVidya/uploads/audio/turn_12_1788549646369.mp3",
+      "audio_url": "/audio/turn_12_1788549646369.mp3"
+    }
+  ]
+}

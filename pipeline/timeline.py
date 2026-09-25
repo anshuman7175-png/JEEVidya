@@ -101,6 +101,8 @@ def parse_vtt_words(vtt_path: str) -> List[WordEvent]:
                 for i, w in enumerate(words):
                     w_start = start + i * step
                     w_end = end if i == len(words) - 1 else w_start + step
+                    if w_end <= w_start:
+                        w_end = w_start + max(60, step)
                     events.append(WordEvent(text=w, start_ms=w_start, end_ms=w_end))
             pending = None
 
@@ -127,10 +129,11 @@ def _build_chunks(words: List[WordEvent], turn_end_ms: int) -> List[CaptionChunk
     chunks: List[CaptionChunk] = []
     for i, group in enumerate(groups):
         start = group[0].start_ms
+        linger_end = group[-1].end_ms + CHUNK_LINGER_MS
         if i + 1 < len(groups):
-            end = groups[i + 1][0].start_ms
+            end = min(groups[i + 1][0].start_ms, linger_end)
         else:
-            end = min(turn_end_ms, group[-1].end_ms + CHUNK_LINGER_MS)
+            end = min(turn_end_ms, linger_end)
         chunks.append(CaptionChunk(words=group, start_ms=start, end_ms=max(end, start + 1)))
     return chunks
 
@@ -152,6 +155,8 @@ class Timeline:
             duration = int(turn.get("duration_ms", 0))
             start_ms = cursor_ms
             end_ms = cursor_ms + duration
+            turn["start_ms"] = start_ms
+            turn["end_ms"] = end_ms
             span = TurnSpan(
                 turn=turn,
                 start_ms=start_ms,

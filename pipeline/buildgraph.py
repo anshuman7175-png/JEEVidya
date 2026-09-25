@@ -44,6 +44,7 @@ _CODE_FILES = (
     "pipeline/camera.py",
     "pipeline/compositor.py",
     "pipeline/compositor_v5.py",
+    "pipeline/director.py",
     "pipeline/lipsync.py",
     "pipeline/puppet.py",
     "pipeline/timeline.py",
@@ -101,6 +102,46 @@ def assets_fingerprint() -> str:
 def sfx_fingerprint() -> str:
     """SFX/BGM library — anything mixed into the audio track."""
     return _dir_fingerprint(settings.SFX_DIR)
+
+
+# ═══════════════════════════════════════════
+# VTT WORD EVENT PARSER
+# ═══════════════════════════════════════════
+
+import re as _re
+
+_VTT_TS_RE = _re.compile(
+    r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})")
+
+
+def _parse_vtt_word_events(vtt_path: str) -> List[Dict[str, Any]]:
+    """Parse a WebVTT file into a list of {text, start_ms, end_ms} dicts."""
+    events: List[Dict[str, Any]] = []
+    try:
+        with open(vtt_path, "r", encoding="utf-8") as f:
+            lines = f.read().strip().split("\n")
+    except Exception:
+        return events
+
+    i = 0
+    while i < len(lines):
+        m = _VTT_TS_RE.match(lines[i].strip())
+        if m:
+            start_ms = (int(m.group(1)) * 3600000 + int(m.group(2)) * 60000 +
+                        int(m.group(3)) * 1000 + int(m.group(4)))
+            end_ms = (int(m.group(5)) * 3600000 + int(m.group(6)) * 60000 +
+                      int(m.group(7)) * 1000 + int(m.group(8)))
+            # Next non-empty line is the word text
+            if i + 1 < len(lines) and lines[i + 1].strip():
+                events.append({
+                    "text": lines[i + 1].strip(),
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                })
+                i += 2
+                continue
+        i += 1
+    return events
 
 
 # ═══════════════════════════════════════════
@@ -273,6 +314,16 @@ class VideoBuild:
         total_s = sum(t["duration_ms"] for t in turn_data) / 1000
         report("VOICE", 28, f"{len(turn_data)} turns, {total_s:.1f}s total")
 
+        # Attach word-level timing events from VTT files to each turn dict.
+        # The director uses these to sync simulation triggers (e.g. cable snap)
+        # to the exact word onset in the audio.
+        for td in turn_data:
+            vtt_path = td.get("vtt")
+            if vtt_path and os.path.exists(vtt_path):
+                td["word_events"] = _parse_vtt_word_events(vtt_path)
+            else:
+                td["word_events"] = []
+
         # Tier 2: plan the camera (deterministic, DNA-seeded; explicit
         # shot_type in the script always wins)
         from engine.shot_sequencer import ShotSequencer
@@ -280,7 +331,10 @@ class VideoBuild:
 
         # Phase B: the timeline durations are now known → plan the DAG
         from pipeline.timeline import Timeline
+        from pipeline.director import AutoDirector
         timeline = Timeline(turn_data, fps=self.fps)
+        timeline.scene_meta = self.dialogue
+        timeline.directed_timeline = AutoDirector().direct_scene(turn_data, scene_meta=self.dialogue)
         report("TIMELINE", 32, timeline.describe())
 
         graph, final = self._plan(timeline, turn_data)
@@ -453,7 +507,10 @@ class VideoBuild:
             from engine.shot_sequencer import ShotSequencer
             ShotSequencer(self.dna).apply(plan)
             from pipeline.timeline import Timeline
+            from pipeline.director import AutoDirector
             timeline = Timeline(plan, fps=self.fps)
+            timeline.scene_meta = self.dialogue
+            timeline.directed_timeline = AutoDirector().direct_scene(plan, scene_meta=self.dialogue)
             graph, final = self._plan(timeline, plan)
             statuses = graph.status(final)
             for node, hit in statuses:
@@ -576,6 +633,7 @@ class VideoBuild:
                 "name": f"seg:{i:02d}",
                 "project_root": settings.PROJECT_ROOT,
                 "turn_data": turn_data,
+                "scene_meta": self.dialogue,
                 "index": i,
                 "seg_key": seg_key,
                 "seed_key": seg_key,

@@ -304,3 +304,16 @@ def test_from_words_keeps_events_inside_their_word_span():
         assert e.end_ms >= e.start_ms
         assert any(w.start_ms - 1e-6 <= e.start_ms and e.end_ms <= w.end_ms + 1e-6
                    for w in words), e
+
+
+def test_english_hinglish_digraphs_and_silent_e():
+    """English/Hinglish tokens must match digraphs as atomic units and
+    drop silent word-final 'e' so mouth shapes do not pop open after words."""
+    # "blue" ends on rounded tense vowel, NOT mid-e
+    assert g2p("blue") == [V.BILABIAL, V.DENTAL, V.ROUNDED_TENSE]
+    # "white" begins with labiodental, ends dental, drops silent-e
+    assert g2p("white") == [V.LABIODENTAL, V.CLOSED_I, V.DENTAL]
+    # "Chintu" starts with dental affricate, not retroflex /h/
+    assert g2p("Chintu")[0] == V.DENTAL
+    # "the" monosyllable retains vowel
+    assert g2p("the") == [V.DENTAL, V.MID_E]

@@ -65,6 +65,38 @@ for _chars, _cls in [
     for c in _chars:
         _LAT_MAP[c] = _cls
 
+_PHONEME_TABLE: Tuple[Tuple[str, V], ...] = (
+    # 3-char clusters
+    ("chh", V.DENTAL), ("ksh", V.DENTAL), ("shr", V.DENTAL),
+    # aspirated stops → base articulator
+    ("bh", V.BILABIAL), ("ph", V.LABIODENTAL),
+    ("kh", V.RETROFLEX), ("gh", V.RETROFLEX),
+    ("th", V.DENTAL), ("dh", V.DENTAL),
+    ("jh", V.DENTAL), ("ch", V.DENTAL),
+    ("sh", V.DENTAL), ("zh", V.DENTAL),
+    ("wh", V.LABIODENTAL),
+    ("ck", V.RETROFLEX),
+    ("ng", V.RETROFLEX),
+    # long vowels and diphthongs
+    ("aa", V.OPEN_A), ("ee", V.CLOSED_I), ("ii", V.CLOSED_I),
+    ("oo", V.ROUNDED_TENSE), ("uu", V.ROUNDED_TENSE),
+    ("ai", V.MID_E), ("au", V.ROUNDED_LAX), ("ou", V.ROUNDED_LAX),
+    ("ei", V.MID_E), ("oi", V.ROUNDED_LAX),
+    ("ea", V.CLOSED_I), ("oa", V.ROUNDED_LAX),
+    # single consonants
+    ("m", V.BILABIAL), ("b", V.BILABIAL), ("p", V.BILABIAL),
+    ("f", V.LABIODENTAL), ("v", V.LABIODENTAL), ("w", V.LABIODENTAL),
+    ("t", V.DENTAL), ("d", V.DENTAL), ("n", V.DENTAL), ("s", V.DENTAL),
+    ("z", V.DENTAL), ("l", V.DENTAL), ("j", V.DENTAL), ("c", V.DENTAL),
+    ("k", V.RETROFLEX), ("g", V.RETROFLEX), ("q", V.RETROFLEX),
+    ("x", V.RETROFLEX), ("r", V.RETROFLEX),
+    # /h/ alone
+    ("h", V.OPEN_A),
+    # single vowels
+    ("a", V.OPEN_A), ("e", V.MID_E), ("i", V.CLOSED_I), ("y", V.CLOSED_I),
+    ("u", V.ROUNDED_TENSE), ("o", V.ROUNDED_LAX),
+)
+
 # Digits are spoken aloud, so a numeric token ("9.8") must still move the
 # mouth. Map each digit to the viseme run of its spoken English name —
 # a coarse but correct-order approximation for lip sync.
@@ -182,12 +214,17 @@ def _delete_schwas(seq: List[V], inherent: List[bool]) -> List[V]:
 
 def _g2p_word(token: str) -> List[V]:
     """One whitespace-delimited token → viseme run, with the inherent
-    schwa inserted and then deleted where Hindi drops it."""
+    schwa inserted and then deleted where Hindi drops it, digraph-aware
+    Latin phoneme matching, and silent-e deletion."""
     out: List[V] = []
     inherent: List[bool] = []          # parallel flags: unwritten schwa
     chars = list(token)
-    for i, ch in enumerate(chars):
+    t_lower = token.lower()
+    i = 0
+    while i < len(chars):
+        ch = chars[i]
         if ch in _SKIP or ch.isspace():
+            i += 1
             continue
         cls = _DEV_MAP.get(ch)
         if cls is not None:
@@ -200,24 +237,54 @@ def _g2p_word(token: str) -> List[V]:
                 if _DEV_MAP.get(nxt) not in VOWELS and nxt != _VIRAMA:
                     out.append(V.OPEN_A)
                     inherent.append(True)
-            continue
-        cls = _LAT_MAP.get(ch.lower())
-        if cls is not None:
-            out.append(cls)
-            inherent.append(False)
+            i += 1
             continue
         sup = _SUPERSCRIPT_G2P.get(ch)
         if sup is not None:                          # exponent, spoken
             for v in sup:
                 out.append(v)
                 inherent.append(False)
+            i += 1
             continue
         if "0" <= ch <= "9":                         # ASCII digits only:
-            # `str.isdigit()` also accepts superscripts and other numeric
-            # forms that `int()` rejects outright.
             for v in _DIGIT_G2P.get(int(ch), ()):    # spoken digit name
                 out.append(v)
                 inherent.append(False)
+            i += 1
+            continue
+
+        # Latin phoneme matching (longest match first via _PHONEME_TABLE)
+        matched = False
+        for graph, vis in _PHONEME_TABLE:
+            if t_lower.startswith(graph, i):
+                j = i + len(graph)
+                # Gemination: collapse duplicate consecutive consonants (e.g. "tt", "ss")
+                if vis not in VOWELS:
+                    while t_lower.startswith(graph, j):
+                        j += len(graph)
+
+                # Check for silent word-final 'e' (e.g. "blue", "make", "white", "code")
+                if graph == "e":
+                    is_word_end = True
+                    for k in range(j, len(t_lower)):
+                        if t_lower[k].isalnum() or t_lower[k] in _DEV_MAP:
+                            is_word_end = False
+                            break
+                    # Drop silent 'e' only if word already contains a preceding vowel
+                    if is_word_end and any(v in VOWELS for v in out):
+                        i = j
+                        matched = True
+                        break
+
+                out.append(vis)
+                inherent.append(False)
+                i = j
+                matched = True
+                break
+
+        if not matched:
+            i += 1
+
     return _delete_schwas(out, inherent)
 
 
@@ -284,13 +351,13 @@ def coalesce_events(events: List[VisemeEvent],
                 continue
             prev_e = evs[i - 1] if i > 0 else None
             next_e = evs[i + 1] if i + 1 < len(evs) else None
-            # If same viseme adjacent, merge immediately
-            if prev_e is not None and prev_e.viseme == e.viseme:
+            # If same viseme adjacent and contiguous, merge immediately
+            if prev_e is not None and prev_e.viseme == e.viseme and prev_e.end_ms >= e.start_ms - 1e-6:
                 prev_e.end_ms = e.end_ms
                 del evs[i]
                 changed = True
                 break
-            if next_e is not None and next_e.viseme == e.viseme:
+            if next_e is not None and next_e.viseme == e.viseme and next_e.start_ms <= e.end_ms + 1e-6:
                 next_e.start_ms = e.start_ms
                 del evs[i]
                 changed = True
@@ -307,9 +374,13 @@ def coalesce_events(events: List[VisemeEvent],
             weakest = min(cand, key=lambda c: c[1])
             if self_rank > max(r for _, r in cand):
                 if weakest[0] == "prev" and prev_e is not None:
+                    if prev_e.viseme in VOWELS and prev_e.dur >= 30.0:
+                        continue
                     e.start_ms = prev_e.start_ms
                     del evs[i - 1]
                 elif next_e is not None:
+                    if next_e.viseme in VOWELS and next_e.dur >= 30.0:
+                        continue
                     e.end_ms = next_e.end_ms
                     del evs[i + 1]
                 changed = True
@@ -342,16 +413,16 @@ class VisemeTrack:
         return cls(coalesce_events(events, min_dur), turn_end_ms)
 
     # Minimum event duration on the production VTT path (§7.4).
-    # 40ms (~2.4 frames @ 60fps) preserves distinct consonants and vowels
-    # while eliminating sub-frame fluttering.
-    WORD_EVENT_MIN_DUR_MS = 40.0
+    # 55ms (~3.3 frames @ 60fps) preserves distinct syllables and vowels
+    # while eliminating frantic sub-frame flapping.
+    WORD_EVENT_MIN_DUR_MS = 55.0
 
     @classmethod
     def from_words(cls, words: Sequence,
                    turn_end_ms: Optional[float] = None) -> "VisemeTrack":
         """Build a viseme track from VTT word events. Events shorter
         than WORD_EVENT_MIN_DUR_MS are merged into the articulatorily
-        dominant neighbour, mirroring from_aligned_events."""
+        dominant neighbour per word, preserving inter-word gaps."""
         events: List[VisemeEvent] = []
         for w in words:
             phones = g2p(w.text)
@@ -362,13 +433,15 @@ class VisemeTrack:
             total = sum(weights)
             span = max(50.0, w.end_ms - w.start_ms)
             t = w.start_ms
+            w_events: List[VisemeEvent] = []
             for p, wt in zip(phones, weights, strict=True):
                 d = span * wt / total
-                events.append(VisemeEvent(p, t, t + d))
+                w_events.append(VisemeEvent(p, t, t + d))
                 t += d
+            events.extend(coalesce_events(w_events, cls.WORD_EVENT_MIN_DUR_MS))
         end = turn_end_ms if turn_end_ms is not None else (
             events[-1].end_ms if events else 0.0)
-        return cls(coalesce_events(events, cls.WORD_EVENT_MIN_DUR_MS), end)
+        return cls(events, end)
 
     # ---- query ----
 
@@ -379,8 +452,8 @@ class VisemeTrack:
         OPEN_A) physically takes longer than a small shape change, and a
         window shorter than ~2 frames at 30 fps reads as a mouth pop."""
         travel = abs(JAW[b.viseme] - JAW[a.viseme])
-        return min(80.0, max(0.4 * min(a.dur, max(1.0, b.dur)),
-                             60.0 * travel))
+        return min(90.0, max(0.4 * min(a.dur, max(1.0, b.dur)),
+                             70.0 * travel))
 
     def _find(self, t_ms: float) -> int:
         """Binary search for the last event starting <= t_ms."""
@@ -396,7 +469,7 @@ class VisemeTrack:
         return idx
 
     def _envelope(self, t_ms: float) -> float:
-        """Attack 15ms into speech, release 110ms into silence."""
+        """Attack 15ms into speech, snappy release 30ms at speech end / 45ms in pauses."""
         idx = self._find(t_ms)
         if idx < 0:
             return 0.0
@@ -409,9 +482,11 @@ class VisemeTrack:
                 j -= 1
                 seg_start = self.events[j].start_ms
             return clamp01((t_ms - seg_start) / ATTACK_MS)
-        # In a gap after ev
+        # In a gap after ev: quick closure so mouth does not linger open after words end
         since = t_ms - ev.end_ms
-        return clamp01(1.0 - since / RELEASE_MS)
+        is_terminal = (idx == len(self.events) - 1)
+        rel_ms = 30.0 if is_terminal else 45.0
+        return clamp01(1.0 - since / rel_ms)
 
     def weights_at(self, t_ms: float,
                    energy: float = 1.0) -> Tuple[Dict[V, float], float]:
@@ -425,6 +500,8 @@ class VisemeTrack:
         weights: Dict[V, float] = {}
 
         if t_ms > cur.end_ms:                              # inside a gap
+            if t_ms - cur.end_ms > 25.0:
+                return {V.REST: 1.0}, 0.0
             env = self._envelope(t_ms)
             if env <= 0.01:
                 return {V.REST: 1.0}, 0.0
@@ -552,7 +629,7 @@ class AmplitudeEnvelope:
     """One-pole attack/release follower. Legacy compatibility."""
 
     def __init__(self, fps: int, attack_ms: float = 15.0,
-                 release_ms: float = 110.0):
+                 release_ms: float = 60.0):
         dt = 1000.0 / max(1, fps)
         self._ka = 1.0 - math.exp(-dt / max(1e-3, attack_ms))
         self._kr = 1.0 - math.exp(-dt / max(1e-3, release_ms))

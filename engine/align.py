@@ -39,9 +39,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from engine.visemes import V, VisemeEvent, g2p
+from engine.visemes import V, VisemeEvent, g2p, VOWELS, _PHONEME_TABLE
 
-ALIGN_SCHEMA_VERSION = 1
+ALIGN_SCHEMA_VERSION = 3
 
 # Tier-2 search window for the global A/V offset (D8)
 MAX_OFFSET_MS = 250.0
@@ -55,60 +55,43 @@ SILENCE_DB = -46.0
 # ═══════════════════════════════════════════
 # Phoneme inventory — digraph-aware romanized-Hindi/Hinglish → viseme
 # ═══════════════════════════════════════════
-# Ordered longest-first so "chh" wins over "ch" wins over "c".
-# This is the D6 fix: `ch` is not DENTAL-c + RETROFLEX-h; it is one
-# post-alveolar affricate. Aspirates (kh/gh/bh/ph/th/dh/jh) are ONE
-# phoneme whose viseme is the base stop's — the /h/ release does not
-# reshape the lips.
-
-_PHONEME_TABLE: Tuple[Tuple[str, V], ...] = (
-    # 3-char clusters
-    ("chh", V.DENTAL), ("ksh", V.DENTAL), ("shr", V.DENTAL),
-    # aspirated stops → base articulator
-    ("bh", V.BILABIAL), ("ph", V.LABIODENTAL),   # ph = /f/ in Hindi loanwords
-    ("kh", V.RETROFLEX), ("gh", V.RETROFLEX),
-    ("th", V.DENTAL), ("dh", V.DENTAL),
-    ("jh", V.DENTAL), ("ch", V.DENTAL),
-    ("sh", V.DENTAL), ("zh", V.DENTAL),
-    # long vowels (romanized doubles)
-    ("aa", V.OPEN_A), ("ee", V.CLOSED_I), ("ii", V.CLOSED_I),
-    ("oo", V.ROUNDED_TENSE), ("uu", V.ROUNDED_TENSE),
-    ("ai", V.MID_E), ("au", V.ROUNDED_LAX), ("ou", V.ROUNDED_LAX),
-    ("ei", V.MID_E), ("oi", V.ROUNDED_LAX),
-    # single consonants
-    ("m", V.BILABIAL), ("b", V.BILABIAL), ("p", V.BILABIAL),
-    ("f", V.LABIODENTAL), ("v", V.LABIODENTAL), ("w", V.LABIODENTAL),
-    ("t", V.DENTAL), ("d", V.DENTAL), ("n", V.DENTAL), ("s", V.DENTAL),
-    ("z", V.DENTAL), ("l", V.DENTAL), ("j", V.DENTAL), ("c", V.DENTAL),
-    ("k", V.RETROFLEX), ("g", V.RETROFLEX), ("q", V.RETROFLEX),
-    ("x", V.RETROFLEX), ("r", V.RETROFLEX),
-    # /h/ alone: glottal — jaw follows the NEXT vowel; approximate with
-    # a light open, never RETROFLEX (the old bug)
-    ("h", V.OPEN_A),
-    # single vowels
-    ("a", V.OPEN_A), ("e", V.MID_E), ("i", V.CLOSED_I), ("y", V.CLOSED_I),
-    ("u", V.ROUNDED_TENSE), ("o", V.ROUNDED_LAX),
-)
+# Shared with engine/visemes._PHONEME_TABLE so Tier 1/2/3 and G2P
+# never diverge on articulatory shape assignments.
 
 
 def phonemize(token: str) -> List[Tuple[str, V]]:
     """Split a romanized token into (grapheme-cluster, viseme) pairs,
-    longest-match-first. Gemination ("kk") collapses to one closure."""
+    longest-match-first. Gemination ("kk") collapses to one closure.
+    Silent word-final 'e' is dropped when a preceding vowel exists."""
     t = token.lower()
     out: List[Tuple[str, V]] = []
     i = 0
     while i < len(t):
+        matched = False
         for graph, vis in _PHONEME_TABLE:
             if t.startswith(graph, i):
-                # gemination: identical cluster repeated → single phoneme
                 j = i + len(graph)
-                while t.startswith(graph, j):
-                    j += len(graph)
+                # gemination: identical cluster repeated → single phoneme
+                if vis not in VOWELS:
+                    while t.startswith(graph, j):
+                        j += len(graph)
+                # Check for silent word-final 'e'
+                if graph == "e":
+                    is_word_end = True
+                    for k in range(j, len(t)):
+                        if t[k].isalnum():
+                            is_word_end = False
+                            break
+                    if is_word_end and any(v in VOWELS for _, v in out):
+                        i = j
+                        matched = True
+                        break
                 if not out or out[-1][1] != vis or out[-1][0] != graph:
                     out.append((t[i:j], vis))
                 i = j
+                matched = True
                 break
-        else:
+        if not matched:
             i += 1  # unmappable char (punctuation, digit handled upstream)
     return out
 
@@ -346,21 +329,33 @@ def dtw_warp(pred: np.ndarray, audio: np.ndarray,
 
 def apply_calibration(turn: AlignedTurn, wav_path: str) -> AlignedTurn:
     """Tier 2, applied over ANY tier's output: global offset + drift +
-    silence gating. Mutates a copy of the turn's word/phone times."""
+    silence gating. Mutates a copy of the turn's word/phone times.
+    
+    When turn.tier == 3 (acoustic speech segmentation), word boundaries
+    are already anchored to the physical waveform bursts by segment_acoustic_speech.
+    In that case, synthetic jaw cross-correlation (which peaks on secondary
+    vowels) must NOT apply false negative shifts that pull words into silence."""
     x, sr = load_wav_mono(wav_path)
     duration_ms = len(x) / sr * 1000.0
-    aud_env = onset_envelope(x, sr)
-    events = turn.viseme_events()
-    pred_env = predicted_jaw_envelope(events, duration_ms)
 
-    off = global_offset_ms(pred_env, aud_env)
-    warp = dtw_warp(
-        predicted_jaw_envelope(
-            [VisemeEvent(e.viseme, e.start_ms + off, e.end_ms + off)
-             for e in events], duration_ms),
-        aud_env)
+    if turn.tier == 3:
+        off = 0.0
+        warp = None
+    else:
+        aud_env = onset_envelope(x, sr)
+        events = turn.viseme_events()
+        pred_env = predicted_jaw_envelope(events, duration_ms)
+        off = global_offset_ms(pred_env, aud_env)
+        warp = dtw_warp(
+            predicted_jaw_envelope(
+                [VisemeEvent(e.viseme, e.start_ms + off, e.end_ms + off)
+                 for e in events], duration_ms),
+            aud_env)
 
     db = rms_db_track(x, sr)
+    p15 = float(np.percentile(db, 15))
+    p90 = float(np.percentile(db, 90))
+    calib_silence_thresh = max(-50.0, min(-28.0, p15 + 0.25 * max(5.0, p90 - p15)))
 
     def remap(t_ms: float) -> float:
         t = t_ms + off
@@ -373,23 +368,30 @@ def apply_calibration(turn: AlignedTurn, wav_path: str) -> AlignedTurn:
 
     def is_silent(t_ms: float) -> bool:
         idx = min(len(db) - 1, max(0, int(t_ms / ENV_HOP_MS)))
-        return db[idx] < SILENCE_DB
+        return db[idx] < calib_silence_thresh
 
     words: List[AlignedWord] = []
     for w in turn.words:
+        w_start = remap(w.start_ms)
+        w_end = remap(w.end_ms)
+        min_w_dur = min(max(50.0, w.end_ms - w.start_ms), 100.0)
+        if w_end < w_start + min_w_dur:
+            w_end = min(duration_ms, w_start + min_w_dur)
+
         phones = []
         for g, vis, s, e in w.phones:
             s2, e2 = remap(s), remap(e)
             if e2 - s2 < 1.0:
                 e2 = min(duration_ms, s2 + 1.0)
-            # Silence gate: no open-vowel viseme on a silent frame
-            if V(vis) in (V.OPEN_A, V.MID_E, V.ROUNDED_LAX) \
+            # Silence gate: any vowel or open viseme on a silent frame clamps to REST
+            if V(vis) in (V.OPEN_A, V.MID_E, V.CLOSED_I,
+                          V.ROUNDED_TENSE, V.ROUNDED_LAX) \
                     and is_silent((s2 + e2) / 2.0):
                 vis = V.REST.value
             phones.append((g, vis, s2, e2))
         words.append(AlignedWord(text=w.text,
-                                 start_ms=remap(w.start_ms),
-                                 end_ms=remap(w.end_ms),
+                                 start_ms=w_start,
+                                 end_ms=w_end,
                                  score=w.score, phones=phones))
     return AlignedTurn(tier=turn.tier, audio_hash=turn.audio_hash,
                        duration_ms=duration_ms, offset_ms=off,
@@ -486,62 +488,232 @@ def _mms_model(bundle, device):
 # Tier 3 — even-split fallback (retained, offset-corrected)
 # ═══════════════════════════════════════════
 
+def segment_acoustic_speech(x: np.ndarray, sr: int,
+                            hop_ms: float = ENV_HOP_MS,
+                            min_pause_ms: float = 70.0,
+                            min_speech_ms: float = 40.0) -> Tuple[List[Tuple[float, float]], float]:
+    """Segment audio into discrete voiced speech bursts separated by acoustic silence pauses.
+    Returns (speech_chunks, adaptive_silence_thresh_db)."""
+    db = rms_db_track(x, sr, hop_ms=hop_ms)
+    n_frames = len(db)
+    total_dur_ms = len(x) / sr * 1000.0
+    if n_frames == 0:
+        return [(0.0, total_dur_ms)], -45.0
+    
+    p15 = float(np.percentile(db, 15))
+    p90 = float(np.percentile(db, 90))
+    thresh = max(-50.0, min(-28.0, p15 + 0.25 * max(5.0, p90 - p15)))
+    is_voiced = db > thresh
+    
+    runs: List[Tuple[bool, int, int]] = []
+    cur_v = is_voiced[0]
+    cur_s = 0
+    for i, v in enumerate(is_voiced):
+        if v != cur_v:
+            runs.append((cur_v, cur_s, i))
+            cur_v = v
+            cur_s = i
+    runs.append((cur_v, cur_s, n_frames))
+    
+    # Merge short silence dips (< min_pause_ms) into neighbouring speech
+    pause_frames = int(math.ceil(min_pause_ms / hop_ms))
+    merged: List[Tuple[bool, int, int]] = []
+    for is_v, s, e in runs:
+        dur = e - s
+        if not is_v and dur < pause_frames and merged:
+            prev_v, prev_s, _ = merged[-1]
+            if prev_v:
+                merged[-1] = (True, prev_s, e)
+                continue
+        merged.append((is_v, s, e))
+        
+    final_runs: List[Tuple[bool, int, int]] = []
+    for is_v, s, e in merged:
+        if final_runs and final_runs[-1][0] == is_v:
+            final_runs[-1] = (is_v, final_runs[-1][1], e)
+        else:
+            final_runs.append((is_v, s, e))
+            
+    speech_frames = int(math.ceil(min_speech_ms / hop_ms))
+    speech_chunks: List[Tuple[float, float]] = []
+    for is_v, s, e in final_runs:
+        if is_v and (e - s) >= speech_frames:
+            speech_chunks.append((s * hop_ms, min(total_dur_ms, e * hop_ms)))
+            
+    if not speech_chunks:
+        speech_chunks = [(0.0, total_dur_ms)]
+        
+    return speech_chunks, thresh
+
+
+def partition_words_to_chunks(word_units: List[float], chunk_durs: List[float]) -> List[List[int]]:
+    """Partition N words into K chunks by minimizing duration discrepancy via DP."""
+    N = len(word_units)
+    K = len(chunk_durs)
+    if N == 0:
+        return [[] for _ in range(K)]
+    if K <= 1:
+        return [list(range(N))]
+    if K >= N:
+        # More chunks than words: each word gets its own chunk, extra chunks are empty
+        return [[i] if i < N else [] for i in range(K)]
+        
+    tot_units = sum(word_units)
+    tot_dur = sum(chunk_durs)
+    rho = tot_dur / max(1e-3, tot_units)
+    
+    INF = 1e18
+    dp = [[INF] * (N + 1) for _ in range(K + 1)]
+    parent = [[0] * (N + 1) for _ in range(K + 1)]
+    dp[0][0] = 0.0
+    
+    for k in range(1, K + 1):
+        D_k = chunk_durs[k - 1]
+        for i in range(k, N - (K - k) + 1):
+            for j in range(k - 1, i):
+                sub_u = sum(word_units[j:i])
+                expected_dur = rho * sub_u
+                diff = D_k - expected_dur
+                cost = (diff * diff) / max(1.0, D_k)
+                if dp[k - 1][j] + cost < dp[k][i]:
+                    dp[k][i] = dp[k - 1][j] + cost
+                    parent[k][i] = j
+                    
+    curr_i = N
+    result: List[List[int]] = []
+    for k in range(K, 0, -1):
+        prev_i = parent[k][curr_i]
+        result.append(list(range(prev_i, curr_i)))
+        curr_i = prev_i
+    result.reverse()
+    return result
+
+
 def _align_even_split(wav_path: str, text: str) -> AlignedTurn:
-    """Last resort: distribute phoneme clusters evenly across the
-    non-silent span of the wav. Tier-2 calibration still applies."""
+    """Acoustic-phrase & silence-aware alignment fallback.
+    Detects acoustic speech bursts separated by natural pauses (>= 70ms),
+    and partitions words into these bursts using DP. Words NEVER span
+    across acoustic silence pauses, preserving pause resting."""
     x, sr = load_wav_mono(wav_path)
     duration_ms = len(x) / sr * 1000.0
-    db = rms_db_track(x, sr)
-    voiced = np.where(db > SILENCE_DB)[0]
-    if len(voiced):
-        speech_a = float(voiced[0]) * ENV_HOP_MS
-        speech_b = float(voiced[-1]) * ENV_HOP_MS
-    else:
-        speech_a, speech_b = 0.0, duration_ms
+    chunks, thresh = segment_acoustic_speech(x, sr)
 
     roman = romanize(text)
     tokens = [t for t in re.findall(r"[\w']+", roman) if t]
     all_clusters: List[Tuple[str, List[Tuple[str, V]]]] = []
-    total_units = 0
+    word_units: List[float] = []
+
     for tok in tokens:
         cl = phonemize(tok)
         if not cl:
-            # Class-level G2P: one cluster per viseme. This previously
-            # kept only `[:1]`, which collapsed the whole word to a
-            # single mouth shape held for its entire duration. Since
-            # `romanize()` returns Devanagari unchanged when uroman is
-            # absent — and `phonemize()` then matches nothing — this is
-            # the *live* path for Hindi, not a rare corner.
             cl = [(tok, v) for v in g2p(tok)] or [(tok, V.REST)]
         all_clusters.append((tok, cl))
-        total_units += sum(1.6 if v in
-                           (V.OPEN_A, V.MID_E, V.CLOSED_I,
-                            V.ROUNDED_TENSE, V.ROUNDED_LAX) else 1.0
-                           for _, v in cl) + 0.6  # word gap share
+        wu = sum(1.6 if v in
+                 (V.OPEN_A, V.MID_E, V.CLOSED_I,
+                  V.ROUNDED_TENSE, V.ROUNDED_LAX) else 1.0
+                 for _, v in cl) + 0.5
+        word_units.append(wu)
 
-    span = max(1.0, speech_b - speech_a)
-    unit_ms = span / max(1.0, total_units)
-    t = speech_a
+    if not all_clusters:
+        return AlignedTurn(tier=3, audio_hash="", duration_ms=duration_ms,
+                           offset_ms=0.0, confidence=1.0, words=[])
+
+    chunk_durs = [max(1.0, e - s) for s, e in chunks]
+    partitions = partition_words_to_chunks(word_units, chunk_durs)
+
     words: List[AlignedWord] = []
-    for tok, cl in all_clusters:
-        w_start = t
-        phones: List[Tuple[str, str, float, float]] = []
-        for g, vis in cl:
-            w_ = 1.6 if vis in (V.OPEN_A, V.MID_E, V.CLOSED_I,
-                                V.ROUNDED_TENSE, V.ROUNDED_LAX) else 1.0
-            d = unit_ms * w_
-            phones.append((g, vis.value, t, t + d))
-            t += d
-        words.append(AlignedWord(text=tok, start_ms=w_start, end_ms=t,
-                                 score=1.0, phones=phones))
-        t += unit_ms * 0.6
+    for k, word_indices in enumerate(partitions):
+        if not word_indices or k >= len(chunks):
+            continue
+        c_start, c_end = chunks[k]
+        c_dur = max(1.0, c_end - c_start)
+        c_units = sum(word_units[idx] for idx in word_indices)
+        unit_ms = c_dur / max(1.0, c_units)
+        t = c_start
+        for idx in word_indices:
+            tok, cl = all_clusters[idx]
+            w_start = t
+            phones: List[Tuple[str, str, float, float]] = []
+            for g, vis in cl:
+                w_ = 1.6 if vis in (V.OPEN_A, V.MID_E, V.CLOSED_I,
+                                    V.ROUNDED_TENSE, V.ROUNDED_LAX) else 1.0
+                d = unit_ms * w_
+                phones.append((g, vis.value, t, t + d))
+                t += d
+            words.append(AlignedWord(text=tok, start_ms=w_start, end_ms=t,
+                                     score=1.0, phones=phones))
+            t += unit_ms * 0.5
+
     return AlignedTurn(tier=3, audio_hash="", duration_ms=duration_ms,
                        offset_ms=0.0, confidence=1.0, words=words)
 
 
 # ═══════════════════════════════════════════
+# Monotonicity enforcement (fixes scrambled CTC word order)
+# ═══════════════════════════════════════════
+
+def _enforce_monotonicity(words: List[AlignedWord],
+                          text: str) -> List[AlignedWord]:
+    """Ensure aligned words follow script order.
+
+    CTC forced alignment can produce non-monotonic assignments when the
+    acoustic model's emission probabilities are weak for certain tokens
+    (numerals like '90', English words in Hindi audio, etc.).  The time
+    *slots* (start_ms, end_ms pairs) are acoustically valid — they mark
+    real speech events — but the word-to-slot mapping can be wrong.
+
+    Fix: sort the time slots by onset, keep the script-order tokens, and
+    re-pair them.  If inversion rate exceeds 40 %, the alignment is
+    considered unreliable and None is returned (caller falls back to
+    even-split).
+    """
+    if len(words) < 2:
+        return words
+
+    # Count inversions: how many adjacent pairs are out of onset order?
+    inversions = sum(
+        1 for i in range(len(words) - 1)
+        if words[i].start_ms > words[i + 1].start_ms
+    )
+    inv_rate = inversions / max(1, len(words) - 1)
+
+    if inversions == 0:
+        return words  # already monotonic
+
+    if inv_rate > 0.40:
+        # Alignment is catastrophically wrong — signal caller to fall back
+        print(f"  [Align] Monotonicity: {inversions}/{len(words)-1} inversions "
+              f"({inv_rate:.0%}) — falling back to even-split")
+        return []  # empty signals fallback
+
+    print(f"  [Align] Monotonicity: correcting {inversions} inversion(s) "
+          f"in {len(words)} words")
+
+    # Sort time slots by onset (the acoustic truth)
+    slots = sorted(
+        [(w.start_ms, w.end_ms, w.score, w.phones) for w in words],
+        key=lambda s: s[0]
+    )
+
+    # Re-pair: i-th script token gets i-th time slot
+    fixed: List[AlignedWord] = []
+    for i, w in enumerate(words):
+        s_start, s_end, s_score, s_phones = slots[i]
+        fixed.append(AlignedWord(
+            text=w.text,
+            start_ms=s_start,
+            end_ms=s_end,
+            score=s_score,
+            phones=s_phones,
+        ))
+
+    return fixed
+
+
+# ═══════════════════════════════════════════
 # Public entry — cached, tiered, calibrated
 # ═══════════════════════════════════════════
+
 
 def align_turn(wav_path: str, text: str,
                cache_dir: Optional[str] = None) -> AlignedTurn:
@@ -561,6 +733,14 @@ def align_turn(wav_path: str, text: str,
                 return AlignedTurn.from_dict(json.load(f))
 
     turn = _align_mms_fa(wav_path, text)
+    if turn is not None and turn.tier == 1:
+        # Enforce monotonic word order — CTC can scramble tokens
+        fixed = _enforce_monotonicity(turn.words, text)
+        if not fixed:
+            # Catastrophic inversion rate — fall back to even-split
+            turn = _align_even_split(wav_path, text)
+        else:
+            turn.words = fixed
     if turn is None:
         turn = _align_even_split(wav_path, text)
     turn.audio_hash = ah

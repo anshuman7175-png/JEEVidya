@@ -58,7 +58,11 @@ def _worker_render(payload: Dict[str, Any]) -> Tuple[str, str]:
         _COMPOSITORS.clear()            # one compositor per process
         _COMPOSITORS[comp_key] = comp
 
+    from pipeline.director import AutoDirector
     timeline = Timeline(payload["turn_data"], fps=settings.FPS)
+    scene_meta = payload.get("scene_meta", {})
+    timeline.scene_meta = scene_meta
+    timeline.directed_timeline = AutoDirector().direct_scene(payload["turn_data"], scene_meta=scene_meta)
     out = os.path.join(settings.TEMP_DIR,
                        f"seg_{payload['index']:03d}_w{os.getpid()}.mp4")
     with StreamEncoder(out, comp.width, comp.height, settings.FPS) as enc:

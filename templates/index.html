@@ -3,589 +3,2308 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gudiya & Chintu — Animated Shorts Factory</title>
+    <title>JEEVidya Studio — Animated Shorts & Custom Audio Workshop</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
-            --bg: #0a0a1e;
-            --bg-card: #12122a;
-            --bg-card-hover: #1a1a3a;
-            --primary: #00D4FF;
-            --secondary: #FFD700;
-            --accent: #FF3366;
-            --success: #00E676;
-            --text: #e0e0f0;
-            --text-dim: #8888aa;
-            --border: #2a2a4a;
-            --radius: 12px;
-            --shadow: 0 4px 24px rgba(0,0,0,0.4);
+            --bg: #070714;
+            --bg-surface: #0e0e24;
+            --bg-card: rgba(18, 18, 42, 0.85);
+            --bg-card-hover: rgba(26, 26, 58, 0.95);
+            --bg-dock: rgba(12, 12, 30, 0.9);
+            --primary: #00e5ff;
+            --primary-glow: rgba(0, 229, 255, 0.35);
+            --secondary: #ffd700;
+            --secondary-glow: rgba(255, 215, 0, 0.35);
+            --accent: #ff2a70;
+            --accent-glow: rgba(255, 42, 112, 0.35);
+            --success: #00e676;
+            --success-glow: rgba(0, 230, 118, 0.3);
+            --text: #f0f3ff;
+            --text-muted: #8c93b3;
+            --border: rgba(255, 255, 255, 0.08);
+            --border-highlight: rgba(0, 229, 255, 0.3);
+            --radius-lg: 16px;
+            --radius-md: 10px;
+            --radius-sm: 6px;
+            --shadow-subtle: 0 8px 32px rgba(0, 0, 0, 0.5);
+            --shadow-glow: 0 0 24px rgba(0, 229, 255, 0.2);
         }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background: var(--bg);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: radial-gradient(circle at 50% 0%, #161638 0%, #070714 65%);
             color: var(--text);
             min-height: 100vh;
-            line-height: 1.6;
+            line-height: 1.5;
+            overflow-x: hidden;
         }
 
-        /* Header */
-        .header {
-            background: linear-gradient(135deg, #0d0d2b 0%, #1a0a2e 100%);
+        /* Top Navigation Bar */
+        .navbar {
+            background: var(--bg-dock);
+            backdrop-filter: blur(20px);
             border-bottom: 1px solid var(--border);
-            padding: 20px 32px;
+            padding: 14px 28px;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
         }
-        .header h1 {
-            font-size: 24px;
-            font-weight: 800;
-            background: linear-gradient(90deg, var(--primary), var(--secondary));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .header .subtitle {
-            font-size: 13px;
-            color: var(--text-dim);
-            margin-top: 2px;
-        }
-
-        /* Main Layout */
-        .main {
-            display: grid;
-            grid-template-columns: 1fr 380px;
-            gap: 24px;
-            padding: 24px 32px;
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        /* Cards */
-        .card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 20px;
-        }
-        .card-title {
-            font-size: 16px;
-            font-weight: 700;
-            margin-bottom: 16px;
+        .brand {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 14px;
         }
-        .card-title .icon { font-size: 20px; }
-
-        /* Dialogue Editor */
-        .meta-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-        .meta-row input {
-            width: 100%;
-            padding: 10px 14px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text);
-            font-family: inherit;
-            font-size: 14px;
-            transition: border-color 0.2s;
-        }
-        .meta-row input:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-
-        /* Turn Rows */
-        .turns-container {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            max-height: 58vh;
-            overflow-y: auto;
-            padding-right: 4px;
-        }
-        .turns-container::-webkit-scrollbar { width: 6px; }
-        .turns-container::-webkit-scrollbar-track { background: transparent; }
-        .turns-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-        .turn-row {
-            display: grid;
-            grid-template-columns: 40px 110px 1fr 110px 36px;
-            gap: 8px;
-            align-items: center;
-            padding: 10px 12px;
-            background: var(--bg);
-            border-radius: 8px;
-            border: 1px solid transparent;
-            transition: border-color 0.2s, background 0.2s;
-        }
-        .turn-row:hover { border-color: var(--border); background: var(--bg-card-hover); }
-        .turn-row.girl { border-left: 3px solid var(--accent); }
-        .turn-row.boy { border-left: 3px solid var(--primary); }
-        .turn-row.explanation { border-left: 3px solid var(--secondary); }
-
-        .turn-num {
-            font-size: 12px;
-            font-weight: 700;
-            color: var(--text-dim);
-            text-align: center;
-        }
-
-        .turn-row select {
-            padding: 6px 8px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text);
-            font-family: inherit;
-            font-size: 13px;
-            cursor: pointer;
-        }
-        .turn-row select:focus { outline: none; border-color: var(--primary); }
-
-        .turn-row input[type="text"] {
-            width: 100%;
-            padding: 8px 10px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text);
-            font-family: inherit;
-            font-size: 13px;
-        }
-        .turn-row input[type="text"]:focus { outline: none; border-color: var(--primary); }
-
-        .btn-remove {
-            width: 28px;
-            height: 28px;
-            border: none;
-            background: transparent;
-            color: var(--text-dim);
-            cursor: pointer;
-            border-radius: 6px;
-            font-size: 16px;
+        .brand-logo {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
+            font-family: 'Outfit', sans-serif;
+            font-size: 22px;
+            font-weight: 800;
+            color: #050512;
+            box-shadow: var(--shadow-glow);
+        }
+        .brand-text h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            background: linear-gradient(90deg, #ffffff, var(--primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .brand-text p {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* Layout Grid */
+        .workspace {
+            display: grid;
+            grid-template-columns: 1fr 420px;
+            gap: 28px;
+            padding: 24px 32px 60px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        @media (max-width: 1100px) {
+            .workspace {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Common Card Style */
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 22px;
+            box-shadow: var(--shadow-subtle);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .card:hover {
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 18px;
+        }
+        .card-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 17px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .card-title .icon {
+            font-size: 20px;
+            color: var(--primary);
+        }
+
+        /* Script Info Header */
+        .script-meta-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 14px;
+            margin-bottom: 22px;
+        }
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .form-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .input-text {
+            background: rgba(10, 10, 26, 0.8);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 11px 15px;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 14px;
             transition: all 0.2s;
         }
-        .btn-remove:hover { background: rgba(255,51,102,0.15); color: var(--accent); }
+        .input-text:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 12px var(--primary-glow);
+        }
 
-        .add-turn-row {
+        /* Toolbar */
+        .turns-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+        .btn-group {
             display: flex;
             gap: 8px;
-            margin-top: 12px;
+            flex-wrap: wrap;
         }
-        .btn-add {
-            flex: 1;
-            padding: 10px;
-            border: 1px dashed var(--border);
-            background: transparent;
-            color: var(--text-dim);
-            border-radius: 8px;
-            cursor: pointer;
-            font-family: inherit;
+
+        /* Buttons */
+        .btn {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 600;
+            padding: 9px 15px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
             transition: all 0.2s;
         }
-        .btn-add:hover { border-color: var(--primary); color: var(--primary); background: rgba(0,212,255,0.05); }
+        .btn:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-1px);
+        }
+        .btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+        .btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), #0099ff);
+            color: #040817;
+            border: none;
+            box-shadow: 0 4px 16px var(--primary-glow);
+        }
+        .btn-primary:hover:not(:disabled) {
+            background: linear-gradient(135deg, #33ebff, #1ab2ff);
+            box-shadow: 0 6px 22px var(--primary-glow);
+        }
+        .btn-girl {
+            background: rgba(255, 42, 112, 0.15);
+            border-color: rgba(255, 42, 112, 0.35);
+            color: #ff85aa;
+        }
+        .btn-girl:hover:not(:disabled) {
+            background: rgba(255, 42, 112, 0.25);
+            border-color: var(--accent);
+            color: #fff;
+        }
+        .btn-boy {
+            background: rgba(255, 215, 0, 0.15);
+            border-color: rgba(255, 215, 0, 0.35);
+            color: #ffe066;
+        }
+        .btn-boy:hover:not(:disabled) {
+            background: rgba(255, 215, 0, 0.25);
+            border-color: var(--secondary);
+            color: #fff;
+        }
+        .btn-explain {
+            background: rgba(0, 230, 118, 0.15);
+            border-color: rgba(0, 230, 118, 0.35);
+            color: #69f0ae;
+        }
+        .btn-explain:hover:not(:disabled) {
+            background: rgba(0, 230, 118, 0.25);
+            border-color: var(--success);
+            color: #fff;
+        }
+        .btn-danger {
+            background: rgba(255, 60, 60, 0.15);
+            color: #ff6b6b;
+            border-color: rgba(255, 60, 60, 0.3);
+        }
+        .btn-danger:hover:not(:disabled) {
+            background: rgba(255, 60, 60, 0.3);
+            color: #fff;
+        }
 
-        /* Right Panel */
-        .right-panel {
+        /* Turn Row Cards */
+        .turns-list {
             display: flex;
             flex-direction: column;
             gap: 16px;
         }
+        .turn-card {
+            background: rgba(14, 14, 34, 0.9);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 16px 18px;
+            transition: all 0.25s;
+            position: relative;
+        }
+        .turn-card:hover {
+            border-color: rgba(255, 255, 255, 0.18);
+        }
+        .turn-card.girl {
+            border-left: 4px solid var(--accent);
+        }
+        .turn-card.boy {
+            border-left: 4px solid var(--secondary);
+        }
+        .turn-card.explanation {
+            border-left: 4px solid var(--success);
+        }
 
-        /* Characters Preview */
-        .characters-preview {
+        .turn-top-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .turn-badge-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .turn-index {
+            font-family: 'Outfit', sans-serif;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.05);
+            padding: 3px 8px;
+            border-radius: 6px;
+        }
+        .speaker-select {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 600;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        .speaker-select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .turn-controls-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .select-pill {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-size: 12px;
+            padding: 4px 8px;
+            cursor: pointer;
+        }
+        .select-pill:focus {
+            outline: none;
+            color: var(--text);
+            border-color: var(--primary);
+        }
+
+        /* Dialogue Text Area */
+        .turn-textarea {
+            width: 100%;
+            background: rgba(6, 6, 18, 0.7);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 10px 14px;
+            color: #ffffff;
+            font-family: inherit;
+            font-size: 14px;
+            line-height: 1.5;
+            resize: vertical;
+            min-height: 54px;
+            margin-bottom: 12px;
+            transition: border-color 0.2s;
+        }
+        .turn-textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        /* Audio Dock Per Turn */
+        .audio-dock {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px dashed rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            padding: 10px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            transition: all 0.2s;
+        }
+        .audio-dock.has-audio {
+            border-style: solid;
+            border-color: rgba(0, 230, 118, 0.4);
+            background: rgba(0, 230, 118, 0.05);
+        }
+        .audio-dock.is-recording {
+            border-style: solid;
+            border-color: var(--accent);
+            background: rgba(255, 42, 112, 0.1);
+            animation: pulse-recording 1.5s infinite;
+        }
+        @keyframes pulse-recording {
+            0% { box-shadow: 0 0 0 0 rgba(255, 42, 112, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 42, 112, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 42, 112, 0); }
+        }
+
+        .audio-status-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-muted);
+        }
+        .status-dot.active {
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
+        }
+        .status-dot.recording {
+            background: var(--accent);
+            box-shadow: 0 0 8px var(--accent);
+        }
+        .audio-player-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .audio-player-wrapper audio {
+            height: 32px;
+            max-width: 220px;
+        }
+        .audio-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* Sidebar Dock */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            position: sticky;
+            top: 86px;
+            height: fit-content;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 12px;
+            margin-bottom: 20px;
         }
-        .char-card {
+        .stat-box {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 12px;
             text-align: center;
-            padding: 16px 8px;
-            background: var(--bg);
-            border-radius: 8px;
         }
-        .char-card img {
-            width: 80px;
-            height: 80px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border);
-            margin-bottom: 8px;
-        }
-        .char-card .name { font-weight: 600; font-size: 14px; }
-        .char-card .role { font-size: 11px; color: var(--text-dim); }
-        .char-gudiya img { border-color: var(--accent); }
-        .char-chintu img { border-color: var(--primary); }
-
-        /* Generate Button */
-        .btn-generate {
-            width: 100%;
-            padding: 14px 20px;
-            background: linear-gradient(135deg, var(--primary), #0088cc);
-            border: none;
-            border-radius: 10px;
-            color: white;
-            font-family: inherit;
-            font-size: 16px;
+        .stat-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 22px;
             font-weight: 700;
-            cursor: pointer;
-            transition: all 0.3s;
-            box-shadow: 0 4px 15px rgba(0,212,255,0.3);
+            color: var(--primary);
         }
-        .btn-generate:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,212,255,0.4); }
-        .btn-generate:active { transform: translateY(0); }
-        .btn-generate:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 2px;
+        }
 
-        /* Progress */
-        .progress-section { display: none; }
-        .progress-section.active { display: block; }
-        .progress-bar-track {
+        /* Render Controls */
+        .render-toggles {
+            background: rgba(8, 8, 20, 0.7);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 12px 14px;
+            margin-bottom: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13px;
+        }
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(255, 255, 255, 0.15);
+            transition: .3s;
+            border-radius: 24px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+        input:checked + .toggle-slider {
+            background-color: var(--primary);
+        }
+        input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
+
+        .btn-render-full {
+            width: 100%;
+            padding: 14px;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            justify-content: center;
+        }
+
+        /* Progress Card */
+        .progress-card {
+            display: none;
+            background: rgba(14, 14, 36, 0.95);
+            border: 1px solid var(--border-highlight);
+            box-shadow: 0 0 20px rgba(0, 229, 255, 0.15);
+        }
+        .progress-card.active {
+            display: block;
+        }
+        .progress-bar-container {
             width: 100%;
             height: 8px;
-            background: var(--bg);
+            background: rgba(255, 255, 255, 0.08);
             border-radius: 4px;
             overflow: hidden;
-            margin: 12px 0;
+            margin: 12px 0 8px;
         }
         .progress-bar-fill {
             height: 100%;
+            width: 0%;
             background: linear-gradient(90deg, var(--primary), var(--secondary));
             border-radius: 4px;
-            transition: width 0.5s ease;
-            width: 0%;
+            transition: width 0.3s ease;
         }
-        .progress-stage {
-            font-size: 13px;
-            color: var(--text-dim);
-            margin-bottom: 4px;
-        }
-        .progress-msg {
+        .progress-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
             font-size: 12px;
-            color: var(--text-dim);
-            font-family: 'Menlo', monospace;
+            color: var(--text-muted);
         }
-
-        /* Video Preview */
-        .video-preview { display: none; }
-        .video-preview.active { display: block; }
-        .video-preview video {
-            width: 100%;
-            border-radius: 8px;
-            border: 1px solid var(--border);
-            margin-top: 8px;
-        }
-
-        /* JSON Preview Toggle */
-        .json-toggle {
-            padding: 8px 12px;
-            background: transparent;
-            border: 1px solid var(--border);
+        .progress-log {
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--text);
+            margin-top: 10px;
+            padding: 8px 10px;
+            background: rgba(0, 0, 0, 0.4);
             border-radius: 6px;
-            color: var(--text-dim);
-            font-family: inherit;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Video Preview Area */
+        .video-card {
+            display: none;
+            overflow: hidden;
+        }
+        .video-card.active {
+            display: block;
+        }
+        .video-player-box {
+            position: relative;
+            width: 100%;
+            padding-top: 177.77%; /* 9:16 vertical ratio */
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 14px;
+        }
+        .video-player-box video {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover;
+        }
+
+        /* Hidden File Input */
+        .hidden-input { display: none; }
+
+        /* Modal Overlay for Raw JSON & Smart Importer */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(12px);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .modal.active { display: flex; }
+        .modal-content {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            width: 100%;
+            max-width: 760px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .modal-large {
+            max-width: 1100px;
+            max-height: 92vh;
+            overflow-y: auto;
+        }
+        .json-textarea {
+            width: 100%;
+            height: 380px;
+            background: #050512;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: #8be9fd;
+            font-family: 'Fira Code', monospace;
+            font-size: 13px;
+            padding: 12px;
+        }
+
+        /* Smart Importer UI */
+        .smart-importer-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            align-items: start;
+        }
+        @media (max-width: 900px) {
+            .smart-importer-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .importer-section {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .smart-textarea {
+            width: 100%;
+            height: 230px;
+            background: #060616;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            color: #f0f3ff;
+            font-family: 'Inter', -apple-system, sans-serif;
+            font-size: 13.5px;
+            line-height: 1.6;
+            padding: 14px;
+            resize: vertical;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .smart-textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 14px var(--primary-glow);
+        }
+
+        .importer-options-bar {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .importer-option-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13px;
+        }
+
+        /* Flow Visualizer */
+        .flow-banner {
+            background: rgba(0, 229, 255, 0.06);
+            border: 1px solid rgba(0, 229, 255, 0.25);
+            border-radius: var(--radius-md);
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .flow-pill-container {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .flow-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
             font-size: 12px;
-            cursor: pointer;
+            font-weight: 600;
+        }
+        .flow-pill.girl {
+            background: rgba(255, 42, 112, 0.2);
+            border: 1px solid rgba(255, 42, 112, 0.5);
+            color: #ff94b8;
+        }
+        .flow-pill.boy {
+            background: rgba(0, 229, 255, 0.18);
+            border: 1px solid rgba(0, 229, 255, 0.5);
+            color: #80f0ff;
+        }
+        .flow-pill.explanation {
+            background: rgba(255, 215, 0, 0.2);
+            border: 1px solid rgba(255, 215, 0, 0.5);
+            color: #ffe680;
+        }
+        .flow-arrow {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* Parsed Turns Preview List */
+        .parsed-preview-scroll {
+            max-height: 380px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding-right: 4px;
+        }
+        .parsed-turn-row {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
             transition: all 0.2s;
         }
-        .json-toggle:hover { border-color: var(--primary); color: var(--primary); }
-        .json-preview {
-            display: none;
-            margin-top: 12px;
+        .parsed-turn-row.girl { border-left: 3px solid var(--accent); }
+        .parsed-turn-row.boy { border-left: 3px solid var(--primary); }
+        .parsed-turn-row.explanation { border-left: 3px solid var(--secondary); }
+
+        .parsed-turn-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
         }
-        .json-preview.active { display: block; }
-        .json-preview textarea {
-            width: 100%;
-            height: 200px;
-            padding: 12px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--primary);
-            font-family: 'Menlo', monospace;
+        .continuity-badge {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-muted);
+            padding: 2px 6px;
+            border-radius: 4px;
             font-size: 11px;
-            resize: vertical;
+            font-weight: 500;
         }
 
-        /* Stats */
-        .stats-row {
+        /* Audio Slicer Box */
+        .audio-slicer-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px dashed rgba(255, 255, 255, 0.2);
+            border-radius: var(--radius-md);
+            padding: 14px;
             display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            font-size: 13px;
+            flex-direction: column;
+            gap: 10px;
         }
-        .stats-row .label { color: var(--text-dim); }
-        .stats-row .value { font-weight: 600; }
+        .audio-slicer-card.has-slices {
+            border-style: solid;
+            border-color: rgba(0, 230, 118, 0.4);
+            background: rgba(0, 230, 118, 0.04);
+        }
+        .btn-magic-import {
+            background: linear-gradient(135deg, #7928ca, #ff0080) !important;
+            border: none !important;
+            box-shadow: 0 0 16px rgba(255, 0, 128, 0.4) !important;
+            font-weight: 700 !important;
+        }
+        .btn-magic-import:hover {
+            box-shadow: 0 0 24px rgba(255, 0, 128, 0.6) !important;
+            transform: translateY(-1px);
+        }
     </style>
 </head>
 <body>
 
-<div class="header">
-    <div>
-        <h1>🎬 Gudiya & Chintu</h1>
-        <div class="subtitle">Animated Shorts Factory — Dialogue Editor</div>
-    </div>
-    <button class="json-toggle" onclick="toggleJSON()">{ } JSON</button>
-</div>
-
-<div class="main">
-    <!-- Left: Dialogue Editor -->
-    <div class="card">
-        <div class="card-title"><span class="icon">📝</span> Dialogue Script</div>
-
-        <div class="meta-row">
-            <input type="text" id="title" placeholder="Topic title (e.g. Escape Velocity kya hai?)" value="Escape Velocity kya hai?">
-            <input type="text" id="tags" placeholder="Tags (comma separated)" value="Physics, JEE, NEET">
-        </div>
-
-        <div class="turns-container" id="turns-container">
-            <!-- Turns are rendered by JS -->
-        </div>
-
-        <div class="add-turn-row">
-            <button class="btn-add" onclick="addTurn('girl')">+ Gudiya (Girl)</button>
-            <button class="btn-add" onclick="addTurn('boy')">+ Chintu (Boy)</button>
-            <button class="btn-add" onclick="addTurn('explanation')">+ Explanation</button>
-        </div>
-
-        <div class="json-preview" id="json-preview">
-            <textarea id="json-editor" readonly></textarea>
-        </div>
-    </div>
-
-    <!-- Right: Controls & Preview -->
-    <div class="right-panel">
-        <div class="card">
-            <div class="card-title"><span class="icon">👧🧒</span> Characters</div>
-            <div class="characters-preview">
-                <div class="char-card char-gudiya">
-                    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%23FF3366'/%3E%3Ctext x='50' y='60' text-anchor='middle' fill='white' font-size='40'%3E👧%3C/text%3E%3C/svg%3E" alt="Gudiya">
-                    <div class="name">Gudiya</div>
-                    <div class="role">The Curious Student</div>
-                </div>
-                <div class="char-card char-chintu">
-                    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%2300D4FF'/%3E%3Ctext x='50' y='60' text-anchor='middle' fill='white' font-size='40'%3E🧒%3C/text%3E%3C/svg%3E" alt="Chintu">
-                    <div class="name">Chintu</div>
-                    <div class="role">The Smart Explainer</div>
-                </div>
+    <!-- Header Navigation -->
+    <header class="navbar">
+        <div class="brand">
+            <div class="brand-logo">JV</div>
+            <div class="brand-text">
+                <h1>JEEVidya Studio</h1>
+                <p>Line-by-Line Custom MP3 & Animation Engine</p>
             </div>
         </div>
-
-        <div class="card">
-            <div class="card-title"><span class="icon">📊</span> Stats</div>
-            <div class="stats-row"><span class="label">Turns</span><span class="value" id="stat-turns">0</span></div>
-            <div class="stats-row"><span class="label">Est. Duration</span><span class="value" id="stat-duration">~0s</span></div>
-            <div class="stats-row"><span class="label">Words</span><span class="value" id="stat-words">0</span></div>
-        </div>
-
-        <div class="card">
-            <div class="card-title"><span class="icon">🚀</span> Generate</div>
-            <button class="btn-generate" id="btn-generate" onclick="startGeneration()">
-                Generate Video
+        <div class="nav-actions">
+            <button class="btn btn-magic-import" onclick="openSmartScriptModal()">
+                <span>🪄</span> Paste Whole Script
             </button>
+            <button class="btn" onclick="openJsonModal()">
+                <span>{ }</span> Inspect JSON
+            </button>
+            <button class="btn" onclick="exportScriptJson()">
+                <span>💾</span> Export Script
+            </button>
+            <button class="btn" id="btn-load-last" onclick="restoreLastSavedSession()" style="background: linear-gradient(135deg, rgba(99,102,241,0.25), rgba(168,85,247,0.25)); border: 1px solid var(--primary); color: #fff; font-weight: 600;" title="Instantly loads your last saved session and generated video">
+                <span>🔄</span> Restore Last Session
+            </button>
+            <label class="btn" style="margin:0;">
+                <span>📂</span> Import Script
+                <input type="file" id="import-json-input" class="hidden-input" accept=".json" onchange="importScriptJson(this)">
+            </label>
+        </div>
+    </header>
 
-            <div class="progress-section" id="progress-section">
-                <div class="progress-stage" id="progress-stage">Initializing...</div>
-                <div class="progress-bar-track">
-                    <div class="progress-bar-fill" id="progress-fill"></div>
+    <!-- Main Studio Workspace -->
+    <main class="workspace">
+
+        <!-- Left Column: Script & Turn Workshop -->
+        <section class="script-col">
+
+            <!-- Script Metadata Card -->
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="icon">✨</span> Video Details
+                    </div>
+                    <span class="badge" style="font-size: 12px; color: var(--primary);">YouTube Shorts (9:16)</span>
                 </div>
-                <div class="progress-msg" id="progress-msg"></div>
+                <!-- Season 2 Presets Dropdown Bar -->
+                <div class="preset-selector-bar" style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 10px 14px; background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(168, 85, 247, 0.08)); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: var(--radius-md);">
+                    <div style="display: flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 700; color: #a5b4fc; font-size: 13px;">
+                        <span>📚</span> Season 2 ("Newton ki Duniya"):
+                    </div>
+                    <select id="season2-preset-dropdown" class="input-text" style="flex: 1; padding: 7px 12px; font-size: 13px; background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer;" onchange="if(this.value) loadPresetScene(this.value)">
+                        <option value="">-- Choose from 20 Class 11 Physics Episodes --</option>
+                    </select>
+                    <button class="btn" style="padding: 7px 14px; font-size: 13px; font-weight: 600; background: var(--primary); color: #fff;" onclick="loadSelectedSeason2Dropdown()">
+                        <span>⚡</span> Load
+                    </button>
+                </div>
+
+                <div class="script-meta-grid">
+                    <div class="form-group">
+                        <label class="form-label" for="script-title">Topic Title</label>
+                        <input type="text" id="script-title" class="input-text" placeholder="e.g. Escape Velocity kya hai?" value="Escape Velocity kya hai?">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="script-tags">Tags (Comma-separated)</label>
+                        <input type="text" id="script-tags" class="input-text" placeholder="physics, jee, gravitation" value="physics, jee, gravitation">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Dialogue Turns Card -->
+            <div class="card">
+                <div class="turns-toolbar">
+                    <div class="card-title">
+                        <span class="icon">🎭</span> Character Dialogue & Line Audio
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn" style="background: linear-gradient(135deg, #FF6B8A 0%, #FF8E53 100%); color: #fff; font-weight: 600;" onclick="openVoiceStudioModal()">
+                            <span>🎙️</span> My Voice Studio
+                        </button>
+                        <button class="btn btn-magic-import" onclick="openSmartScriptModal()">
+                            <span>🪄</span> Paste Whole Script
+                        </button>
+                        <button class="btn btn-girl" onclick="addTurn('girl')">
+                            <span>+</span> 👧 Add Gudiya
+                        </button>
+                        <button class="btn btn-boy" onclick="addTurn('boy')">
+                            <span>+</span> 🧒 Add Chintu
+                        </button>
+                        <button class="btn btn-explain" onclick="addTurn('explanation')">
+                            <span>+</span> 📐 Add Board Slide
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Turns Container -->
+                <div id="turns-container" class="turns-list">
+                    <!-- Populated dynamically via JS -->
+                </div>
+            </div>
+
+        </section>
+
+        <!-- Right Column: Production Sidebar -->
+        <aside class="sidebar">
+
+            <!-- Production Dock Card -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="icon">⚡</span> Production Control
+                    </div>
+                </div>
+
+                <!-- Live Metrics -->
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div id="stat-total-turns" class="stat-value">0</div>
+                        <div class="stat-label">Total Turns</div>
+                    </div>
+                    <div class="stat-box">
+                        <div id="stat-custom-audio" class="stat-value">0</div>
+                        <div class="stat-label">Custom MP3s</div>
+                    </div>
+                    <div class="stat-box">
+                        <div id="stat-est-duration" class="stat-value">~0s</div>
+                        <div class="stat-label">Est. Duration</div>
+                    </div>
+                    <div class="stat-box">
+                        <div id="stat-word-count" class="stat-value">0</div>
+                        <div class="stat-label">Total Words</div>
+                    </div>
+                </div>
+
+                <!-- Voice Mode Deck -->
+                <div class="voice-mode-card" style="margin-top: 14px; padding: 12px; background: rgba(14, 22, 42, 0.7); border: 1px solid rgba(62, 224, 255, 0.25); border-radius: 12px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--primary); letter-spacing: 0.5px;">
+                            🎙️ Voice Engine
+                        </span>
+                        <span id="voice-mode-badge" style="background: rgba(0, 230, 118, 0.15); color: #00e676; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;">
+                            ElevenLabs (Bhola & Chutki)
+                        </span>
+                    </div>
+                    <div id="voice-status-summary" style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                        0 turns with your voice audio attached.
+                    </div>
+                    <div style="display: flex; gap: 6px;">
+                        <button type="button" class="btn" style="flex: 1; padding: 6px 8px; font-size: 11.5px; font-weight: 600;" onclick="openVoiceStudioModal()">
+                            <span>📁</span> Upload / Slice Voice Audio
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Render Config Toggles -->
+                <div class="render-toggles">
+                    <div class="toggle-row">
+                        <div>
+                            <strong>Full Production Render</strong>
+                            <div style="font-size:11px; color:var(--text-muted);">1080×1920 60fps (Full Video)</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-full-quality" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="toggle-row">
+                        <div>
+                            <strong>Force Rebuild Cache</strong>
+                            <div style="font-size:11px; color:var(--text-muted);">Re-synthesize all nodes</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-force">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Dedicated Render with My Voice Action Button -->
+                <button id="btn-render-my-voice" class="btn btn-render-voice" style="width: 100%; margin-top: 14px; padding: 13px; font-size: 14px; font-weight: 700; background: linear-gradient(135deg, #FF6B8A 0%, #FF8E53 100%); color: #fff; border: none; border-radius: 10px; cursor: pointer; box-shadow: 0 4px 18px rgba(255, 107, 138, 0.35); display: flex; align-items: center; justify-content: center; gap: 8px;" onclick="startGenerationWithMyVoice()">
+                    <span>🎙️</span> <span id="lbl-render-voice">Render Video With My Voice</span>
+                </button>
+
+                <!-- AI Render Secondary Button -->
+                <button id="btn-render" class="btn btn-primary btn-render-full" style="width: 100%; margin-top: 8px; font-size: 13px;" onclick="startGeneration()">
+                    <span>⚡</span> Render With ElevenLabs AI (Bhola & Chutki)
+                </button>
+            </div>
+
+            <!-- Real-time Progress Card -->
+            <div id="progress-card" class="card progress-card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="icon">⚙️</span> Building Animated Short
+                    </div>
+                    <span id="progress-percent-text" style="font-weight:700; color:var(--primary);">0%</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div id="progress-bar-fill" class="progress-bar-fill"></div>
+                </div>
+                <div class="progress-meta">
+                    <span id="progress-stage-badge" style="font-weight:600; text-transform:uppercase;">INIT</span>
+                    <span id="progress-status-timer">Streaming SSE</span>
+                </div>
+                <div id="progress-log-msg" class="progress-log">Starting build pipeline...</div>
+            </div>
+
+            <!-- Output Video Player Card -->
+            <div id="video-card" class="card video-card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="icon">▶️</span> Rendered Short
+                    </div>
+                    <a id="btn-download-video" href="#" download class="btn" style="padding:4px 10px; font-size:12px;">
+                        <span>⬇️</span> Download
+                    </a>
+                </div>
+                <div class="video-player-box">
+                    <video id="rendered-video-elem" controls playsinline></video>
+                </div>
+                <div style="font-size:12px; color:var(--text-muted); word-break:break-all;" id="video-file-meta">
+                    Output: ready
+                </div>
+            </div>
+
+        </aside>
+
+    </main>
+
+    <!-- Raw JSON Inspector Modal -->
+    <div id="json-modal" class="modal">
+        <div class="modal-content">
+            <div class="card-header" style="margin:0;">
+                <div class="card-title"><span>{ }</span> Dialogue Script JSON</div>
+                <button class="btn btn-danger" onclick="closeJsonModal()">✕ Close</button>
+            </div>
+            <textarea id="modal-json-text" class="json-textarea" readonly></textarea>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button class="btn" onclick="copyJsonToClipboard()">📋 Copy JSON</button>
+                <button class="btn btn-primary" onclick="closeJsonModal()">Done</button>
             </div>
         </div>
+    </div>
 
-        <div class="card video-preview" id="video-preview">
-            <div class="card-title"><span class="icon">🎥</span> Output</div>
-            <video id="output-video" controls></video>
+    <!-- Smart Script & Audio Importer Modal -->
+    <div id="smart-script-modal" class="modal">
+        <div class="modal-content modal-large">
+            <!-- Modal Header -->
+            <div class="card-header" style="margin:0; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
+                <div>
+                    <div class="card-title" style="font-size: 19px;">
+                        <span class="icon">🪄</span> Smart Script & Audio Auto-Segmenter
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                        Paste your entire script in one box. It detects Gudiya & Chintu dialogue, identifies how many lines are spoken consecutively, and can auto-slice full audio by pauses.
+                    </div>
+                </div>
+                <button class="btn btn-danger" onclick="closeSmartScriptModal()" style="padding: 4px 10px; font-size: 13px;">✕ Close</button>
+            </div>
+
+            <!-- Importer Workspace Grid -->
+            <div class="smart-importer-grid">
+                <!-- Left Column: Raw Script & Audio Upload -->
+                <div class="importer-section">
+                    <div style="display:flex; align-items:center; justify-content:space-between;">
+                        <span style="font-weight: 600; font-size: 13px; color: var(--text);">
+                            📝 Paste Whole Dialogue Script
+                        </span>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <select id="modal-s2-selector" class="input-text" style="padding: 3px 8px; font-size: 11px; max-width: 200px; height: 26px;" onchange="if(this.value) loadSeason2IntoModal(this.value)">
+                                <option value="">-- Load Season 2 Script --</option>
+                            </select>
+                            <button class="btn" style="padding: 3px 8px; font-size: 11px;" onclick="loadScriptExample('escape_velocity')">
+                                Escape Vel
+                            </button>
+                            <button class="btn" style="padding: 3px 8px; font-size: 11px;" onclick="loadScriptExample('gravity')">
+                                Gravity
+                            </button>
+                            <button class="btn" style="padding: 3px 8px; font-size: 11px;" onclick="clearSmartScriptInput()">
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Textarea -->
+                    <textarea id="smart-script-input" class="smart-textarea" placeholder="Paste your whole script here... Supported formats:
+Gudiya: Chintu, suno ek baat.
+Physics bohot interesting subject hai agar dhyan se samjho toh.
+Chintu: Sahi keh rahi hain aap Didi.
+[Slide: v_e = \sqrt{2GM/R}]
+Gudiya: [amazed] Aur yeh formula toh sabse aasan hai!
+
+Or raw alternating dialogue lines without character names!"></textarea>
+
+                    <!-- Options Bar -->
+                    <div class="importer-options-bar">
+                        <div class="importer-option-row">
+                            <span style="color: var(--text-muted);">Segmentation Mode:</span>
+                            <div style="display: flex; gap: 10px;">
+                                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12px;">
+                                    <input type="radio" name="script_group_mode" value="per_line" checked onchange="triggerSmartParse()">
+                                    <span>Per-Line Turns (Punchy Captions)</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12px;">
+                                    <input type="radio" name="script_group_mode" value="group_consecutive" onchange="triggerSmartParse()">
+                                    <span>Group Consecutive Lines</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="importer-option-row">
+                            <span style="color: var(--text-muted);">Default Starting Speaker:</span>
+                            <select id="smart-first-speaker" class="select-pill" onchange="triggerSmartParse()" style="padding: 3px 8px;">
+                                <option value="girl" selected>👧 Gudiya First</option>
+                                <option value="boy">🧒 Chintu First</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Optional Full Audio Auto-Slicer -->
+                    <div class="audio-slicer-card" id="audio-slicer-card">
+                        <div style="display:flex; align-items:center; justify-content:space-between;">
+                            <div style="font-weight: 600; font-size: 13px; display:flex; align-items:center; gap:6px;">
+                                <span>🎙️</span> Unified Audio Auto-Slicer <span style="font-size: 11px; color: var(--text-muted); font-weight: normal;">(Optional)</span>
+                            </div>
+                            <span id="slicer-status-badge" class="continuity-badge" style="color: var(--primary);">Full MP3 for dialogue</span>
+                        </div>
+                        <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4;">
+                            Have a single continuous audio recording of the entire dialogue? JEEVidya will detect silence pauses and slice it into matching turn audio!
+                        </p>
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <label class="btn" style="margin: 0; padding: 6px 12px; font-size: 12px;">
+                                <span>📁</span> Choose Full Dialogue MP3
+                                <input type="file" id="full-audio-file-input" accept="audio/*" class="hidden-input" onchange="onFullAudioFileSelected(this.files[0])">
+                            </label>
+                            <span id="full-audio-filename" style="font-size: 12px; color: var(--text-muted); max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">No file chosen</span>
+                            <button id="btn-split-audio" class="btn btn-primary" style="padding: 6px 12px; font-size: 12px;" onclick="executeFullAudioSplit()" disabled>
+                                <span>⚡</span> Auto-Split by Pauses
+                            </button>
+                        </div>
+                        <div id="split-results-container" style="display: none; margin-top: 6px; font-size: 12px; color: var(--success);">
+                            <!-- Populated on split success -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column: Live Speaker Flow & Parsed Turns Preview -->
+                <div class="importer-section">
+                    <!-- Flow Banner -->
+                    <div class="flow-banner">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <span style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--primary); letter-spacing: 0.5px;">
+                                🔄 Speaker Flow & Continuity
+                            </span>
+                            <span id="smart-turns-metrics" style="font-size: 11.5px; color: var(--text-muted);">0 turns • 0 words</span>
+                        </div>
+                        <div id="speaker-flow-container" class="flow-pill-container">
+                            <span style="font-size: 12px; color: var(--text-muted);">Type or paste script on the left to see speaker flow</span>
+                        </div>
+                    </div>
+
+                    <!-- Parsed Turn Cards Preview -->
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 4px;">
+                        <span style="font-size: 13px; font-weight: 600;">
+                            📋 Parsed Turns (<span id="parsed-turns-count">0</span>)
+                        </span>
+                        <span style="font-size: 11px; color: var(--text-muted);">Preview & edit before importing</span>
+                    </div>
+
+                    <div id="parsed-turns-preview-list" class="parsed-preview-scroll">
+                        <!-- Populated dynamically via JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Footer Actions -->
+            <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 6px;">
+                <button class="btn" onclick="closeSmartScriptModal()">Cancel</button>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-primary" onclick="applySmartScriptToStudio(false)" style="padding: 9px 18px; font-size: 13.5px;">
+                        <span>📥</span> Apply to Studio Cards
+                    </button>
+                    <button class="btn btn-magic-import" onclick="applySmartScriptToStudio(true)" style="padding: 9px 18px; font-size: 13.5px;">
+                        <span>🎬</span> Apply & Render Video Now
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
-</div>
 
-<script>
-// Default dialogue
-const defaultDialogue = {{ default_json | safe }};
+    <!-- Application Script -->
+    <script>
+        // Available Vocabularies
+        const EMOTIONS = [
+            'curious', 'explaining', 'amazed', 'enthusiastic',
+            'confident', 'neutral', 'dramatic', 'scared', 'celebrating'
+        ];
+        const SHOT_TYPES = [
+            'two_shot', 'medium', 'extreme_closeup', 'reaction_cut', 'reveal', 'fullscreen_explain'
+        ];
+        const BODY_POSES = [
+            { id: 'auto', label: '🎭 Auto Pose' },
+            { id: 'b', label: '👉 Point (b)' },
+            { id: 'c', label: '☝️ Inquisitive (c)' },
+            { id: 'e', label: '👐 Explain (e)' },
+            { id: 'g', label: '😲 Amazed / Recoil (g)' },
+            { id: 'o', label: '🎉 Excited Joy (o)' },
+            { id: 'p', label: '💪 Confident (p)' },
+            { id: 'a', label: '🤝 Nod / Agree (a)' },
+            { id: 'h', label: '🤔 Think / Chin (h)' },
+            { id: 'j', label: '💭 Tilt / Ponder (j)' },
+            { id: 'f', label: '🤦 Facepalm (f)' },
+            { id: 'd', label: '🧘 Calm / Listening (d)' },
+            { id: 'neutral', label: '🧍 Rest (neutral)' },
+        ];
 
-let turns = [];
+        // Global Script State
+        let turns = [];
+        let activeSceneMeta = {};
 
-// Initialize with default
-function init() {
-    turns = (defaultDialogue.turns || []).map((t, i) => ({...t, turn_id: i + 1}));
-    document.getElementById('title').value = defaultDialogue.title || '';
-    document.getElementById('tags').value = (defaultDialogue.tags || []).join(', ');
-    renderTurns();
-}
+        // Recording State
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let activeRecordingTurnId = null;
 
-const EMOTIONS = ['curious', 'enthusiastic', 'confident', 'amazed', 'thinking', 'happy', 'explaining', 'dramatic'];
-const SHOTS = ['extreme_closeup', 'two_shot', 'medium', 'fullscreen_explain', 'reaction_cut', 'reveal'];
-
-function renderTurns() {
-    const container = document.getElementById('turns-container');
-    container.innerHTML = '';
-
-    turns.forEach((turn, idx) => {
-        const div = document.createElement('div');
-        div.className = `turn-row ${turn.speaker}`;
-        div.innerHTML = `
-            <span class="turn-num">${idx + 1}</span>
-            <select onchange="updateTurn(${idx}, 'speaker', this.value); renderTurns()">
-                <option value="girl" ${turn.speaker === 'girl' ? 'selected' : ''}>👧 Gudiya</option>
-                <option value="boy" ${turn.speaker === 'boy' ? 'selected' : ''}>🧒 Chintu</option>
-                <option value="explanation" ${turn.speaker === 'explanation' ? 'selected' : ''}>📐 Explain</option>
-            </select>
-            <input type="text" value="${(turn.text || '').replace(/"/g, '&quot;')}"
-                   placeholder="${turn.speaker === 'explanation' ? 'Visual description...' : 'Dialogue in Hindi/Hinglish...'}"
-                   onchange="updateTurn(${idx}, 'text', this.value)">
-            <select onchange="updateTurn(${idx}, 'emotion', this.value)">
-                ${EMOTIONS.map(e => `<option value="${e}" ${turn.emotion === e ? 'selected' : ''}>${e}</option>`).join('')}
-            </select>
-            <button class="btn-remove" onclick="removeTurn(${idx})">✕</button>
-        `;
-        container.appendChild(div);
-    });
-
-    updateStats();
-    updateJSON();
-}
-
-function addTurn(speaker) {
-    turns.push({
-        turn_id: turns.length + 1,
-        speaker: speaker,
-        text: '',
-        emotion: speaker === 'girl' ? 'curious' : speaker === 'boy' ? 'enthusiastic' : 'neutral',
-        shot_type: speaker === 'explanation' ? 'fullscreen_explain' : 'two_shot',
-    });
-    if (speaker === 'explanation') {
-        turns[turns.length - 1].duration_seconds = 4.0;
-        turns[turns.length - 1].visual_elements = [];
-        turns[turns.length - 1].pause_after = 1.0;
-    }
-    renderTurns();
-    // Scroll to bottom
-    const container = document.getElementById('turns-container');
-    container.scrollTop = container.scrollHeight;
-}
-
-function removeTurn(idx) {
-    turns.splice(idx, 1);
-    turns.forEach((t, i) => t.turn_id = i + 1);
-    renderTurns();
-}
-
-function updateTurn(idx, field, value) {
-    turns[idx][field] = value;
-    updateStats();
-    updateJSON();
-}
-
-function updateStats() {
-    const numTurns = turns.length;
-    const words = turns.reduce((sum, t) => sum + (t.text || '').split(/\s+/).filter(w => w).length, 0);
-    // Rough estimate: ~3 words/sec for Hindi speech + pauses
-    const estDuration = Math.round(words / 3 + numTurns * 1.5);
-
-    document.getElementById('stat-turns').textContent = numTurns;
-    document.getElementById('stat-duration').textContent = `~${estDuration}s`;
-    document.getElementById('stat-words').textContent = words;
-}
-
-function buildDialogueJSON() {
-    return {
-        title: document.getElementById('title').value,
-        description: '',
-        tags: document.getElementById('tags').value.split(',').map(t => t.trim()).filter(t => t),
-        turns: turns.map((t, i) => ({...t, turn_id: i + 1})),
-    };
-}
-
-function updateJSON() {
-    const json = buildDialogueJSON();
-    document.getElementById('json-editor').value = JSON.stringify(json, null, 2);
-}
-
-function toggleJSON() {
-    document.getElementById('json-preview').classList.toggle('active');
-    updateJSON();
-}
-
-// Generation
-function startGeneration() {
-    const btn = document.getElementById('btn-generate');
-    const progressSection = document.getElementById('progress-section');
-    const videoPreview = document.getElementById('video-preview');
-
-    btn.disabled = true;
-    progressSection.classList.add('active');
-    videoPreview.classList.remove('active');
-
-    const dialogue = buildDialogueJSON();
-
-    // Start generation
-    fetch('/generate', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(dialogue),
-    })
-    .then(r => r.json())
-    .then(data => {
-        if (data.error) {
-            alert('Error: ' + data.error);
-            btn.disabled = false;
-            return;
-        }
-        // Start polling SSE for progress
-        pollProgress();
-    })
-    .catch(err => {
-        alert('Request failed: ' + err);
-        btn.disabled = false;
-    });
-}
-
-function pollProgress() {
-    const evtSource = new EventSource('/status');
-    evtSource.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        document.getElementById('progress-stage').textContent = data.stage;
-        document.getElementById('progress-fill').style.width = data.percent + '%';
-        document.getElementById('progress-msg').textContent = data.message;
-
-        if (data.stage === 'DONE') {
-            evtSource.close();
-            document.getElementById('btn-generate').disabled = false;
-            // Show video preview
-            if (data.output_filename) {
-                const videoEl = document.getElementById('output-video');
-                videoEl.src = '/output/' + data.output_filename;
-                document.getElementById('video-preview').classList.add('active');
+        // Default Seed Dialogue
+        const DEFAULT_TURNS = [
+            {
+                turn_id: 1,
+                speaker: "girl",
+                text: "Chintu, agar hum kisi ball ko bohot tezi se upar phenkein, toh kya woh kabhi wapas nahi aayegi?",
+                emotion: "curious",
+                pose: "auto",
+                shot_type: "two_shot",
+                custom_audio: null,
+                audio_url: null,
+                audio_duration: null
+            },
+            {
+                turn_id: 2,
+                speaker: "boy",
+                text: "Haan Didi! Agar uski speed 11.2 km per second ho, toh woh dharti ki gravity todkar space mein chali jayegi!",
+                emotion: "enthusiastic",
+                pose: "auto",
+                shot_type: "two_shot",
+                custom_audio: null,
+                audio_url: null,
+                audio_duration: null
+            },
+            {
+                turn_id: 3,
+                speaker: "girl",
+                text: "Arre waah! Isi ko Escape Velocity kehte hain na?",
+                emotion: "amazed",
+                pose: "auto",
+                shot_type: "two_shot",
+                custom_audio: null,
+                audio_url: null,
+                audio_duration: null
             }
-        } else if (data.stage === 'ERROR') {
-            evtSource.close();
-            document.getElementById('btn-generate').disabled = false;
-            alert('Generation failed: ' + data.message);
-        }
-    };
-    evtSource.onerror = () => {
-        evtSource.close();
-        document.getElementById('btn-generate').disabled = false;
-    };
-}
+        ];
 
-// Init on load
-init();
-</script>
+        // Initialize Workspace
+        window.addEventListener('DOMContentLoaded', () => {
+            turns = JSON.parse(JSON.stringify(DEFAULT_TURNS));
+            renderTurns();
+            initSeason2Presets();
+            restoreLastSavedSession(true);
+        });
+
+        // Render Turns UI
+        function renderTurns() {
+            const container = document.getElementById('turns-container');
+            container.innerHTML = '';
+
+            turns.forEach((turn, idx) => {
+                const card = document.createElement('div');
+                card.className = `turn-card ${turn.speaker}`;
+                card.id = `turn-card-${idx}`;
+
+                card.innerHTML = `
+                    <div class="turn-top-row">
+                        <div class="turn-badge-group">
+                            <span class="turn-index">#${idx + 1}</span>
+                            <select class="speaker-select" onchange="changeSpeaker(${idx}, this.value)">
+                                <option value="girl" ${turn.speaker === 'girl' ? 'selected' : ''}>👧 Gudiya</option>
+                                <option value="boy" ${turn.speaker === 'boy' ? 'selected' : ''}>🧒 Chintu</option>
+                                <option value="explanation" ${turn.speaker === 'explanation' ? 'selected' : ''}>📐 Blackboard</option>
+                            </select>
+                        </div>
+                        <div class="turn-controls-row">
+                            ${turn.speaker !== 'explanation' ? `
+                            <select class="select-pill" onchange="updateTurnField(${idx}, 'pose', this.value)" title="Choose explicit Body Pose">
+                                ${BODY_POSES.map(p => `<option value="${p.id}" ${(turn.pose || 'auto') === p.id ? 'selected' : ''}>${p.label}</option>`).join('')}
+                            </select>
+                            ` : ''}
+                            <select class="select-pill" onchange="updateTurnField(${idx}, 'emotion', this.value)" title="Choose Emotion & Energy">
+                                ${EMOTIONS.map(em => `<option value="${em}" ${turn.emotion === em ? 'selected' : ''}>${em}</option>`).join('')}
+                            </select>
+                            <select class="select-pill" onchange="updateTurnField(${idx}, 'shot_type', this.value)">
+                                ${SHOT_TYPES.map(sh => `<option value="${sh}" ${turn.shot_type === sh ? 'selected' : ''}>${sh}</option>`).join('')}
+                            </select>
+                            <button class="btn btn-danger" style="padding:4px 8px; font-size:11px;" onclick="removeTurn(${idx})" title="Delete Turn">✕</button>
+                        </div>
+                    </div>
+
+                    <!-- Line Text -->
+                    <textarea class="turn-textarea"
+                              placeholder="${turn.speaker === 'explanation' ? 'Board visual description...' : 'Write dialogue line in Hindi or Hinglish...'}"
+                              oninput="updateTurnField(${idx}, 'text', this.value)">${turn.text || ''}</textarea>
+
+                    <!-- Line Audio Dock -->
+                    ${turn.speaker !== 'explanation' ? `
+                    <div class="audio-dock ${turn.custom_audio ? 'has-audio' : ''}" id="audio-dock-${idx}">
+                        <div class="audio-status-info">
+                            <span class="status-dot ${turn.custom_audio ? 'active' : ''}" id="audio-dot-${idx}"></span>
+                            <span id="audio-label-${idx}" style="font-weight:600; color:${turn.custom_audio ? 'var(--success)' : 'var(--text-muted)'};">
+                                ${turn.custom_audio ? `🎙️ Your Voice (${turn.audio_duration || 'attached'})` : (turn.speaker === 'girl' ? '⚡ ElevenLabs (Chutki)' : '⚡ ElevenLabs (Bhola)')}
+                            </span>
+                        </div>
+
+                        <div class="audio-player-wrapper">
+                            ${turn.audio_url ? `
+                                <audio controls src="${turn.audio_url}" style="height:30px;"></audio>
+                            ` : ''}
+                        </div>
+
+                        <div class="audio-actions">
+                            <label class="btn" style="padding:5px 10px; font-size:12px; margin:0;" title="Upload MP3 file">
+                                <span>📁</span> Upload MP3
+                                <input type="file" accept="audio/*" class="hidden-input" onchange="handleFileUpload(${idx}, this.files[0])">
+                            </label>
+                            <button class="btn" id="btn-record-${idx}" style="padding:5px 10px; font-size:12px;" onclick="toggleRecordLine(${idx})">
+                                <span>🎙️</span> Record
+                            </button>
+                            ${turn.custom_audio ? `
+                                <button class="btn btn-danger" style="padding:5px 8px; font-size:11px;" onclick="clearCustomAudio(${idx})" title="Revert to AI TTS">
+                                    Revert to TTS
+                                </button>
+                            ` : ''}
+                        </div>
+                    </div>
+                    ` : `
+                    <div style="font-size:12px; color:var(--text-muted); padding:4px 0;">
+                        📐 Slides display formulas and diagrams; speech is paused for slide duration.
+                    </div>
+                    `}
+                `;
+
+                container.appendChild(card);
+            });
+
+            updateStats();
+        }
+
+        // State Update Helpers
+        function updateTurnField(idx, field, value) {
+            turns[idx][field] = value;
+            updateStats();
+        }
+
+        function changeSpeaker(idx, newSpeaker) {
+            turns[idx].speaker = newSpeaker;
+            if (newSpeaker === 'explanation') {
+                turns[idx].shot_type = 'fullscreen_explain';
+                turns[idx].custom_audio = null;
+                turns[idx].audio_url = null;
+            } else if (turns[idx].shot_type === 'fullscreen_explain') {
+                turns[idx].shot_type = 'two_shot';
+            }
+            renderTurns();
+        }
+
+        function addTurn(speaker) {
+            turns.push({
+                turn_id: turns.length + 1,
+                speaker: speaker,
+                text: '',
+                emotion: speaker === 'girl' ? 'curious' : speaker === 'boy' ? 'enthusiastic' : 'neutral',
+                pose: 'auto',
+                shot_type: speaker === 'explanation' ? 'fullscreen_explain' : 'two_shot',
+                custom_audio: null,
+                audio_url: null,
+                audio_duration: null
+            });
+            renderTurns();
+            const container = document.getElementById('turns-container');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function removeTurn(idx) {
+            turns.splice(idx, 1);
+            turns.forEach((t, i) => t.turn_id = i + 1);
+            renderTurns();
+        }
+
+        function clearCustomAudio(idx) {
+            turns[idx].custom_audio = null;
+            turns[idx].audio_url = null;
+            turns[idx].audio_duration = null;
+            renderTurns();
+        }
+
+        // Live Metrics Calculation
+        function updateStats() {
+            const totalTurns = turns.length;
+            const customCount = turns.filter(t => t.custom_audio).length;
+            const words = turns.reduce((sum, t) => sum + (t.text || '').trim().split(/\s+/).filter(w => w).length, 0);
+            const estSeconds = Math.round(words / 2.8 + totalTurns * 1.0);
+
+            document.getElementById('stat-total-turns').textContent = totalTurns;
+            document.getElementById('stat-custom-audio').textContent = customCount;
+            document.getElementById('stat-word-count').textContent = words;
+            document.getElementById('stat-est-duration').textContent = `~${estSeconds}s`;
+
+            // Update Voice Mode Deck & Render Buttons
+            const vBadge = document.getElementById('voice-mode-badge');
+            const vSummary = document.getElementById('voice-status-summary');
+            const lblVoice = document.getElementById('lbl-render-voice');
+            if (vBadge && vSummary && lblVoice) {
+                if (customCount > 0) {
+                    vBadge.textContent = `My Voice Active (${customCount}/${totalTurns})`;
+                    vBadge.style.background = 'rgba(255, 107, 138, 0.2)';
+                    vBadge.style.color = '#FF6B8A';
+                    vSummary.textContent = `🎙️ ${customCount} of ${totalTurns} dialogue turns have your voice attached!`;
+                    lblVoice.textContent = `Render Video With My Voice (${customCount}/${totalTurns})`;
+                } else {
+                    vBadge.textContent = 'ElevenLabs (Bhola & Chutki)';
+                    vBadge.style.background = 'rgba(0, 230, 118, 0.15)';
+                    vBadge.style.color = '#00E676';
+                    vSummary.textContent = '0 turns with your voice. Click below to upload your voice audio.';
+                    lblVoice.textContent = 'Render Video With My Voice';
+                }
+            }
+        }
+
+        // File Upload Handler
+        function handleFileUpload(idx, file) {
+            if (!file) return;
+            const turnId = turns[idx].turn_id;
+            const formData = new FormData();
+            formData.append('audio', file);
+            formData.append('turn_id', turnId);
+
+            const dock = document.getElementById(`audio-dock-${idx}`);
+            if (dock) dock.style.opacity = '0.5';
+
+            fetch('/upload_audio', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    alert(`Upload failed: ${data.error}`);
+                    if (dock) dock.style.opacity = '1';
+                    return;
+                }
+                turns[idx].custom_audio = data.path;
+                turns[idx].audio_url = data.url;
+                turns[idx].audio_duration = `${data.duration_s}s`;
+                renderTurns();
+            })
+            .catch(err => {
+                alert(`Upload error: ${err}`);
+                if (dock) dock.style.opacity = '1';
+            });
+        }
+
+        // In-Browser Audio Recording via MediaRecorder API
+        async function toggleRecordLine(idx) {
+            const btn = document.getElementById(`btn-record-${idx}`);
+            const dock = document.getElementById(`audio-dock-${idx}`);
+
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                if (activeRecordingTurnId === idx) {
+                    mediaRecorder.stop();
+                    return;
+                } else {
+                    alert('Another line is currently recording. Please stop it first.');
+                    return;
+                }
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                recordedChunks = [];
+                activeRecordingTurnId = idx;
+
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.ondataavailable = e => {
+                    if (e.data.size > 0) recordedChunks.push(e.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    stream.getTracks().forEach(t => t.stop());
+                    dock.classList.remove('is-recording');
+                    btn.innerHTML = '<span>🎙️</span> Record';
+
+                    const audioBlob = new Blob(recordedChunks, { type: 'audio/webm' });
+                    const file = new File([audioBlob], `turn_${turns[idx].turn_id}_rec.webm`, { type: 'audio/webm' });
+                    handleFileUpload(idx, file);
+                    activeRecordingTurnId = null;
+                };
+
+                mediaRecorder.start();
+                dock.classList.add('is-recording');
+                btn.innerHTML = '<span>⏹️</span> Stop';
+            } catch (err) {
+                alert(`Microphone access error: ${err.message}`);
+            }
+        }
+
+        // Dialogue Payload Construction
+        function buildDialoguePayload() {
+            const baseMeta = (activeSceneMeta && typeof activeSceneMeta === 'object') ? activeSceneMeta : {};
+            return Object.assign({}, baseMeta, {
+                title: document.getElementById('script-title').value.trim() || baseMeta.title || 'Untitled Short',
+                description: baseMeta.description || '',
+                tags: document.getElementById('script-tags').value.split(',').map(t => t.trim()).filter(Boolean),
+                turns: turns.map((t, i) => {
+                    const cleanTurn = {
+                        turn_id: i + 1,
+                        speaker: t.speaker,
+                        text: t.text || '',
+                        emotion: t.emotion || 'neutral',
+                        pose: t.pose || 'auto',
+                        shot_type: t.shot_type || 'two_shot'
+                    };
+                    if (t.custom_audio) {
+                        cleanTurn.custom_audio = t.custom_audio;
+                    }
+                    if (t.speaker === 'explanation') {
+                        cleanTurn.duration_seconds = t.duration_seconds || 4.0;
+                        cleanTurn.pause_after = t.pause_after || 1.0;
+                    }
+                    return cleanTurn;
+                }),
+                preview: !document.getElementById('toggle-full-quality').checked,
+                force: document.getElementById('toggle-force').checked
+            });
+        }
+
+        // Start Video Generation
+        function startGeneration() {
+            const btn = document.getElementById('btn-render');
+            const progressCard = document.getElementById('progress-card');
+            const videoCard = document.getElementById('video-card');
+
+            btn.disabled = true;
+            btn.innerHTML = '<span>⏳</span> Processing...';
+            progressCard.classList.add('active');
+            videoCard.classList.remove('active');
+
+            const payload = buildDialoguePayload();
+
+            fetch('/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    alert(`Generation failed: ${data.error}`);
+                    resetRenderBtn();
+                    return;
+                }
+                pollProgress();
+            })
+            .catch(err => {
+                alert(`Network error: ${err}`);
+                resetRenderBtn();
+            });
+        }
+
+        // SSE Real-Time Status Stream
+        function pollProgress() {
+            const eventSource = new EventSource('/status');
+            const pFill = document.getElementById('progress-bar-fill');
+            const pPct = document.getElementById('progress-percent-text');
+            const pStage = document.getElementById('progress-stage-badge');
+            const pLog = document.getElementById('progress-log-msg');
+
+            eventSource.onmessage = e => {
+                const st = JSON.parse(e.data);
+                const pct = Math.round(st.percent || 0);
+
+                pFill.style.width = `${pct}%`;
+                pPct.textContent = `${pct}%`;
+                pStage.textContent = st.stage || 'WORKING';
+                pLog.textContent = st.message || 'Processing frames...';
+
+                if (st.stage === 'DONE') {
+                    eventSource.close();
+                    resetRenderBtn();
+                    onGenerationSuccess(st.output_filename);
+                } else if (st.stage === 'ERROR') {
+                    eventSource.close();
+                    resetRenderBtn();
+                    alert(`Render error: ${st.message}`);
+                }
+            };
+
+            eventSource.onerror = () => {
+                eventSource.close();
+                resetRenderBtn();
+            };
+        }
+
+        function resetRenderBtn() {
+            const btn = document.getElementById('btn-render');
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<span>⚡</span> Render With ElevenLabs AI (Bhola & Chutki)';
+            }
+            const btnVoice = document.getElementById('btn-render-my-voice');
+            if (btnVoice) {
+                btnVoice.disabled = false;
+                const customCount = turns.filter(t => t.custom_audio).length;
+                const lbl = document.getElementById('lbl-render-voice');
+                if (lbl) {
+                    lbl.textContent = customCount > 0 ? `Render Video With My Voice (${customCount}/${turns.length})` : 'Render Video With My Voice';
+                }
+            }
+        }
+
+        function openVoiceStudioModal() {
+            openSmartScriptModal();
+            setTimeout(() => {
+                const slicer = document.getElementById('audio-slicer-card');
+                if (slicer) {
+                    slicer.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    slicer.style.border = '2px solid #FF6B8A';
+                    slicer.style.boxShadow = '0 0 25px rgba(255, 107, 138, 0.4)';
+                    setTimeout(() => {
+                        slicer.style.border = '';
+                        slicer.style.boxShadow = '';
+                    }, 2500);
+                }
+            }, 180);
+        }
+
+        function startGenerationWithMyVoice() {
+            const customCount = turns.filter(t => t.custom_audio).length;
+            if (customCount === 0) {
+                if (confirm("No custom voice recordings attached yet! Would you like to upload your dialogue audio track now (auto-sliced to turns)?")) {
+                    openVoiceStudioModal();
+                }
+                return;
+            }
+            startGeneration();
+        }
+
+        function onGenerationSuccess(filename) {
+            const videoCard = document.getElementById('video-card');
+            const videoElem = document.getElementById('rendered-video-elem');
+            const downloadBtn = document.getElementById('btn-download-video');
+            const metaElem = document.getElementById('video-file-meta');
+
+            const videoUrl = `/output/${filename}?t=${Date.now()}`;
+            videoElem.src = videoUrl;
+            downloadBtn.href = videoUrl;
+            downloadBtn.setAttribute('download', filename);
+            metaElem.textContent = `File: ${filename}`;
+
+            videoCard.classList.add('active');
+            videoElem.play().catch(() => {});
+        }
+
+        // Script JSON Import / Export
+        function exportScriptJson() {
+            const payload = buildDialoguePayload();
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${(payload.title || 'script').toLowerCase().replace(/\s+/g, '_')}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function importScriptJson(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (data.title) document.getElementById('script-title').value = data.title;
+                    if (data.tags) document.getElementById('script-tags').value = data.tags.join(', ');
+                    if (Array.isArray(data.turns)) {
+                        turns = data.turns.map((t, i) => ({
+                            turn_id: i + 1,
+                            speaker: t.speaker || 'girl',
+                            text: t.text || '',
+                            emotion: t.emotion || 'neutral',
+                            shot_type: t.shot_type || 'two_shot',
+                            custom_audio: t.custom_audio || null,
+                            audio_url: t.custom_audio ? `/audio/${t.custom_audio.split('/').pop()}` : null,
+                            audio_duration: null
+                        }));
+                        renderTurns();
+                    }
+                } catch (err) {
+                    alert(`Invalid JSON format: ${err.message}`);
+                }
+            };
+            reader.readAsText(file);
+            input.value = '';
+        }
+
+        function restoreLastSavedSession(silent = false) {
+            const btn = document.getElementById('btn-load-last');
+            const originalHtml = btn ? btn.innerHTML : '';
+            if (btn && !silent) {
+                btn.innerHTML = '<span>⏳</span> Loading...';
+                btn.disabled = true;
+            }
+
+            fetch('/load_last_session')
+                .then(res => res.json())
+                .then(data => {
+                    if (btn && !silent) {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                    }
+                    if (!data.success || !data.dialogue) {
+                        if (!silent) alert(data.error || 'Failed to load saved session');
+                        return;
+                    }
+                    const d = data.dialogue;
+                    activeSceneMeta = Object.assign({}, d);
+                    if (d.title) {
+                        document.getElementById('script-title').value = d.title;
+                        const btnEl = document.getElementById('btn-load-last');
+                        if (btnEl) btnEl.innerHTML = `<span>🔄</span> Saved: ${d.title.length > 20 ? d.title.substring(0, 18) + '...' : d.title}`;
+                    }
+                    if (d.tags) document.getElementById('script-tags').value = Array.isArray(d.tags) ? d.tags.join(', ') : d.tags;
+                    if (Array.isArray(d.turns)) {
+                        turns = d.turns.map((t, i) => ({
+                            turn_id: i + 1,
+                            speaker: t.speaker || 'girl',
+                            text: t.text || '',
+                            emotion: t.emotion || 'neutral',
+                            shot_type: t.shot_type || 'two_shot',
+                            custom_audio: t.custom_audio || null,
+                            audio_url: t.audio_url || (t.custom_audio ? `/audio/${t.custom_audio.split('/').pop()}` : null),
+                            audio_duration: null
+                        }));
+                        renderTurns();
+                    }
+
+                    const vid = data.last_video || d.output_filename;
+                    if (vid) {
+                        onGenerationSuccess(vid);
+                    }
+                })
+                .catch(err => {
+                    if (btn && !silent) {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                        alert('Error loading last session: ' + err);
+                    }
+                });
+        }
+
+        // Modal Helpers
+        function openJsonModal() {
+            document.getElementById('modal-json-text').value = JSON.stringify(buildDialoguePayload(), null, 2);
+            document.getElementById('json-modal').classList.add('active');
+        }
+        function closeJsonModal() {
+            document.getElementById('json-modal').classList.remove('active');
+        }
+        function copyJsonToClipboard() {
+            const text = document.getElementById('modal-json-text').value;
+            navigator.clipboard.writeText(text).then(() => alert('Copied JSON to clipboard!'));
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // Season 2 Presets Management
+        // ══════════════════════════════════════════════════════════════
+        let season2PresetsCache = [];
+
+        function initSeason2Presets() {
+            fetch('/api/scenes')
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.success) return;
+                    const s2 = data.season2;
+                    if (s2 && Array.isArray(s2.episodes)) {
+                        season2PresetsCache = s2.episodes;
+                        populatePresetDropdowns(s2.episodes);
+                    }
+                })
+                .catch(err => console.warn('[Season2] Presets load failed:', err));
+        }
+
+        function populatePresetDropdowns(episodes) {
+            const mainSelect = document.getElementById('season2-preset-dropdown');
+            const modalSelect = document.getElementById('modal-s2-selector');
+
+            if (mainSelect) {
+                mainSelect.innerHTML = '<option value="">-- Choose from 20 Class 11 Physics Episodes --</option>';
+                episodes.forEach(ep => {
+                    const opt = document.createElement('option');
+                    opt.value = ep.id;
+                    const chp = ep.ncert_chapter ? ` (${ep.ncert_chapter.split('(')[0].trim()})` : '';
+                    opt.textContent = `Ep ${ep.episode}: ${ep.title}${chp}`;
+                    mainSelect.appendChild(opt);
+                });
+            }
+
+            if (modalSelect) {
+                modalSelect.innerHTML = '<option value="">-- Load Season 2 Script --</option>';
+                episodes.forEach(ep => {
+                    const opt = document.createElement('option');
+                    opt.value = ep.id;
+                    opt.textContent = `Ep ${ep.episode}: ${ep.title}`;
+                    modalSelect.appendChild(opt);
+                });
+            }
+        }
+
+        function loadPresetScene(sceneId) {
+            if (!sceneId) return;
+            fetch(`/api/scenes/${sceneId}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.success || !data.scene) {
+                        alert(data.error || 'Failed to load preset');
+                        return;
+                    }
+                    const sc = data.scene;
+                    activeSceneMeta = Object.assign({}, sc);
+                    if (sc.title) document.getElementById('script-title').value = sc.title;
+                    if (sc.tags) document.getElementById('script-tags').value = Array.isArray(sc.tags) ? sc.tags.join(', ') : sc.tags;
+                    if (Array.isArray(sc.turns)) {
+                        turns = sc.turns.map((t, i) => ({
+                            turn_id: i + 1,
+                            speaker: t.speaker || 'girl',
+                            text: t.text || '',
+                            emotion: t.emotion || 'neutral',
+                            shot_type: t.shot_type || 'two_shot',
+                            custom_audio: t.custom_audio || null,
+                            audio_url: t.audio_url || null,
+                            audio_duration: null
+                        }));
+                        renderTurns();
+                    }
+                    const btn = document.getElementById('btn-load-last');
+                    if (btn) btn.innerHTML = `<span>📚</span> Loaded: ${sc.title.substring(0, 18)}...`;
+                })
+                .catch(err => alert('Error loading preset: ' + err));
+        }
+
+        function loadSelectedSeason2Dropdown() {
+            const sel = document.getElementById('season2-preset-dropdown');
+            if (sel && sel.value) {
+                loadPresetScene(sel.value);
+            }
+        }
+
+        function loadSeason2IntoModal(sceneId) {
+            if (!sceneId) return;
+            fetch(`/api/scenes/${sceneId}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.success || !data.scene) return;
+                    const input = document.getElementById('smart-script-input');
+                    const sc = data.scene;
+                    input.value = sc.elevenlabs_script || sc.clean_script || sc.raw_script_paste || '';
+                    triggerSmartParse();
+                })
+                .catch(err => console.error(err));
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // Smart Script Importer & Full Audio Auto-Slicer Engine
+        // ══════════════════════════════════════════════════════════════
+
+        let smartParsedTurns = [];
+        let smartDebounceTimer = null;
+        let selectedFullAudioFile = null;
+
+        const SAMPLE_SCRIPTS = {
+            escape_velocity: `Gudiya: Chintu, suno ek baat.
+Physics bohot interesting subject hai agar dhyan se samjho toh.
+Chintu: Sahi keh rahi hain aap Didi.
+[Slide: v_e = \\sqrt{\\frac{2GM}{R}} \\quad (\\text{Escape Velocity})]
+Gudiya: [amazed] Aur yeh formula toh sabse aasan hai!
+Chintu: [enthusiastic] Haan, 11.2 km/s se phenko toh space mein chala jayega!`,
+
+            gravity: `Gudiya: Chintu, gravity har jagah barabar hoti hai kya?
+Nahi Didi, poles par thodi zyada aur equator par kam hoti hai!
+Gudiya: Aisa kyu hota hai?
+Chintu: [explaining] Kyunki earth ekdum sphere nahi hai, equator par bulge karti hai!
+Gudiya: [amazed] Waah Chintu, tumhara concept toh ekdum clear hai!`
+        };
+
+        function openSmartScriptModal() {
+            const modal = document.getElementById('smart-script-modal');
+            const input = document.getElementById('smart-script-input');
+
+            // Preload with existing script if input is currently blank
+            if (!input.value.trim() && turns && turns.length > 0) {
+                input.value = turns.map(t => {
+                    const spkName = t.speaker === 'girl' ? 'Gudiya' : t.speaker === 'boy' ? 'Chintu' : 'Slide';
+                    if (t.speaker === 'explanation') return `[Slide: ${t.text}]`;
+                    return `${spkName}: ${t.text}`;
+                }).join('\n');
+            }
+
+            modal.classList.add('active');
+            input.focus();
+            triggerSmartParse();
+
+            // Set up real-time input listener
+            input.oninput = () => {
+                clearTimeout(smartDebounceTimer);
+                smartDebounceTimer = setTimeout(triggerSmartParse, 150);
+            };
+        }
+
+        function closeSmartScriptModal() {
+            document.getElementById('smart-script-modal').classList.remove('active');
+        }
+
+        function loadScriptExample(key) {
+            const input = document.getElementById('smart-script-input');
+            if (SAMPLE_SCRIPTS[key]) {
+                input.value = SAMPLE_SCRIPTS[key];
+                triggerSmartParse();
+            }
+        }
+
+        function clearSmartScriptInput() {
+            const input = document.getElementById('smart-script-input');
+            input.value = '';
+            triggerSmartParse();
+        }
+
+        // Real-time client-side script parser + speaker continuity detector
+        function triggerSmartParse() {
+            const rawText = document.getElementById('smart-script-input').value;
+            const groupMode = document.querySelector('input[name="script_group_mode"]:checked')?.value || 'per_line';
+            const defaultFirstSpeaker = document.getElementById('smart-first-speaker').value || 'girl';
+
+            if (!rawText.trim()) {
+                smartParsedTurns = [];
+                renderSmartPreview([], []);
+                return;
+            }
+
+            // Normalization map & helper
+            const aliases = {
+                'gudiya': 'girl', 'gudya': 'girl', 'guddi': 'girl', 'girl': 'girl', 'didi': 'girl', 'sister': 'girl', 'g': 'girl',
+                'गुड़िया': 'girl', 'गुडिया': 'girl', 'दीदी': 'girl',
+                'chintu': 'boy', 'chintoo': 'boy', 'boy': 'boy', 'bhai': 'boy', 'brother': 'boy', 'c': 'boy',
+                'चिंटू': 'boy', 'चिन्टू': 'boy', 'भाई': 'boy',
+                'slide': 'explanation', 'board': 'explanation', 'blackboard': 'explanation', 'explain': 'explanation',
+                'speaker1': 'girl', 'speaker2': 'boy', 'speakera': 'girl', 'speakerb': 'boy',
+                'person1': 'girl', 'person2': 'boy', 'character1': 'girl', 'character2': 'boy',
+                'char1': 'girl', 'char2': 'boy', 's1': 'girl', 's2': 'boy'
+            };
+
+            function normalizeSpeaker(raw) {
+                if (!raw) return null;
+                const clean = raw.trim().toLowerCase().replace(/[^a-z0-9\u0900-\u097F]/g, '');
+                return aliases[clean] || null;
+            }
+
+            function isMetadataLine(line) {
+                const t = line.trim();
+                if (!t) return true;
+                if (/^(?:tags|hashtags|keywords|title|topic|description|subject|scene|setting|sfx|sound effect|bgm|music)\s*[:：\-–]/i.test(t)) return true;
+                if (/^(?:#[\w\-]+\s*)+$/.test(t)) return true;
+                if (/^\[(?:scene|setting|sfx|sound effect|bgm|music)[:\s].*\]$/i.test(t)) return true;
+                if (/^\((?:scene|setting|sfx|sound effect|bgm|music)[:\s].*\)$/i.test(t)) return true;
+                return false;
+            }
+
+            const rawLines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+            const lines = rawLines.filter(l => !isMetadataLine(l));
+            if (lines.length === 0) {
+                smartParsedTurns = [];
+                renderSmartPreview([], []);
+                return;
+            }
+
+            const speakerRegex = /^(?:(?:\d+[\.\)\-]\s*)*)?(?:\*{1,2}|\[)?([A-Za-z0-9\s\u0900-\u097F]{1,25}?)(?:\*{1,2}|\])?\s*(?:\([^\)]+\)|\[[^\]]+\])?\s*[:：\-–]\s*(.*)$/;
+
+            // Check if script has speaker labels
+            const hasLabels = lines.some(l => {
+                const m = speakerRegex.exec(l);
+                return m && normalizeSpeaker(m[1]);
+            });
+
+            const parsedEntries = [];
+            let currentSpk = defaultFirstSpeaker;
+
+            if (hasLabels) {
+                for (const line of lines) {
+                    const slideMatch = line.match(/^\[(?:slide|board|explanation)[:\s]+(.*)\]$/i) ||
+                                       line.match(/^\((?:slide|board|explanation)[:\s]+(.*)\)$/i);
+                    if (slideMatch) {
+                        parsedEntries.push({ speaker: 'explanation', text: slideMatch[1].trim() });
+                        continue;
+                    }
+                    const m = speakerRegex.exec(line);
+                    if (m && normalizeSpeaker(m[1])) {
+                        currentSpk = normalizeSpeaker(m[1]);
+                        const text = m[2].trim().replace(/^["'`*]+|["'`*]+$/g, '').trim();
+                        if (text) parsedEntries.push({ speaker: currentSpk, text });
+                    } else {
+                        const text = line.replace(/^["'`*]+|["'`*]+$/g, '').trim();
+                        if (text) parsedEntries.push({ speaker: currentSpk, text });
+                    }
+                }
+            } else {
+                let altSpk = defaultFirstSpeaker;
+                let otherSpk = defaultFirstSpeaker === 'girl' ? 'boy' : 'girl';
+                for (const line of lines) {
+                    const slideMatch = line.match(/^\[(?:slide|board|explanation)[:\s]+(.*)\]$/i);
+                    if (slideMatch) {
+                        parsedEntries.push({ speaker: 'explanation', text: slideMatch[1].trim() });
+                        continue;
+                    }
+                    const text = line.replace(/^["'`*]+|["'`*]+$/g, '').trim();
+                    if (text) {
+                        parsedEntries.push({ speaker: altSpk, text });
+                        const tmp = altSpk; altSpk = otherSpk; otherSpk = tmp;
+                    }
+                }
+            }
+
+            // Group into consecutive speaker blocks
+            const blocks = [];
+            let currentBlock = null;
+
+            for (const entry of parsedEntries) {
+                let text = entry.text;
+                let emotion = entry.speaker === 'girl' ? 'curious' : entry.speaker === 'boy' ? 'enthusiastic' : 'neutral';
+                let shotType = entry.speaker === 'explanation' ? 'fullscreen_explain' : 'two_shot';
+
+                // Extract [emotion] or (emotion)
+                const emMatch = text.match(/^[\[\(]([^\]\)]+)[\]\)]\s*(.*)$/);
+                if (emMatch) {
+                    const meta = emMatch[1].toLowerCase();
+                    text = emMatch[2].trim();
+                    if (EMOTIONS.includes(meta)) emotion = meta;
+                    if (SHOT_TYPES.includes(meta)) shotType = meta;
+                }
+
+                // Strip turn numbering, residual speaker prefixes, and quotes
+                text = text.replace(/^(?:turn\s*\d+[\.\:\-–\s]*|\d+[\.\)\-–\s]+)/i, '').trim();
+                text = text.replace(/^(?:\*{1,2}|\[)?(?:speaker\s*\d+|gudiya|chintu|girl|boy|didi|bhai|character\s*\d+|person\s*\d+|s[12])(?:\*{1,2}|\])?\s*[:：\-–]\s*/i, '').trim();
+                text = text.replace(/^["'`*]+|["'`*]+$/g, '').trim();
+
+                if (!currentBlock || currentBlock.speaker !== entry.speaker) {
+                    if (currentBlock) blocks.push(currentBlock);
+                    currentBlock = { speaker: entry.speaker, lines: [], emotions: [], shotTypes: [] };
+                }
+                currentBlock.lines.push(text);
+                currentBlock.emotions.push(emotion);
+                currentBlock.shotTypes.push(shotType);
+            }
+            if (currentBlock) blocks.push(currentBlock);
+
+            // Build output turns with continuity metadata
+            const turnsOut = [];
+            let turnId = 1;
+
+            if (groupMode === 'group_consecutive') {
+                for (let bIdx = 0; bIdx < blocks.length; bIdx++) {
+                    const b = blocks[bIdx];
+                    turnsOut.push({
+                        turn_id: turnId++,
+                        speaker: b.speaker,
+                        text: b.lines.join(' '),
+                        emotion: b.emotions[0] || 'neutral',
+                        shot_type: b.shotTypes[0] || 'two_shot',
+                        total_in_block: b.lines.length,
+                        line_in_block: 1,
+                        is_block_start: true,
+                        is_block_end: true,
+                        block_index: bIdx + 1,
+                        custom_audio: null,
+                        audio_url: null,
+                        audio_duration: null
+                    });
+                }
+            } else {
+                for (let bIdx = 0; bIdx < blocks.length; bIdx++) {
+                    const b = blocks[bIdx];
+                    const count = b.lines.length;
+                    for (let lIdx = 0; lIdx < count; lIdx++) {
+                        turnsOut.push({
+                            turn_id: turnId++,
+                            speaker: b.speaker,
+                            text: b.lines[lIdx],
+                            emotion: b.emotions[lIdx] || 'neutral',
+                            shot_type: b.shotTypes[lIdx] || 'two_shot',
+                            total_in_block: count,
+                            line_in_block: lIdx + 1,
+                            is_block_start: lIdx === 0,
+                            is_block_end: lIdx === count - 1,
+                            block_index: bIdx + 1,
+                            custom_audio: null,
+                            audio_url: null,
+                            audio_duration: null
+                        });
+                    }
+                }
+            }
+
+            smartParsedTurns = turnsOut;
+            renderSmartPreview(turnsOut, blocks);
+        }
+
+        // Render Flow Visualizer and Turn Preview Cards
+        function renderSmartPreview(turnsList, blocksList) {
+            const flowContainer = document.getElementById('speaker-flow-container');
+            const previewList = document.getElementById('parsed-turns-preview-list');
+            const metricsElem = document.getElementById('smart-turns-metrics');
+            const countElem = document.getElementById('parsed-turns-count');
+
+            countElem.textContent = turnsList.length;
+
+            if (turnsList.length === 0) {
+                flowContainer.innerHTML = '<span style="font-size:12px; color:var(--text-muted);">Paste script on the left to see speaker flow</span>';
+                previewList.innerHTML = '<div style="text-align:center; padding:30px; font-size:13px; color:var(--text-muted);">No turns parsed yet.</div>';
+                metricsElem.textContent = '0 turns • 0 words';
+                return;
+            }
+
+            // Word and duration stats
+            const words = turnsList.reduce((sum, t) => sum + (t.text || '').trim().split(/\s+/).filter(Boolean).length, 0);
+            const estSec = Math.round(words / 2.8 + turnsList.length * 1.0);
+            metricsElem.textContent = `${turnsList.length} turns • ${words} words • ~${estSec}s est`;
+
+            // Render Flow Banner (Pill ➔ Arrow ➔ Pill)
+            let flowHtml = '';
+            blocksList.forEach((b, idx) => {
+                const spkIcon = b.speaker === 'girl' ? '👧 Gudiya' : b.speaker === 'boy' ? '🧒 Chintu' : '📐 Slide';
+                const lineWord = b.lines.length === 1 ? '1 line' : `${b.lines.length} lines`;
+                flowHtml += `
+                    <span class="flow-pill ${b.speaker}">
+                        <strong>${spkIcon}</strong> (${lineWord})
+                    </span>
+                `;
+                if (idx < blocksList.length - 1) {
+                    flowHtml += `<span class="flow-arrow">➔</span>`;
+                }
+            });
+            flowContainer.innerHTML = flowHtml;
+
+            // Render Turn Preview Cards
+            let previewHtml = '';
+            turnsList.forEach((t, i) => {
+                const spkLabel = t.speaker === 'girl' ? '👧 Gudiya' : t.speaker === 'boy' ? '🧒 Chintu' : '📐 Slide';
+                const contText = t.total_in_block > 1 ? `Line ${t.line_in_block} of ${t.total_in_block}` : `Single line`;
+
+                previewHtml += `
+                    <div class="parsed-turn-row ${t.speaker}">
+                        <div class="parsed-turn-header">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <strong style="color:var(--text); font-size:12.5px;">#${t.turn_id} ${spkLabel}</strong>
+                                <span class="continuity-badge">${contText}</span>
+                            </div>
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <span class="continuity-badge" style="color:var(--primary);">${t.emotion}</span>
+                                ${t.audio_url ? `<span class="continuity-badge" style="color:var(--success);">🎵 ${t.audio_duration}</span>` : ''}
+                            </div>
+                        </div>
+                        <div style="font-size:13px; color:#e0e4f8; line-height:1.4;">
+                            ${escapeHtml(t.text)}
+                        </div>
+                        ${t.audio_url ? `
+                            <audio controls src="${t.audio_url}" style="height:26px; width:100%; margin-top:4px;"></audio>
+                        ` : ''}
+                    </div>
+                `;
+            });
+            previewList.innerHTML = previewHtml;
+        }
+
+        function escapeHtml(str) {
+            return (str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        // Full Audio File Selection & Splitter
+        function onFullAudioFileSelected(file) {
+            if (!file) return;
+            selectedFullAudioFile = file;
+            document.getElementById('full-audio-filename').textContent = file.name;
+            document.getElementById('btn-split-audio').disabled = false;
+        }
+
+        function executeFullAudioSplit() {
+            if (!selectedFullAudioFile) {
+                alert('Please select a full dialogue audio file first.');
+                return;
+            }
+            if (smartParsedTurns.length === 0) {
+                alert('Please paste and parse the script first so audio cuts can align with turns.');
+                return;
+            }
+
+            const btn = document.getElementById('btn-split-audio');
+            const badge = document.getElementById('slicer-status-badge');
+            const resContainer = document.getElementById('split-results-container');
+
+            btn.disabled = true;
+            btn.innerHTML = '<span>⏳</span> Splitting by pauses...';
+            badge.textContent = 'Processing audio...';
+
+            const formData = new FormData();
+            formData.append('audio', selectedFullAudioFile);
+            formData.append('expected_turns', smartParsedTurns.length);
+            formData.append('min_silence_len', '280');
+            formData.append('silence_thresh_db', '-38.0');
+
+            fetch('/split_full_audio', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.disabled = false;
+                btn.innerHTML = '<span>⚡</span> Auto-Split by Pauses';
+
+                if (data.error) {
+                    alert(`Audio split error: ${data.error}`);
+                    badge.textContent = 'Split failed';
+                    return;
+                }
+
+                badge.textContent = `✅ Sliced into ${data.slice_count} chunks`;
+                badge.style.color = 'var(--success)';
+                resContainer.style.display = 'block';
+                resContainer.innerHTML = `Successfully sliced ${data.slice_count} audio clips matching script turns!`;
+
+                // Map slices onto parsed turns
+                data.slices.forEach((s, idx) => {
+                    if (idx < smartParsedTurns.length) {
+                        smartParsedTurns[idx].custom_audio = s.path;
+                        smartParsedTurns[idx].audio_url = s.url;
+                        smartParsedTurns[idx].audio_duration = `${s.duration_s}s`;
+                    }
+                });
+
+                // Update preview list with attached audio
+                renderSmartPreview(smartParsedTurns, []);
+                document.getElementById('audio-slicer-card').classList.add('has-slices');
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.innerHTML = '<span>⚡</span> Auto-Split by Pauses';
+                alert(`Split request failed: ${err}`);
+            });
+        }
+
+        // Apply to Studio & Optionally Render Immediately
+        function applySmartScriptToStudio(startRenderImmediately = false) {
+            if (smartParsedTurns.length === 0) {
+                alert('No dialogue lines to import. Please paste a script first.');
+                return;
+            }
+
+            // Populate global studio turns array
+            turns = smartParsedTurns.map((t, idx) => ({
+                turn_id: idx + 1,
+                speaker: t.speaker,
+                text: t.text,
+                emotion: t.emotion || 'neutral',
+                shot_type: t.shot_type || 'two_shot',
+                custom_audio: t.custom_audio || null,
+                audio_url: t.audio_url || null,
+                audio_duration: t.audio_duration || null
+            }));
+
+            renderTurns();
+            closeSmartScriptModal();
+
+            if (startRenderImmediately) {
+                // Instantly launch generation and scroll to progress
+                startGeneration();
+                document.getElementById('progress-card').scrollIntoView({ behavior: 'smooth' });
+            }
+        }
+    </script>
 </body>
 </html>
